@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use crate::actor;
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::events::{Event, EventDestination, EventKind};
 use crate::lease::{parse_duration, Lease, LeaseIntent, LeaseScope, LeaseStore, LeaseStrength};
 use crate::oplog::{LeaseChange, OpLog, OpRecord, UndoData};
 use crate::output::{emit_success, HumanOutput, OutputOptions};
@@ -21,6 +22,7 @@ pub struct TakeOptions {
     pub ttl: String,
     pub note: Option<String>,
     pub actor: Option<String>,
+    pub events: Option<String>,
     pub repo: Option<PathBuf>,
     pub json: bool,
     pub quiet: bool,
@@ -60,6 +62,20 @@ struct ConflictInfo {
     lease_id: String,
 }
 
+#[derive(serde::Serialize)]
+struct LeaseEventData {
+    id: String,
+    pathspec: String,
+    strength: String,
+    intent: String,
+    scope: String,
+    actor: Option<String>,
+    ttl: String,
+    expires_at: String,
+    created_at: String,
+    note: Option<String>,
+}
+
 pub fn run(options: TakeOptions) -> Result<()> {
     // Discover repository
     let start = options.repo.clone().unwrap_or_else(|| {
@@ -89,6 +105,12 @@ pub fn run(options: TakeOptions) -> Result<()> {
     
     // Load config
     let config = Config::load_from_repo(&workdir);
+
+    let event_destination = EventDestination::parse(options.events.as_deref());
+    let mut event_sink = event_destination
+        .as_ref()
+        .map(|dest| dest.open())
+        .transpose()?;
     
     // Parse strength
     let strength: LeaseStrength = options.strength.parse()?;
@@ -192,6 +214,36 @@ pub fn run(options: TakeOptions) -> Result<()> {
         // Best effort - don't fail the command if oplog write fails
         let _ = oplog.append(&record);
     }
+
+    let mut event_warning: Option<String> = None;
+    if let Some(sink) = event_sink.as_mut() {
+        for lease in &created_leases {
+            let event = match Event::new(EventKind::LeaseCreated, lease.actor.clone()).with_data(
+                LeaseEventData {
+                    id: lease.id.to_string(),
+                    pathspec: lease.pathspec.clone(),
+                    strength: lease.strength.to_string(),
+                    intent: lease.intent.to_string(),
+                    scope: lease.scope.to_string(),
+                    actor: lease.actor.clone(),
+                    ttl: lease.ttl.clone(),
+                    expires_at: lease.expires_at.to_rfc3339(),
+                    created_at: lease.created_at.to_rfc3339(),
+                    note: lease.note.clone(),
+                },
+            ) {
+                Ok(event) => event,
+                Err(err) => {
+                    event_warning = Some(format!("event output failed: {err}"));
+                    break;
+                }
+            };
+            if let Err(err) = sink.emit(&event) {
+                event_warning = Some(format!("event output failed: {err}"));
+                break;
+            }
+        }
+    }
     
     // Output results
     let actor_label = actor.clone().unwrap_or_else(|| "unknown".to_string());
@@ -216,6 +268,7 @@ pub fn run(options: TakeOptions) -> Result<()> {
         },
     };
 
+    let events_to_stdout = matches!(event_destination, Some(EventDestination::Stdout));
     let header = if !created_leases.is_empty() && !conflicts.is_empty() {
         format!(
             "sv take: created {} lease(s) ({} conflict(s))",
@@ -231,6 +284,9 @@ pub fn run(options: TakeOptions) -> Result<()> {
     };
 
     let mut human = HumanOutput::new(header);
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
     human.push_summary("actor", actor_label);
     human.push_summary("leases_created", created_leases.len().to_string());
     human.push_summary("conflicts", conflicts.len().to_string());
@@ -264,8 +320,8 @@ pub fn run(options: TakeOptions) -> Result<()> {
     if !conflicts_only {
         emit_success(
             OutputOptions {
-                json: options.json,
-                quiet: options.quiet,
+                json: options.json && !events_to_stdout,
+                quiet: options.quiet || events_to_stdout,
             },
             "take",
             &report,
