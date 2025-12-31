@@ -7,7 +7,6 @@ use predicates::str::contains;
 use support::TestRepo;
 
 #[test]
-#[ignore = "lease commands not implemented yet"]
 fn take_and_list_lease() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
@@ -35,7 +34,6 @@ fn take_and_list_lease() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-#[ignore = "lease commands not implemented yet"]
 fn who_shows_active_lease() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
@@ -62,7 +60,6 @@ fn who_shows_active_lease() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-#[ignore = "lease commands not implemented yet"]
 fn release_clears_lease() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
@@ -90,6 +87,38 @@ fn release_clears_lease() -> Result<(), Box<dyn std::error::Error>> {
         .assert()
         .success()
         .stdout(contains("docs/**").not());
+
+    Ok(())
+}
+
+#[test]
+fn ownerless_lease_does_not_block_commit() -> Result<(), Box<dyn std::error::Error>> {
+    let repo = TestRepo::init()?;
+    repo.init_sv_dirs()?;
+    repo.write_sv_config("[actor]\ndefault = \"unknown\"\n")?;
+    repo.write_file("src/ownerless.rs", "ownerless\n")?;
+    repo.stage_path("src/ownerless.rs")?;
+
+    Command::cargo_bin("sv")?
+        .current_dir(repo.path())
+        .env_remove("SV_ACTOR")
+        .args([
+            "take",
+            "src/ownerless.rs",
+            "--strength",
+            "exclusive",
+            "--note",
+            "ownerless lease",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("sv")?
+        .current_dir(repo.path())
+        .env_remove("SV_ACTOR")
+        .args(["commit", "-m", "ownerless commit"])
+        .assert()
+        .success();
 
     Ok(())
 }

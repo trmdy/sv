@@ -1,16 +1,16 @@
 mod support;
 
 use assert_cmd::Command;
-use predicates::str::contains;
+use serde_json::Value;
 
 use support::TestRepo;
 
 #[test]
-#[ignore = "sv commit/oplog not implemented yet"]
 fn commit_writes_oplog_entry() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
     repo.write_file("README.md", "# sv\n")?;
+    repo.stage_path("README.md")?;
 
     Command::cargo_bin("sv")?
         .current_dir(repo.path())
@@ -20,13 +20,48 @@ fn commit_writes_oplog_entry() -> Result<(), Box<dyn std::error::Error>> {
         .assert()
         .success();
 
-    Command::cargo_bin("sv")?
+    let output = Command::cargo_bin("sv")?
         .current_dir(repo.path())
         .arg("op")
         .arg("log")
-        .assert()
-        .success()
-        .stdout(contains("commit"));
+        .arg("--json")
+        .output()?;
+    assert!(output.status.success());
+
+    let report: Value = serde_json::from_slice(&output.stdout)?;
+    let records = report
+        .get("records")
+        .and_then(|value| value.as_array())
+        .expect("records array");
+    let commit_record = records
+        .iter()
+        .find(|record| {
+            record
+                .get("command")
+                .and_then(|value| value.as_str())
+                .map(|command| command.contains("commit"))
+                .unwrap_or(false)
+        })
+        .expect("commit record");
+    let details = commit_record
+        .get("details")
+        .and_then(|value| value.get("commit"))
+        .expect("commit details");
+    let commit_hash = details
+        .get("commit_hash")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    assert!(!commit_hash.is_empty());
+    let change_id = details
+        .get("change_id")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    assert!(!change_id.is_empty());
+    let files = details
+        .get("files")
+        .and_then(|value| value.as_array())
+        .expect("files array");
+    assert!(files.iter().any(|value| value.as_str() == Some("README.md")));
 
     Ok(())
 }
