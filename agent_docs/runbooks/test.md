@@ -1,14 +1,13 @@
 # Test Runbook
 
 Status: evolving
-Last verified: YYYY-MM-DD
+Last verified: 2025-12-31
 
 ## Fast checks
-- <command>
-- <command>
+- `cargo test`
 
 ## Full suite / CI parity
-- <command>
+- `cargo test`
 
 ## Notes
-- <special cases: e.g. "use bun run test, never bun test">
+- If tests fail due to a compile error in `src/git.rs`, see the active work on sv-8jf.1.11/1.12 and coordinate with the file lease holder.
