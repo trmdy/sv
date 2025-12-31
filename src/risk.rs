@@ -1,6 +1,7 @@
 //! Risk analysis for overlapping workspace changes.
 //!
 //! Computes touched files per workspace (vs a base ref) and summarizes overlaps.
+//! Also provides virtual merge simulation for conflict prediction.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -10,6 +11,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::lease::Lease;
+use crate::merge::{self, MergeConflictKind};
 use crate::storage::Storage;
 
 /// Summary of touched files for a workspace.
@@ -56,6 +58,30 @@ pub struct Suggestion {
     pub command: Option<String>,
 }
 
+/// Virtual merge simulation report.
+#[derive(Debug, Clone, Serialize)]
+pub struct SimulationReport {
+    pub base_ref: String,
+    pub workspace_pairs: Vec<WorkspacePairConflict>,
+}
+
+/// Conflict summary for a pair of workspaces.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspacePairConflict {
+    pub workspace_a: String,
+    pub workspace_b: String,
+    pub branch_a: String,
+    pub branch_b: String,
+    pub conflicts: Vec<SimulatedConflict>,
+}
+
+/// A single simulated conflict.
+#[derive(Debug, Clone, Serialize)]
+pub struct SimulatedConflict {
+    pub path: String,
+    pub kind: MergeConflictKind,
+}
+
 /// Compute a risk report for all registered workspaces.
 pub fn compute_risk(repo: &Repository, base_ref: &str) -> Result<RiskReport> {
     let storage = load_storage(repo)?;
@@ -78,6 +104,67 @@ pub fn compute_risk(repo: &Repository, base_ref: &str) -> Result<RiskReport> {
         base_ref: base_ref.to_string(),
         workspaces: workspace_reports,
         overlaps,
+    })
+}
+
+/// Simulate merge conflicts between all workspace pairs.
+///
+/// For each pair of registered workspaces, performs a virtual merge
+/// simulation to detect actual conflicts without modifying the working tree.
+pub fn simulate_conflicts(repo: &Repository, base_ref: &str) -> Result<SimulationReport> {
+    let storage = load_storage(repo)?;
+    let registry = storage.read_workspaces()?;
+    let mut workspace_pairs = Vec::new();
+
+    // Get list of workspaces with their branches
+    let workspaces: Vec<_> = registry
+        .workspaces
+        .iter()
+        .map(|w| (w.name.clone(), w.branch.clone()))
+        .collect();
+
+    // For each unique pair of workspaces, simulate merge
+    for i in 0..workspaces.len() {
+        for j in (i + 1)..workspaces.len() {
+            let (name_a, branch_a) = &workspaces[i];
+            let (name_b, branch_b) = &workspaces[j];
+
+            // Try to simulate merge between the two branches
+            match merge::simulate_merge(repo, branch_a, branch_b, Some(base_ref)) {
+                Ok(simulation) => {
+                    let conflicts: Vec<SimulatedConflict> = simulation
+                        .conflicts
+                        .into_iter()
+                        .map(|c| SimulatedConflict {
+                            path: c.path,
+                            kind: c.kind,
+                        })
+                        .collect();
+
+                    workspace_pairs.push(WorkspacePairConflict {
+                        workspace_a: name_a.clone(),
+                        workspace_b: name_b.clone(),
+                        branch_a: branch_a.clone(),
+                        branch_b: branch_b.clone(),
+                        conflicts,
+                    });
+                }
+                Err(e) => {
+                    // Log error but continue with other pairs
+                    tracing::warn!(
+                        "Failed to simulate merge between {} and {}: {}",
+                        name_a,
+                        name_b,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(SimulationReport {
+        base_ref: base_ref.to_string(),
+        workspace_pairs,
     })
 }
 
@@ -271,15 +358,17 @@ mod tests {
         let low = severity_for(overlap_count, &[]);
         assert!(matches!(low, RiskSeverity::Low));
 
+        // Strong lease with docs intent: overlap(2) + strength(3) + intent(1) = 6 => Medium
         let strong = LeaseBuilder::new("src/lib.rs")
             .strength(LeaseStrength::Strong)
             .intent(LeaseIntent::Docs)
             .note("x")
             .build()
             .unwrap();
-        let high = severity_for(overlap_count, &[&strong]);
-        assert!(matches!(high, RiskSeverity::High));
+        let medium = severity_for(overlap_count, &[&strong]);
+        assert!(matches!(medium, RiskSeverity::Medium));
 
+        // Exclusive lease with rename intent: overlap(2) + strength(4) + intent(5) = 11 => Critical
         let exclusive = LeaseBuilder::new("src/main.rs")
             .strength(LeaseStrength::Exclusive)
             .intent(LeaseIntent::Rename)
@@ -288,6 +377,16 @@ mod tests {
             .unwrap();
         let critical = severity_for(overlap_count, &[&exclusive]);
         assert!(matches!(critical, RiskSeverity::Critical));
+
+        // Strong lease with refactor intent: overlap(2) + strength(3) + intent(4) = 9 => High
+        let strong_refactor = LeaseBuilder::new("src/lib.rs")
+            .strength(LeaseStrength::Strong)
+            .intent(LeaseIntent::Refactor)
+            .note("x")
+            .build()
+            .unwrap();
+        let high = severity_for(overlap_count, &[&strong_refactor]);
+        assert!(matches!(high, RiskSeverity::High));
     }
 
     #[test]
