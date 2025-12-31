@@ -29,6 +29,7 @@ pub struct CommitOptions {
     pub no_edit: bool,
     pub allow_protected: bool,
     pub force_lease: bool,
+    pub actor: Option<String>,
     pub repo: Option<PathBuf>,
     pub json: bool,
     pub quiet: bool,
@@ -160,6 +161,7 @@ pub fn run(options: CommitOptions) -> Result<()> {
         &repository,
         &staged_files,
         current_branch.as_deref(),
+        options.actor.as_deref(),
     )?;
     
     if !lease_conflicts.is_empty() && !options.force_lease {
@@ -226,7 +228,9 @@ pub fn run(options: CommitOptions) -> Result<()> {
         let common_dir = git::common_dir(&repository);
         let storage = Storage::new(workdir.to_path_buf(), common_dir, workdir.to_path_buf());
         let oplog = OpLog::for_storage(&storage);
-        let actor_name = storage.read_actor();
+        let actor_name = actor::resolve_actor_optional(Some(workdir), options.actor.as_deref())
+            .ok()
+            .flatten();
         
         let msg_summary = options.message.as_ref()
             .map(|m| m.lines().next().unwrap_or("").to_string())
@@ -334,6 +338,7 @@ fn check_lease_conflicts(
     repo: &git2::Repository,
     staged_files: &[String],
     current_branch: Option<&str>,
+    actor_override: Option<&str>,
 ) -> Result<Vec<LeaseConflictInfo>> {
     let workdir = repo.workdir()
         .ok_or_else(|| Error::OperationFailed("no working directory".to_string()))?;
@@ -342,7 +347,7 @@ fn check_lease_conflicts(
     let git_dir = git::common_dir(repo);
     
     // Get current actor
-    let current_actor = actor::resolve_actor(Some(workdir), None).ok();
+    let current_actor = actor::resolve_actor(Some(workdir), actor_override).ok();
     
     // Load lease store using proper paths for worktrees
     let storage = Storage::new(

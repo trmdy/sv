@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use crate::actor;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::lease::{parse_duration, Lease, LeaseIntent, LeaseScope, LeaseStore, LeaseStrength};
@@ -98,16 +99,8 @@ pub fn run(options: TakeOptions) -> Result<()> {
     // Parse scope
     let scope: LeaseScope = options.scope.parse()?;
     
-    // Determine actor
-    let actor = options.actor
-        .or_else(|| storage.read_actor())
-        .or_else(|| {
-            if config.actor.default != "unknown" {
-                Some(config.actor.default.clone())
-            } else {
-                None
-            }
-        });
+    // Determine actor (CLI override, env, persisted, config)
+    let actor = actor::resolve_actor_optional(Some(&workdir), options.actor.as_deref())?;
     
     // Load existing leases
     let existing_leases: Vec<Lease> = storage.read_jsonl(&storage.leases_file())?;

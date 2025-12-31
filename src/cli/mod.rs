@@ -7,9 +7,11 @@ use clap::{Parser, Subcommand};
 
 use crate::error::Result;
 
+mod actor;
 mod commit;
 mod init;
 mod lease;
+mod op;
 mod protect;
 mod release;
 mod take;
@@ -339,6 +341,18 @@ pub enum OpCommands {
         /// Filter by actor
         #[arg(long)]
         actor: Option<String>,
+
+        /// Filter by operation type (e.g., "init", "ws", "commit")
+        #[arg(long)]
+        operation: Option<String>,
+
+        /// Only show entries on/after this RFC3339 timestamp
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Only show entries on/before this RFC3339 timestamp
+        #[arg(long)]
+        until: Option<String>,
     },
 }
 
@@ -802,10 +816,14 @@ impl Cli {
                     })
                 }
                 LeaseCommands::Renew { ids, ttl } => {
-                    if !self.quiet {
-                        println!("sv lease renew {:?} {:?} - not yet implemented", ids, ttl);
-                    }
-                    Ok(())
+                    lease::run_renew(lease::RenewOptions {
+                        ids,
+                        ttl,
+                        actor: self.actor,
+                        repo: self.repo,
+                        json: self.json,
+                        quiet: self.quiet,
+                    })
                 }
                 LeaseCommands::Break { ids, reason } => {
                     lease::run_break(lease::BreakOptions {
@@ -860,6 +878,7 @@ impl Cli {
                     no_edit,
                     allow_protected,
                     force_lease,
+                    actor: self.actor,
                     repo: self.repo,
                     json: self.json,
                     quiet: self.quiet,
@@ -875,12 +894,20 @@ impl Cli {
                     quiet: self.quiet,
                 })
             }
-            Commands::Op(cmd) => {
-                if !self.quiet {
-                    println!("sv op {:?} - not yet implemented", cmd);
+            Commands::Op(cmd) => match cmd {
+                OpCommands::Log { limit, actor, operation, since, until } => {
+                    op::run_log(op::LogOptions {
+                        limit,
+                        actor,
+                        operation,
+                        since,
+                        until,
+                        repo: self.repo,
+                        json: self.json,
+                        quiet: self.quiet,
+                    })
                 }
-                Ok(())
-            }
+            },
             Commands::Undo { op } => {
                 if !self.quiet {
                     println!("sv undo {:?} - not yet implemented", op);
@@ -888,10 +915,24 @@ impl Cli {
                 Ok(())
             }
             Commands::Actor(cmd) => {
-                if !self.quiet {
-                    println!("sv actor {:?} - not yet implemented", cmd);
+                match cmd {
+                    ActorCommands::Set { name } => {
+                        actor::run_set(actor::SetOptions {
+                            name,
+                            repo: self.repo,
+                            json: self.json,
+                            quiet: self.quiet,
+                        })
+                    }
+                    ActorCommands::Show => {
+                        actor::run_show(actor::ShowOptions {
+                            repo: self.repo,
+                            actor: self.actor,
+                            json: self.json,
+                            quiet: self.quiet,
+                        })
+                    }
                 }
-                Ok(())
             }
             Commands::Hoist { selector, dest, strategy, order, dry_run } => {
                 run_hoist(HoistOptions {
