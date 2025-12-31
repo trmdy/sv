@@ -36,6 +36,7 @@ pub mod git;
 pub mod lease;
 pub mod lock;
 pub mod merge;
+pub mod hoist;
 pub mod oplog;
 pub mod output;
 pub mod protect;
