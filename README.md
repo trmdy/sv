@@ -1,6 +1,6 @@
 # sv — Simultaneous Versioning
 
-Git coordination for parallel agents. sv adds workspaces (worktrees), graded
+Git coordination for parallel agents. sv adds workspaces (Git worktrees), graded
 leases, protected paths, and early conflict detection so large teams can move
 fast without stepping on each other.
 
@@ -20,7 +20,7 @@ sv adds coordination primitives while staying Git-native.
 
 ## What you get
 
-- Workspaces: first-class Git worktrees per agent.
+- Workspaces (Git worktrees): first-class agent sandboxes.
 - Leases: graded reservations with intent and TTL.
 - Protected paths: guardrails for global files like `.beads/**`.
 - Risk checks: overlap detection before conflicts hit.

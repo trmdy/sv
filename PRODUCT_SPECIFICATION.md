@@ -6,7 +6,7 @@ Product Specification (Draft v0.1)
 
 **sv** is a standalone CLI that makes Git practical for **many parallel agents** by adding:
 
-* **Workspaces** (Git worktrees) as first-class “agent sandboxes”
+* **Workspaces** as first-class “agent sandboxes” (Git worktrees)
 * **Leases** (graded, descriptive reservations) to reduce duplicate work and merge pain
 * **Protected paths** (global “no-edit by default” zones like `.beads/**`)
 * **Risk prediction** (detect overlap and simulate conflicts before you’re stuck)
@@ -28,7 +28,7 @@ Multi-agent coding in a shared repo fails for predictable reasons:
 * Big, interleaved diffs **reduce velocity**
 * Automation mistakes are costly and hard to unwind
 
-Git provides isolation (branches/worktrees) but no built-in coordination primitives (leases), no conflict prediction, and no safe “bulk integration” UX.
+Git provides isolation (branches and workspaces via Git worktrees) but no built-in coordination primitives (leases), no conflict prediction, and no safe “bulk integration” UX.
 
 sv fills those gaps while staying Git-native.
 
@@ -82,7 +82,7 @@ A normal Git repository. sv stores:
 
 * **Tracked config**: `.sv.toml`
 * **Local per-workspace state**: `.sv/` (ignored)
-* **Shared local state (per clone)**: `.git/sv/` (ignored, shared across worktrees in that clone)
+* **Shared local state (per clone)**: `.git/sv/` (ignored, shared across workspaces (worktrees) in that clone)
 
 ### 3.2 Actor
 
@@ -93,9 +93,9 @@ An **actor** is the identity making leases/commits (agent name, username, proces
 
 ### 3.3 Workspace
 
-A workspace is typically a **Git worktree** plus sv metadata:
+A workspace is typically a **workspace directory (Git worktree)** plus sv metadata:
 
-* `sv ws new` creates a worktree + a branch (HEAD stays on a branch; no detached HEAD requirement)
+* `sv ws new` creates a workspace (Git worktree) + a branch (HEAD stays on a branch; no detached HEAD requirement)
 * sv can also “register” the current directory as a workspace (`sv ws here`) for single-checkout usage
 
 Workspaces are first-class objects in sv: listable, inspectable, selectable.
@@ -136,7 +136,7 @@ Example defaults commonly include:
 sv can enforce protection by:
 
 * `guard` (default): allow edits but block commits unless explicitly allowed
-* `readonly`: make paths read-only in that worktree
+* `readonly`: make paths read-only in that workspace (worktree)
 * `warn`: only warn
 
 ### 3.6 Change ID (JJ-inspired)
@@ -256,7 +256,7 @@ Typical pattern:
 
 Creates:
 
-* a Git worktree directory
+* a workspace directory (Git worktree)
 * a Git branch (default: `sv/ws/<name>`)
 * registers it in sv workspace registry
 
@@ -281,7 +281,7 @@ Detailed info: touched paths, leases affecting it, ahead/behind, recent Change-I
 
 #### `sv ws rm <name> [--force]`
 
-Removes worktree and unregisters workspace (does not delete commits).
+Removes workspace (Git worktree) and unregisters it (does not delete commits).
 
 ---
 
@@ -577,14 +577,14 @@ Shows operations with:
 Undo semantics:
 
 * If last op moved refs: move them back
-* If last op created a workspace: remove it (optionally keep with `--keep-worktree`)
+* If last op created a workspace: remove it (optionally keep with `--keep-worktree`, which keeps the workspace directory)
 * If last op was hoist: restore integration branch to previous tip
 * If last op was onto/rebase: restore branch refs to previous commit(s)
 
 sv must record enough information to undo safely:
 
 * old/new ref tips
-* created/deleted worktree paths
+* created/deleted workspace paths (worktree paths)
 * lease changes
 
 ---
@@ -594,7 +594,7 @@ sv must record enough information to undo safely:
 sv must not “lock users in.”
 
 * The repo remains a standard Git repo.
-* Workspaces are Git worktrees; can be managed by Git directly if needed.
+* Workspaces map to Git's native workspace mechanism (worktrees); can be managed by Git directly if needed.
 * Leases and policies are additive; they don’t change Git history format.
 * If sv disappears, the repo remains usable with Git alone.
 
@@ -661,7 +661,7 @@ sv must not “lock users in.”
 5. **Behavior in “same workspace multi-agent”**
 
    * sv can coordinate leases, but Git cannot safely support simultaneous commits.
-   * Recommendation: document clearly; encourage separate worktrees for real parallelism.
+   * Recommendation: document clearly; encourage separate workspaces (worktrees) for real parallelism.
 
 ---
 
@@ -692,4 +692,3 @@ paths = [
   "Cargo.lock",
 ]
 ```
-

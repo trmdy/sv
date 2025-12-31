@@ -128,7 +128,7 @@ Example event:
 
 - Preview workspace path + branch creation.
 - Output shows:
-  - resolved worktree path
+  - resolved workspace path (Git worktree path)
   - branch name and base ref
   - warnings if path exists or branch already exists
 
@@ -136,7 +136,7 @@ Example event:
 
 - Preview removal of a workspace.
 - Output shows:
-  - worktree path
+  - workspace path (Git worktree path)
   - branch ref that would be removed (if applicable)
   - warnings if uncommitted changes would require `--force`
 

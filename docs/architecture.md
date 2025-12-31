@@ -10,6 +10,9 @@ multi-agent workflows. The high-level goals are:
 - operation log + undo for safety
 - optional event output for integrations
 
+Terminology: this repo uses "workspace" as the primary term; "worktree"
+is only used parenthetically to refer to the underlying Git feature.
+
 The product-level design lives in `PRODUCT_SPECIFICATION.md`. This doc
 focuses on how that design maps to the codebase.
 
@@ -51,7 +54,7 @@ sv uses three layers of state (per spec):
 - Clone-local shared state (ignored): `.git/sv/`
 
 Planned `.git/sv/` contents include:
-- `workspaces.json`: worktree registry
+- `workspaces.json`: workspace registry
 - `leases.jsonl` or `leases.sqlite`: active leases + history
 - `oplog/`: operation log entries
 - `hoist/`: hoist state and conflict records
@@ -59,7 +62,7 @@ Planned `.git/sv/` contents include:
 ## Core concepts in code
 These concepts are in the spec and are expected to map to modules
 as implementation continues:
-- **Workspaces**: worktree creation/inspection/removal
+- **Workspaces (Git worktrees)**: creation/inspection/removal
 - **Leases**: graded reservations over pathspecs
 - **Protected paths**: commit-time guard/readonly/warn checks
 - **Risk prediction**: overlap detection + conflict simulation
