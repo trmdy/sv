@@ -5,12 +5,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use chrono::{DateTime, Utc};
 use git2::{Index, MergeOptions, Oid, Repository, Sort};
 
 use crate::change_id::find_change_id;
 use crate::error::Result;
 use crate::git;
-use crate::storage::HoistCommitStatus;
+use crate::storage::{HoistCommit, HoistCommitStatus, HoistConflict};
 
 /// Candidate commit selected for hoist ordering.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,10 +100,39 @@ pub struct ReplayOutcome {
     pub conflicts: Vec<ReplayConflict>,
 }
 
+/// Summary counts for replay outcomes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplaySummary {
+    pub applied: usize,
+    pub conflicts: usize,
+    pub skipped: usize,
+}
+
 /// Options for replaying commits onto an integration branch.
 #[derive(Debug, Clone, Default)]
 pub struct ReplayOptions {
     pub continue_on_conflict: bool,
+}
+
+impl ReplayOutcome {
+    pub fn summary(&self) -> ReplaySummary {
+        let mut summary = ReplaySummary {
+            applied: 0,
+            conflicts: 0,
+            skipped: 0,
+        };
+
+        for entry in &self.entries {
+            match entry.status {
+                HoistCommitStatus::Applied => summary.applied += 1,
+                HoistCommitStatus::Conflict => summary.conflicts += 1,
+                HoistCommitStatus::Skipped => summary.skipped += 1,
+                HoistCommitStatus::Pending => {}
+            }
+        }
+
+        summary
+    }
 }
 
 /// Order hoist candidates based on the configured mode.
@@ -160,6 +190,26 @@ pub fn select_hoist_commits(
     let workspace_commits = collect_workspace_commits(repo, base_ref, workspaces)?;
     let candidates = candidates_from_workspace_commits(&workspace_commits);
     order_candidates(repo, &candidates, mode)
+}
+
+/// Build hoist commit entries from candidates.
+pub fn build_hoist_commits(
+    repo: &Repository,
+    candidates: &[HoistCandidate],
+) -> Result<Vec<HoistCommit>> {
+    let mut commits = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let commit = repo.find_commit(candidate.oid)?;
+        let message = commit.message().unwrap_or_default();
+        commits.push(HoistCommit {
+            commit_id: candidate.oid.to_string(),
+            status: HoistCommitStatus::Pending,
+            workspace: Some(candidate.workspace.clone()),
+            change_id: find_change_id(message),
+            summary: commit_summary(message),
+        });
+    }
+    Ok(commits)
 }
 
 /// Replay commits onto the integration ref, returning per-commit outcomes.
@@ -238,6 +288,24 @@ pub fn replay_commits(
     }
 
     Ok(outcome)
+}
+
+/// Convert replay conflicts into persisted hoist conflict records.
+pub fn conflict_records_for(
+    hoist_id: &str,
+    conflicts: &[ReplayConflict],
+    recorded_at: DateTime<Utc>,
+) -> Vec<HoistConflict> {
+    conflicts
+        .iter()
+        .map(|conflict| HoistConflict {
+            hoist_id: hoist_id.to_string(),
+            commit_id: conflict.commit_id.to_string(),
+            files: conflict.files.clone(),
+            message: conflict.message.clone(),
+            recorded_at,
+        })
+        .collect()
 }
 
 /// Deduplicate commits by Change-Id, collapsing identical patch-ids.
@@ -462,6 +530,7 @@ mod tests {
     use super::*;
     use std::path::Path;
     use std::process::Command;
+    use chrono::TimeZone;
     use tempfile::TempDir;
 
     fn git(repo: &Path, args: &[&str]) {
@@ -933,5 +1002,73 @@ mod tests {
 
         let integration_tip = repo.revparse_single("sv/hoist/main").unwrap().id();
         assert_eq!(integration_tip, outcome.entries[2].applied_id.unwrap());
+    }
+
+    #[test]
+    fn replay_summary_counts_skipped_commits() {
+        let (temp, repo, base_branch) = init_test_repo();
+
+        git(temp.path(), &["checkout", "-b", "alpha"]);
+        let alpha = commit_simple(temp.path(), "README.md", "alpha", "alpha-1");
+
+        git(temp.path(), &["checkout", &base_branch]);
+        git(temp.path(), &["checkout", "-b", "bravo"]);
+        let bravo = commit_simple(temp.path(), "README.md", "bravo", "bravo-1");
+
+        git(temp.path(), &["checkout", &base_branch]);
+        git(temp.path(), &["checkout", "-b", "charlie"]);
+        let charlie = commit_simple(temp.path(), "notes.txt", "notes", "charlie-1");
+
+        create_branch(temp.path(), "sv/hoist/main", &base_branch);
+
+        let outcome = replay_commits(
+            &repo,
+            "sv/hoist/main",
+            &[alpha, bravo, charlie],
+            &ReplayOptions {
+                continue_on_conflict: false,
+            },
+        )
+        .unwrap();
+
+        let summary = outcome.summary();
+        assert_eq!(summary.applied, 1);
+        assert_eq!(summary.conflicts, 1);
+        assert_eq!(summary.skipped, 1);
+    }
+
+    #[test]
+    fn conflict_records_include_metadata() {
+        let (temp, repo, base_branch) = init_test_repo();
+
+        git(temp.path(), &["checkout", "-b", "alpha"]);
+        let alpha = commit_simple(temp.path(), "README.md", "alpha", "alpha-1");
+
+        git(temp.path(), &["checkout", &base_branch]);
+        git(temp.path(), &["checkout", "-b", "bravo"]);
+        let bravo = commit_simple(temp.path(), "README.md", "bravo", "bravo-1");
+
+        create_branch(temp.path(), "sv/hoist/main", &base_branch);
+
+        let outcome = replay_commits(
+            &repo,
+            "sv/hoist/main",
+            &[alpha, bravo],
+            &ReplayOptions {
+                continue_on_conflict: false,
+            },
+        )
+        .unwrap();
+
+        let recorded_at = Utc.with_ymd_and_hms(2025, 4, 4, 1, 2, 3).unwrap();
+        let records = conflict_records_for("hoist-123", &outcome.conflicts, recorded_at);
+        assert_eq!(records.len(), outcome.conflicts.len());
+
+        let record = &records[0];
+        assert_eq!(record.hoist_id, "hoist-123");
+        assert_eq!(record.commit_id, outcome.conflicts[0].commit_id.to_string());
+        assert_eq!(record.files, outcome.conflicts[0].files);
+        assert_eq!(record.message, outcome.conflicts[0].message);
+        assert_eq!(record.recorded_at, recorded_at);
     }
 }
