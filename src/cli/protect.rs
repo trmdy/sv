@@ -27,6 +27,14 @@ pub struct AddOptions {
     pub quiet: bool,
 }
 
+/// Options for the protect off command
+pub struct OffOptions {
+    pub patterns: Vec<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
 /// Options for the protect rm command
 pub struct RmOptions {
     pub patterns: Vec<String>,
@@ -48,6 +56,15 @@ struct AddReport {
 struct InvalidPattern {
     pattern: String,
     error: String,
+}
+
+/// Result of protect off command
+#[derive(serde::Serialize)]
+struct OffReport {
+    disabled: Vec<String>,
+    already_disabled: Vec<String>,
+    not_found: Vec<String>,
+    invalid: Vec<InvalidPattern>,
 }
 
 /// Result of protect status command
@@ -314,6 +331,140 @@ pub fn run_add(options: AddOptions) -> Result<()> {
         }
     }
     
+    Ok(())
+}
+
+/// Run the protect off command
+pub fn run_off(options: OffOptions) -> Result<()> {
+    // Discover repository
+    let start = options.repo.clone().unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
+
+    let repository = git2::Repository::discover(&start)
+        .map_err(|_| Error::RepoNotFound(start.clone()))?;
+
+    let workdir = repository
+        .workdir()
+        .ok_or_else(|| Error::NotARepo(start.clone()))?
+        .to_path_buf();
+
+    // Load config
+    let config = Config::load_from_repo(&workdir);
+
+    // Resolve common dir for worktree support
+    let common_dir = resolve_common_dir(&repository)?;
+    let storage = Storage::new(workdir.clone(), common_dir.clone(), workdir.clone());
+    storage.init_local()?;
+
+    let mut override_data = load_override(&storage)?;
+
+    let existing_patterns: Vec<String> = config
+        .protect
+        .paths
+        .iter()
+        .map(|p| match p {
+            ProtectPath::Simple(s) => s.clone(),
+            ProtectPath::WithMode { pattern, .. } => pattern.clone(),
+        })
+        .collect();
+
+    let mut disabled = Vec::new();
+    let mut already_disabled = Vec::new();
+    let mut not_found = Vec::new();
+    let mut invalid = Vec::new();
+
+    for pattern in &options.patterns {
+        if let Err(e) = glob::Pattern::new(pattern) {
+            invalid.push(InvalidPattern {
+                pattern: pattern.clone(),
+                error: e.to_string(),
+            });
+            continue;
+        }
+
+        if !existing_patterns.contains(pattern) {
+            not_found.push(pattern.clone());
+            continue;
+        }
+
+        if override_data.disabled_patterns.iter().any(|p| p == pattern) {
+            already_disabled.push(pattern.clone());
+            continue;
+        }
+
+        override_data.disabled_patterns.push(pattern.clone());
+        disabled.push(pattern.clone());
+    }
+
+    override_data.disabled_patterns.sort();
+    override_data.disabled_patterns.dedup();
+
+    let any_change = !disabled.is_empty();
+    if any_change {
+        storage.write_json(&storage.protect_override_file(), &override_data)?;
+    }
+
+    if disabled.is_empty() && already_disabled.is_empty() {
+        if !invalid.is_empty() {
+            return Err(Error::InvalidArgument(format!(
+                "Invalid pattern: {}",
+                invalid[0].error
+            )));
+        }
+        if !not_found.is_empty() {
+            return Err(Error::OperationFailed(format!(
+                "Pattern not found: {}",
+                not_found[0]
+            )));
+        }
+    }
+
+    let report = OffReport {
+        disabled: disabled.clone(),
+        already_disabled: already_disabled.clone(),
+        not_found: not_found.clone(),
+        invalid: invalid.clone(),
+    };
+
+    let header = if !disabled.is_empty() {
+        format!("sv protect off: disabled {} pattern(s)", disabled.len())
+    } else if !already_disabled.is_empty() {
+        "sv protect off: patterns already disabled".to_string()
+    } else {
+        "sv protect off: no changes".to_string()
+    };
+
+    let mut human = HumanOutput::new(header);
+    human.push_summary("disabled", disabled.len().to_string());
+    human.push_summary("already_disabled", already_disabled.len().to_string());
+    human.push_summary("not_found", not_found.len().to_string());
+
+    for pattern in &disabled {
+        human.push_detail(format!("disabled: {pattern}"));
+    }
+    for pattern in &already_disabled {
+        human.push_detail(format!("already disabled: {pattern}"));
+    }
+    for missing in &not_found {
+        human.push_warning(format!("pattern not found: {missing}"));
+    }
+    for bad in &invalid {
+        human.push_warning(format!("invalid pattern: {} ({})", bad.pattern, bad.error));
+    }
+
+    human.push_next_step("sv protect status");
+
+    emit_success(
+        OutputOptions {
+            json: options.json,
+            quiet: options.quiet,
+        },
+        "protect off",
+        &report,
+        Some(&human),
+    )?;
+
     Ok(())
 }
 

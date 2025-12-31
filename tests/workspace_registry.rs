@@ -110,3 +110,126 @@ fn update_workspace_mutates_fields() {
         Some("2024-02-01T00:00:00Z")
     );
 }
+
+#[test]
+fn list_workspaces_returns_all() {
+    let (_temp, storage) = setup_storage();
+    let repo_root = storage.local_dir().parent().unwrap().to_path_buf();
+
+    // Create multiple workspace directories
+    let paths: Vec<_> = (1..=3)
+        .map(|i| {
+            let path = repo_root.join(format!("worktrees/ws{}", i));
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        })
+        .collect();
+
+    // Add workspaces to registry
+    for (i, path) in paths.iter().enumerate() {
+        let name = format!("ws{}", i + 1);
+        let entry = WorkspaceEntry::new(
+            name.clone(),
+            path.clone(),
+            format!("sv/ws/{}", name),
+            "main".to_string(),
+            None,
+            "2024-01-01T00:00:00Z".to_string(),
+            None,
+        );
+        storage.add_workspace(entry).unwrap();
+    }
+
+    let all = storage.list_workspaces().unwrap();
+    assert_eq!(all.len(), 3);
+
+    let names: Vec<_> = all.iter().map(|w| w.name.as_str()).collect();
+    assert!(names.contains(&"ws1"));
+    assert!(names.contains(&"ws2"));
+    assert!(names.contains(&"ws3"));
+}
+
+#[test]
+fn remove_nonexistent_workspace_returns_none() {
+    let (_temp, storage) = setup_storage();
+    let result = storage.remove_workspace("nonexistent").unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn find_nonexistent_workspace_returns_none() {
+    let (_temp, storage) = setup_storage();
+    let result = storage.find_workspace("nonexistent").unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn add_duplicate_workspace_fails() {
+    let (_temp, storage) = setup_storage();
+    let repo_root = storage.local_dir().parent().unwrap().to_path_buf();
+    let workspace_path = repo_root.join("worktrees/dup");
+    std::fs::create_dir_all(&workspace_path).unwrap();
+
+    let entry = WorkspaceEntry::new(
+        "dup".to_string(),
+        workspace_path.clone(),
+        "sv/ws/dup".to_string(),
+        "main".to_string(),
+        None,
+        "2024-01-01T00:00:00Z".to_string(),
+        None,
+    );
+    storage.add_workspace(entry.clone()).unwrap();
+
+    // Try to add again with same name
+    let result = storage.add_workspace(entry);
+    assert!(result.is_err());
+}
+
+#[test]
+fn update_nonexistent_workspace_fails() {
+    let (_temp, storage) = setup_storage();
+    let result = storage.update_workspace("nonexistent", |_| Ok(()));
+    assert!(result.is_err());
+}
+
+#[test]
+fn workspace_entry_has_unique_id() {
+    let (_temp, storage) = setup_storage();
+    let repo_root = storage.local_dir().parent().unwrap().to_path_buf();
+
+    let path1 = repo_root.join("worktrees/id1");
+    let path2 = repo_root.join("worktrees/id2");
+    std::fs::create_dir_all(&path1).unwrap();
+    std::fs::create_dir_all(&path2).unwrap();
+
+    let entry1 = WorkspaceEntry::new(
+        "id1".to_string(),
+        path1,
+        "sv/ws/id1".to_string(),
+        "main".to_string(),
+        None,
+        "2024-01-01T00:00:00Z".to_string(),
+        None,
+    );
+    let entry2 = WorkspaceEntry::new(
+        "id2".to_string(),
+        path2,
+        "sv/ws/id2".to_string(),
+        "main".to_string(),
+        None,
+        "2024-01-01T00:00:00Z".to_string(),
+        None,
+    );
+
+    storage.add_workspace(entry1).unwrap();
+    storage.add_workspace(entry2).unwrap();
+
+    let ws1 = storage.find_workspace("id1").unwrap().unwrap();
+    let ws2 = storage.find_workspace("id2").unwrap().unwrap();
+
+    // Each should have a unique ID assigned (non-empty UUIDs)
+    assert!(!ws1.id.is_empty());
+    assert!(!ws2.id.is_empty());
+    assert_ne!(ws1.id, ws2.id);
+}
