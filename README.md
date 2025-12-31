@@ -5,7 +5,8 @@ same repo. It adds workspace-aware coordination (Git worktrees), leases on
 paths, protected paths, early conflict signals, and an operation log while
 staying Git-native.
 
-Status: early development. The CLI surface is still evolving.
+**Status**: v0.2 feature-complete. All core coordination features are implemented
+and tested.
 
 ## Why sv exists
 
@@ -19,193 +20,445 @@ When multiple agents work in one repo, you need fast answers to:
 sv provides coordination primitives that sit alongside Git, without requiring a
 server or proprietary backend.
 
-## Quickstart (5 minutes)
+## Installation
 
-Prereqs: Rust (stable), Git.
+### From source
 
 ```bash
+git clone https://github.com/tOgg1/sv.git
+cd sv
 cargo build --release
-./target/release/sv init
+# Binary at ./target/release/sv
 ```
 
-Create a workspace and take a lease:
+### Requirements
+
+- Rust 1.70+ (stable)
+- Git 2.20+
+- libgit2 (bundled via git2 crate)
+
+## Quickstart (5 minutes)
+
+### 1. Initialize sv in your repo
+
+```bash
+cd your-repo
+sv init
+```
+
+This creates:
+- `.sv.toml` - configuration file (tracked)
+- `.git/sv/` - shared local state (leases, workspace registry, oplog)
+- `.sv/` - per-workspace local state (actor, overrides)
+
+### 2. Set your actor identity
 
 ```bash
 export SV_ACTOR=alice
-./target/release/sv ws new agent1
-./target/release/sv take src/auth/** --strength cooperative --intent feature --ttl 2h
-./target/release/sv status
+# Or persist it:
+sv actor set alice
 ```
 
-Commit with checks, review risk, release leases:
+### 3. Create a workspace and take a lease
 
 ```bash
-./target/release/sv commit -m "Add auth flow"
-./target/release/sv risk
-./target/release/sv release src/auth/**
+# Create a new workspace (Git worktree)
+sv ws new agent1
+
+# Take a lease on the paths you'll be working on
+sv take src/auth/** --strength cooperative --intent feature --note "Auth flow refactor"
+
+# Check your status
+sv status
 ```
 
-## Core concepts
+### 4. Commit with checks
 
-- Workspaces: first-class workspace sandboxes (Git worktrees) tracked in
-  `.git/sv/workspaces.json`. Each workspace has its own branch, base ref, and
-  metadata.
-- Leases: graded reservations on paths with intent, TTL, and overlap rules.
-  Stored in `.git/sv/leases.jsonl` and used for conflict warnings and commit
-  blocking.
-- Protected paths: global guardrails for critical files (for example `.beads/**`)
-  that block or warn on commits.
-- Risk prediction: overlap detection across workspaces, with optional merge
-  simulation to find real conflicts.
-- Change-Id trailers: stable commit identifiers used for hoist/dedup flows.
-- Operation log and undo data: append-only records under `.git/sv/oplog/` for
-  audit and (future) undo.
-- Events: JSONL event model exists; CLI wiring is still in progress.
+```bash
+# sv commit wraps git commit with coordination checks:
+# - Protected path enforcement
+# - Lease conflict detection
+# - Change-Id trailer injection
+sv commit -m "Add auth flow"
+```
 
-## CLI at a glance
+### 5. Review risk and release
 
-Global flags:
+```bash
+# See overlap risk across all workspaces
+sv risk
 
-- `--repo <path>`: path to repo (defaults to cwd)
-- `--actor <name>` / `SV_ACTOR`: actor identity for leases and ops
-- `--json`: structured JSON output
-- `--quiet`: suppress human output
-- `--verbose`: extra logging
+# Simulate actual merge conflicts
+sv risk --simulate
 
-Implemented commands:
+# Release your leases when done
+sv release src/auth/**
+```
 
-- `sv init`: initialize `.sv/`, `.git/sv/`, `.sv.toml`, and `.gitignore` entries.
-- `sv status`: one-pane workspace summary (actor, branch, ahead/behind, leases,
-  protected paths).
-- `sv ws new|list|info|rm|here`: workspace (worktree) management + registry.
-- `sv take`: create leases (recorded in oplog).
-- `sv release`: release leases by id or path.
-- `sv lease ls|who|renew|break`: inspect, extend, and break leases.
-- `sv protect status|add|off|rm`: manage protected paths and per-workspace
-  overrides.
-- `sv commit`: protected-path and lease checks + Change-Id injection.
-- `sv risk [--simulate]`: overlap report and virtual merge simulation.
-- `sv op log`: filter and display operation log entries.
-- `sv actor set|show`: set or display actor identity.
-- `sv hoist`: initialize a hoist integration branch (selection/replay in progress).
+## Core Concepts
 
-Partial or not yet wired:
+### Workspaces
 
-- `sv undo`: placeholder output only (logic exists but CLI is not wired).
-- `sv onto`: not yet wired in the CLI.
-- Selector filtering is stubbed in some commands.
+Workspaces are first-class agent sandboxes built on Git worktrees. Each workspace
+has its own directory, branch, and metadata.
 
-Run `sv <cmd> --help` for the latest flags and examples.
+```bash
+sv ws new agent1                    # Create workspace with branch sv/ws/agent1
+sv ws new agent2 --base develop     # Use different base branch
+sv ws list                          # List all workspaces
+sv ws info agent1                   # Detailed info (branch, ahead/behind, leases)
+sv ws here --name local             # Register current directory as workspace
+sv ws rm agent1                     # Remove workspace
+```
 
-## Output contract (human + JSON)
+### Leases
 
-Human output uses a consistent header/summary/detail format. JSON output is a
-stable envelope:
+Leases are graded reservations on paths that signal intent and prevent conflicts.
 
+**Strength levels** (from lowest to highest):
+- `observe` - just watching, no conflict with anything
+- `cooperative` - working here, overlaps with other cooperative are OK
+- `strong` - serious work, overlaps need explicit `--allow-overlap`
+- `exclusive` - full ownership, blocks all other leases
+
+**Intent annotations**:
+- `bugfix`, `feature`, `docs`, `refactor`, `rename`, `format`, `mechanical`, `investigation`, `other`
+
+```bash
+# Take a lease
+sv take src/auth/** --strength cooperative --intent bugfix --note "Fix token refresh"
+sv take Cargo.lock --strength exclusive --note "Dependency update" --ttl 1h
+
+# View leases
+sv lease ls                         # List all active leases
+sv lease ls --actor alice           # Filter by actor
+sv lease who src/auth/token.rs      # Who has leases on this path?
+
+# Manage leases
+sv lease renew <id> --ttl 4h        # Extend TTL
+sv lease break <id> --reason "..."  # Emergency override (audited)
+sv release src/auth/**              # Release by pathspec
+sv release <id>                     # Release by ID
+```
+
+### Protected Paths
+
+Protected paths are global guardrails that prevent accidental changes to critical files.
+
+**Modes**:
+- `guard` (default) - block commits unless `--allow-protected`
+- `warn` - emit warning but allow commit
+- `readonly` - (future) prevent file modification
+
+```bash
+sv protect add .beads/** --mode guard
+sv protect add "*.lock" --mode warn
+sv protect status                   # Show all rules and staged matches
+sv protect off Cargo.lock           # Disable in current workspace only
+sv protect rm .beads/**             # Remove from .sv.toml
+```
+
+### Risk Assessment
+
+Risk detection finds overlapping work across workspaces before it becomes a merge conflict.
+
+```bash
+sv risk                             # Fast overlap detection
+sv risk --simulate                  # Virtual merge to find real conflicts
+sv risk --json                      # Machine-readable output
+```
+
+Output includes:
+- Overlapping files with severity (low/medium/high/critical)
+- Which workspaces touch each file
+- Suggested actions (take lease, rebase onto, pick another task)
+
+### sv onto - Workspace Repositioning
+
+Rebase or merge your workspace onto another workspace's branch.
+
+```bash
+sv onto agent5                      # Rebase onto agent5's branch
+sv onto agent5 --strategy merge     # Merge instead of rebase
+sv onto agent5 --preflight          # Preview conflicts without executing
+sv onto agent5 --base develop       # Use custom base ref
+```
+
+The `--preflight` flag runs a virtual merge simulation and shows predicted
+conflicts before you commit to the operation.
+
+### sv hoist - Bulk Integration
+
+Combine multiple workspace branches into an integration branch.
+
+```bash
+# Stack all active workspaces ahead of main
+sv hoist -s 'ws(active) & ahead("main")' -d main --strategy stack
+
+# Dry run to see what would happen
+sv hoist -s "agent*" -d main --dry-run
+
+# Continue past conflicts, recording them for later
+sv hoist -s 'ws(active)' -d main --continue-on-conflict
+```
+
+**Strategies**:
+- `stack` - cherry-pick commits in order (deduplicates by Change-Id)
+- `rebase` - rebase each workspace onto integration branch
+- `merge` - merge each workspace branch
+
+**Ordering modes**:
+- `workspace` - stable sort by workspace name
+- `time` - sort by commit timestamp
+- `explicit` - config-defined priority
+
+### Events
+
+sv can emit JSONL events for external integrations (MCP mail, Slack, monitoring).
+
+```bash
+sv take src/auth/** --events                    # Events to stdout
+sv take src/auth/** --events /tmp/sv.jsonl      # Events to file
+sv release src/auth/** --events -               # Explicit stdout
+```
+
+**Event kinds**:
+- `lease_created` - emitted by `sv take`
+- `lease_released` - emitted by `sv release`
+- `workspace_created` - emitted by `sv ws new`
+- `workspace_removed` - emitted by `sv ws rm`
+- `commit_blocked` - emitted when policy blocks a commit
+- `commit_created` - emitted by `sv commit`
+
+Event envelope:
+```json
+{
+  "schema_version": "sv.event.v1",
+  "event": "lease_created",
+  "timestamp": "2025-01-01T12:00:00Z",
+  "actor": "alice",
+  "data": { "id": "...", "pathspec": "src/auth/**", ... }
+}
+```
+
+## Command Reference
+
+### Global Flags
+
+| Flag | Env Var | Description |
+|------|---------|-------------|
+| `--repo <path>` | `SV_REPO` | Path to repository (defaults to cwd) |
+| `--actor <name>` | `SV_ACTOR` | Actor identity for leases and ops |
+| `--json` | | Structured JSON output |
+| `--events [path]` | | Emit JSONL events (stdout or file) |
+| `--quiet` | | Suppress non-essential output |
+| `--verbose` | | Extra logging |
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `sv init` | Initialize sv in a repository |
+| `sv status` | Show current workspace summary |
+| `sv actor set\|show` | Manage actor identity |
+| `sv ws new\|list\|info\|rm\|here` | Workspace management |
+| `sv take` | Create lease reservations |
+| `sv release` | Release leases |
+| `sv lease ls\|who\|renew\|break` | Inspect and manage leases |
+| `sv protect status\|add\|off\|rm` | Protected path management |
+| `sv commit` | Commit with sv checks |
+| `sv risk` | Overlap and conflict analysis |
+| `sv onto` | Reposition workspace onto another |
+| `sv hoist` | Bulk integration of workspaces |
+| `sv op log` | View operation history |
+| `sv undo` | Undo recent operation |
+
+Run `sv <command> --help` for detailed usage.
+
+## Output Format
+
+### Human Output
+
+Human output uses a consistent format:
+```
+sv <command>: <header>
+
+Summary:
+  key: value
+  ...
+
+Details:
+  - item
+  ...
+
+Warnings:
+  - warning message
+
+Next steps:
+  - suggested action
+```
+
+### JSON Output
+
+JSON output uses a stable envelope:
 ```json
 {
   "schema_version": "sv.v1",
   "command": "take",
   "status": "success",
-  "data": { "...": "..." },
+  "data": { ... },
   "warnings": ["..."],
   "next_steps": ["..."]
 }
 ```
 
-Errors use the same envelope with `status: "error"` and include an error code
-and optional details. Exit codes are:
+### Exit Codes
 
-- `0`: success
-- `2`: user error (bad args, missing repo)
-- `3`: blocked by policy (protected path, lease conflict)
-- `4`: operation failed (git errors, merge conflicts)
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 2 | User error (bad args, missing repo) |
+| 3 | Blocked by policy (protected path, lease conflict) |
+| 4 | Operation failed (git errors, merge conflicts) |
 
-## Configuration (.sv.toml)
+## Configuration
 
-sv reads `.sv.toml` from the repo root. Defaults shown:
+sv reads `.sv.toml` from the repo root.
 
 ```toml
+# Base branch for new workspaces
 base = "main"
 
 [actor]
+# Default actor when SV_ACTOR not set
 default = "unknown"
 
 [leases]
+# Default lease settings
 default_strength = "cooperative"
 default_intent = "other"
 default_ttl = "2h"
 expiration_grace = "0s"
+# Require --note for strong/exclusive leases
 require_note = true
 
 [leases.compat]
+# Allow cooperative leases to overlap
 allow_overlap_cooperative = true
+# Require --allow-overlap for strong lease overlaps
 require_flag_for_strong_overlap = true
 
 [protect]
+# Default protection mode
 mode = "guard"
-paths = []
+# Protected path patterns
+paths = [".beads/**", "*.lock"]
+
+# Per-path overrides
+[[protect.rules]]
+path = "Cargo.lock"
+mode = "warn"
 ```
 
-Per-path protection overrides:
+## Storage Layout
 
-```toml
-[[protect.paths]]
-path = ".beads/**"
-mode = "guard"
 ```
-
-Notes:
-
-- Strong/exclusive leases require a `--note` when `require_note` is true.
-- `expiration_grace` keeps expired leases visible for a short window.
-
-## Storage layout
-
-```text
-.sv/                          # Workspace local (ignored)
+.sv/                          # Workspace-local state (ignored)
   actor                       # Current actor identity
   workspace.json              # Workspace metadata
   overrides/
     protect.json              # Per-workspace protect overrides
 
-.git/sv/                      # Shared local (per clone, ignored)
+.git/sv/                      # Shared local state (ignored)
   workspaces.json             # Workspace registry
-  leases.jsonl                # Lease records (JSONL)
+  leases.jsonl                # Lease records
   oplog/                      # Operation log entries
   hoist/                      # Hoist state and conflict records
+
+.sv.toml                      # Configuration (tracked)
 ```
 
-## Architecture overview
+## Selector Language
 
-- `src/main.rs`: CLI entrypoint and error handling.
-- `src/lib.rs`: module exports.
-- `src/cli/`: clap subcommands and handlers.
-- `src/storage.rs`: persistence for `.sv/` and `.git/sv/`.
-- `src/git.rs`: git2 wrapper helpers.
-- `src/lease.rs`: lease model + conflict logic.
-- `src/risk.rs`: overlap analysis and merge simulation.
-- `src/hoist.rs`: Change-Id dedup and replay helpers.
-- `src/output.rs`: human + JSON output envelopes.
-- `src/selector.rs`: selector parsing (integration is partial).
+sv supports a revset-inspired selector language for filtering workspaces:
 
-## Status and roadmap
+```
+ws(active)                    # All active workspaces
+ws(active) & ahead("main")    # Active workspaces with commits ahead of main
+name~"agent*"                 # Workspaces matching pattern
+touching("src/auth/**")       # Workspaces touching path
+blocked                       # Workspaces with lease conflicts
 
-Near-term work in this repo includes:
+# Operators
+a | b                         # Union
+a & b                         # Intersection
+~a                            # Complement
+```
 
-- Event output (`--events`) and finalized JSON schemas.
-- Hoist commit selection + replay wiring.
-- Selector language integration in list/risk commands.
-- Undo command wiring.
+## Development
 
-## Docs and runbooks
+### Building
 
-- Product specification: `PRODUCT_SPECIFICATION.md`
-- Developer docs index: `agent_docs/README.md`
-- Runbooks:
-  - `agent_docs/runbooks/dev.md`
-  - `agent_docs/runbooks/test.md`
-  - `agent_docs/runbooks/release.md`
+```bash
+cargo build                   # Debug build
+cargo build --release         # Release build
+```
 
-This repo uses Beads for task tracking and MCP Agent Mail for coordination.
-See `AGENTS.md` before starting work.
+### Testing
+
+```bash
+cargo test                    # Run all tests
+cargo test --test lease       # Run specific test file
+cargo test -- --nocapture     # Show println output
+```
+
+### Documentation
+
+```bash
+cargo doc --open              # Generate and view rustdoc
+```
+
+## Architecture
+
+```
+src/
+  main.rs           # CLI entrypoint
+  lib.rs            # Module exports
+  cli/              # Clap subcommand handlers
+    mod.rs          # CLI structure and routing
+    take.rs         # sv take
+    release.rs      # sv release
+    ws.rs           # sv ws *
+    onto.rs         # sv onto
+    ...
+  actor.rs          # Actor identity management
+  config.rs         # .sv.toml parsing
+  error.rs          # Error types and exit codes
+  events.rs         # JSONL event emission
+  git.rs            # git2 wrapper
+  hoist.rs          # Hoist logic and Change-Id dedup
+  lease.rs          # Lease model and conflict detection
+  lock.rs           # File locking primitives
+  merge.rs          # Virtual merge simulation
+  oplog.rs          # Operation log
+  output.rs         # Human + JSON output formatting
+  protect.rs        # Protected path logic
+  refs.rs           # Branch and ref operations
+  risk.rs           # Overlap analysis
+  selector.rs       # Selector parsing and evaluation
+  storage.rs        # .sv/ and .git/sv/ persistence
+  undo.rs           # Undo logic
+  workspace.rs      # Workspace management
+```
+
+## Related Documentation
+
+- [Product Specification](PRODUCT_SPECIFICATION.md) - Full design document
+- [Agent Docs](agent_docs/README.md) - Developer and agent documentation
+- [Events Schema](docs/events.md) - Event output format
+- [Testing Guide](docs/testing.md) - Test patterns and conventions
+- [AGENTS.md](AGENTS.md) - Multi-agent coordination protocol
+
+## License
+
+MIT
