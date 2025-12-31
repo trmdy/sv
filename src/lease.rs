@@ -708,6 +708,11 @@ impl LeaseStore {
                         return false;
                     }
                 }
+
+                // Ownerless leases are informational only and never block.
+                if actor.is_none() || existing.actor.is_none() {
+                    return false;
+                }
                 
                 // Check pathspec overlap
                 if !existing.pathspec_overlaps(pathspec) {

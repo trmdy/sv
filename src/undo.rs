@@ -62,9 +62,29 @@ pub fn undo(storage: &Storage, options: UndoOptions) -> Result<UndoSummary> {
 
     apply_ref_updates(&repo, &undo, &mut summary)?;
     apply_created_paths(&undo, options.keep_worktree, &mut summary)?;
+    apply_workspace_changes(storage, &undo)?;
     apply_lease_changes(storage, &undo.lease_changes, &mut summary)?;
 
     Ok(summary)
+}
+
+fn apply_workspace_changes(storage: &Storage, undo: &UndoData) -> Result<()> {
+    if undo.workspace_changes.is_empty() {
+        return Ok(());
+    }
+
+    for change in &undo.workspace_changes {
+        match change.action.as_str() {
+            "create" | "register" => {
+                let _ = storage.remove_workspace(&change.name)?;
+            }
+            _ => {
+                // Best-effort only for now (e.g., ws rm requires manual restoration).
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn select_record(log: &OpLog, op_id: Option<Uuid>) -> Result<OpRecord> {

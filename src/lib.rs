@@ -35,17 +35,15 @@ pub mod events;
 pub mod git;
 pub mod lease;
 pub mod lock;
+pub mod merge;
 pub mod oplog;
 pub mod output;
+pub mod protect;
 pub mod refs;
+pub mod risk;
 pub mod selector;
 pub mod storage;
 pub mod undo;
 pub mod workspace;
-
-pub mod protect;
-
-// These modules will be implemented in subsequent tasks
-// pub mod risk;
 
 pub use error::{Error, Result};
