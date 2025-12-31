@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use git2::{IndexAddOption, Oid, Repository, Signature, WorktreeAddOptions};
+use sv::lease::Lease;
 use tempfile::TempDir;
 
 pub struct TestRepo {
@@ -48,6 +49,25 @@ impl TestRepo {
         self.dir.path().join(".git").join("sv")
     }
 
+    pub fn read_leases(&self) -> Result<Vec<Lease>, Box<dyn std::error::Error>> {
+        let path = self.git_sv_dir().join("leases.jsonl");
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let contents = fs::read_to_string(&path)?;
+        let mut leases = Vec::new();
+        for line in contents.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let lease: Lease = serde_json::from_str(trimmed)?;
+            leases.push(lease);
+        }
+        Ok(leases)
+    }
+
     pub fn commit_all(&self, message: &str) -> Result<Oid, git2::Error> {
         let mut index = self.repo.index()?;
         index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
@@ -74,6 +94,13 @@ impl TestRepo {
         };
 
         Ok(oid)
+    }
+
+    pub fn stage_path(&self, rel_path: &str) -> Result<(), git2::Error> {
+        let mut index = self.repo.index()?;
+        index.add_path(Path::new(rel_path))?;
+        index.write()?;
+        Ok(())
     }
 
     pub fn commit_file(
