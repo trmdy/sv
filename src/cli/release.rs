@@ -10,6 +10,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::lease::{Lease, LeaseStatus, LeaseStore};
 use crate::lock::{FileLock, DEFAULT_LOCK_TIMEOUT_MS};
+use crate::oplog::{LeaseChange, OpLog, OpRecord, UndoData};
 use crate::storage::Storage;
 
 /// Options for the release command
@@ -162,6 +163,26 @@ pub fn run(options: ReleaseOptions) -> Result<()> {
     // Write updated leases back
     if !released.is_empty() {
         write_leases(&leases_file, &leases)?;
+        
+        // Record operation in oplog for undo support
+        let oplog = OpLog::for_storage(&storage);
+        let pathspecs: Vec<_> = released.iter().map(|l| l.pathspec.clone()).collect();
+        let mut record = OpRecord::new(
+            format!("sv release {}", pathspecs.join(" ")),
+            current_actor.clone(),
+        );
+        record.undo_data = Some(UndoData {
+            lease_changes: released
+                .iter()
+                .map(|l| LeaseChange {
+                    lease_id: l.id.clone(),
+                    action: "release".to_string(),
+                })
+                .collect(),
+            ..UndoData::default()
+        });
+        // Best effort - don't fail the command if oplog write fails
+        let _ = oplog.append(&record);
     }
     
     // Output results

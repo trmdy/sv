@@ -11,10 +11,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::actor;
+use crate::change_id;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::git;
 use crate::lease::{Lease, LeaseScope, LeaseStrength, LeaseStore};
+use crate::oplog::{OpLog, OpRecord, RefUpdate, UndoData};
 use crate::protect;
 use crate::storage::Storage;
 
@@ -126,7 +128,27 @@ pub fn run(options: CommitOptions) -> Result<()> {
         return Err(Error::ProtectedPath(protected_guard[0].file.clone().into()));
     }
 
-    // TODO: Inject Change-Id if missing (sv-8jf.5.2)
+    // Inject Change-Id trailer if missing (sv-8jf.5.2)
+    let mut message = options.message.clone();
+    let mut file = options.file.clone();
+    let mut use_no_edit = options.no_edit;
+
+    if let Some(msg) = message.as_deref() {
+        let (updated, _) = change_id::ensure_change_id(msg);
+        message = Some(updated);
+    } else if let Some(path) = file.as_ref() {
+        let _ = change_id::ensure_change_id_file(path)?;
+    } else if options.amend {
+        let existing = git::head_commit_message(&repository)?;
+        let (updated, changed) = change_id::ensure_change_id(&existing);
+        if changed {
+            message = Some(updated);
+            use_no_edit = false;
+        }
+    }
+    if message.is_some() || file.is_some() {
+        use_no_edit = false;
+    }
 
     // Check lease conflicts (sv-8jf.5.3)
     // Get current branch name for scope filtering
@@ -158,22 +180,26 @@ pub fn run(options: CommitOptions) -> Result<()> {
         });
     }
 
+    // Capture old HEAD for undo support
+    let old_head = repository.head().ok().and_then(|h| h.target()).map(|o| o.to_string());
+    let head_ref = repository.head().ok().and_then(|h| h.name().map(String::from));
+
     // Build git commit command
     let mut cmd = Command::new("git");
     cmd.arg("commit");
     cmd.current_dir(workdir);
 
     // Add message options
-    if let Some(ref msg) = options.message {
+    if let Some(ref msg) = message {
         cmd.arg("-m").arg(msg);
     }
-    if let Some(ref file) = options.file {
+    if let Some(ref file) = file {
         cmd.arg("-F").arg(file);
     }
     if options.amend {
         cmd.arg("--amend");
     }
-    if options.no_edit {
+    if use_no_edit {
         cmd.arg("--no-edit");
     }
 
@@ -194,6 +220,34 @@ pub fn run(options: CommitOptions) -> Result<()> {
 
     // Extract commit hash from output or HEAD
     let commit_hash = get_head_commit_hash(&repository)?;
+
+    // Record operation in oplog for undo support
+    {
+        let common_dir = git::common_dir(&repository);
+        let storage = Storage::new(workdir.to_path_buf(), common_dir, workdir.to_path_buf());
+        let oplog = OpLog::for_storage(&storage);
+        let actor_name = storage.read_actor();
+        
+        let msg_summary = options.message.as_ref()
+            .map(|m| m.lines().next().unwrap_or("").to_string())
+            .unwrap_or_else(|| "(no message)".to_string());
+        
+        let mut record = OpRecord::new(
+            format!("sv commit -m \"{}\"", msg_summary),
+            actor_name,
+        );
+        record.affected_refs = head_ref.iter().cloned().collect();
+        record.undo_data = Some(UndoData {
+            ref_updates: head_ref.map(|ref_name| vec![RefUpdate {
+                name: ref_name,
+                old: old_head,
+                new: Some(commit_hash.clone()),
+            }]).unwrap_or_default(),
+            ..UndoData::default()
+        });
+        // Best effort - don't fail the command if oplog write fails
+        let _ = oplog.append(&record);
+    }
 
     if options.json {
         let result = CommitResult {

@@ -80,6 +80,8 @@ pub struct UndoData {
     pub deleted_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lease_changes: Vec<LeaseChange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_changes: Vec<WorkspaceChange>,
 }
 
 /// Ref update for undo
@@ -97,6 +99,19 @@ pub struct RefUpdate {
 pub struct LeaseChange {
     pub lease_id: String,
     pub action: String,
+}
+
+/// Workspace change record for undo
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkspaceChange {
+    pub name: String,
+    pub action: String, // "create", "remove", "register"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
 }
 
 /// Operation log manager

@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::lease::{parse_duration, Lease, LeaseIntent, LeaseScope, LeaseStore, LeaseStrength};
-use crate::output::{emit_success, format_human, HumanOutput, OutputOptions};
+use crate::oplog::{LeaseChange, OpLog, OpRecord, UndoData};
+use crate::output::{emit_success, HumanOutput, OutputOptions};
 use crate::storage::Storage;
 
 /// Options for the take command
@@ -27,7 +28,8 @@ pub struct TakeOptions {
 /// Result of taking leases
 #[derive(serde::Serialize)]
 struct TakeReport {
-    leases: Vec<LeaseInfo>,
+    actor: String,
+    created: Vec<LeaseInfo>,
     conflicts: Vec<ConflictInfo>,
     summary: TakeSummary,
 }
@@ -41,19 +43,20 @@ struct TakeSummary {
 #[derive(serde::Serialize)]
 struct LeaseInfo {
     id: String,
-    pathspec: String,
+    path: String,
     strength: String,
     intent: String,
     actor: Option<String>,
+    ttl: String,
     expires_at: String,
 }
 
 #[derive(Clone, serde::Serialize)]
 struct ConflictInfo {
-    pathspec: String,
-    conflicting_lease_id: String,
-    conflicting_actor: Option<String>,
-    conflicting_strength: String,
+    path: String,
+    holder: Option<String>,
+    strength: String,
+    lease_id: String,
 }
 
 pub fn run(options: TakeOptions) -> Result<()> {
@@ -138,10 +141,10 @@ pub fn run(options: TakeOptions) -> Result<()> {
         if !path_conflicts.is_empty() {
             for conflict in path_conflicts {
                 conflicts.push(ConflictInfo {
-                    pathspec: pathspec.clone(),
-                    conflicting_lease_id: conflict.id.to_string(),
-                    conflicting_actor: conflict.actor.clone(),
-                    conflicting_strength: conflict.strength.to_string(),
+                    path: pathspec.clone(),
+                    holder: conflict.actor.clone(),
+                    strength: conflict.strength.to_string(),
+                    lease_id: conflict.id.to_string(),
                 });
             }
             continue;
@@ -175,16 +178,41 @@ pub fn run(options: TakeOptions) -> Result<()> {
         storage.append_jsonl(&storage.leases_file(), lease)?;
     }
     
+    // Record operation in oplog for undo support
+    if !created_leases.is_empty() {
+        let oplog = OpLog::for_storage(&storage);
+        let pathspecs: Vec<_> = created_leases.iter().map(|l| l.pathspec.clone()).collect();
+        let mut record = OpRecord::new(
+            format!("sv take {}", pathspecs.join(" ")),
+            actor.clone(),
+        );
+        record.undo_data = Some(UndoData {
+            lease_changes: created_leases
+                .iter()
+                .map(|l| LeaseChange {
+                    lease_id: l.id.to_string(),
+                    action: "create".to_string(),
+                })
+                .collect(),
+            ..UndoData::default()
+        });
+        // Best effort - don't fail the command if oplog write fails
+        let _ = oplog.append(&record);
+    }
+    
     // Output results
+    let actor_label = actor.clone().unwrap_or_else(|| "unknown".to_string());
     let report = TakeReport {
-        leases: created_leases
+        actor: actor_label.clone(),
+        created: created_leases
             .iter()
             .map(|l| LeaseInfo {
                 id: l.id.to_string(),
-                pathspec: l.pathspec.clone(),
+                path: l.pathspec.clone(),
                 strength: l.strength.to_string(),
                 intent: l.intent.to_string(),
                 actor: l.actor.clone(),
+                ttl: l.ttl.clone(),
                 expires_at: l.expires_at.to_rfc3339(),
             })
             .collect(),
@@ -209,7 +237,6 @@ pub fn run(options: TakeOptions) -> Result<()> {
         "sv take: no leases created".to_string()
     };
 
-    let actor_label = actor.clone().unwrap_or_else(|| "unknown".to_string());
     let mut human = HumanOutput::new(header);
     human.push_summary("actor", actor_label);
     human.push_summary("leases_created", created_leases.len().to_string());
@@ -221,7 +248,7 @@ pub fn run(options: TakeOptions) -> Result<()> {
             lease.pathspec,
             lease.strength,
             lease.intent,
-            options.ttl,
+            lease.ttl,
             format_relative_time(&lease.expires_at)
         ));
     }
@@ -229,23 +256,19 @@ pub fn run(options: TakeOptions) -> Result<()> {
     for conflict in &conflicts {
         human.push_warning(format!(
             "conflict: {} held by {} ({})",
-            conflict.pathspec,
-            conflict.conflicting_actor
-                .as_deref()
-                .unwrap_or("(ownerless)"),
-            conflict.conflicting_strength
+            conflict.path,
+            conflict.holder.as_deref().unwrap_or("(ownerless)"),
+            conflict.strength
         ));
     }
 
     if let Some(conflict) = conflicts.first() {
-        human.push_next_step(format!("sv lease who {}", conflict.pathspec));
+        human.push_next_step(format!("sv lease who {}", conflict.path));
         human.push_next_step("retry with --allow-overlap if intentional");
     }
 
     let conflicts_only = created_leases.is_empty() && !conflicts.is_empty();
-    if conflicts_only && !options.json && !options.quiet {
-        println!("{}", format_human(&human));
-    } else if !conflicts_only {
+    if !conflicts_only {
         emit_success(
             OutputOptions {
                 json: options.json,
@@ -260,12 +283,12 @@ pub fn run(options: TakeOptions) -> Result<()> {
     // Return error if there were conflicts and no leases created
     if conflicts_only {
         return Err(Error::LeaseConflict {
-            path: conflicts[0].pathspec.clone().into(),
+            path: conflicts[0].path.clone().into(),
             holder: conflicts[0]
-                .conflicting_actor
+                .holder
                 .clone()
                 .unwrap_or_else(|| "(ownerless)".to_string()),
-            strength: conflicts[0].conflicting_strength.clone(),
+            strength: conflicts[0].strength.clone(),
         });
     }
     
