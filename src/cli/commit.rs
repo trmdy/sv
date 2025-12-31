@@ -218,14 +218,24 @@ pub fn run(options: CommitOptions) -> Result<()> {
 /// - guard mode files (should block commit)
 /// - warn mode files (just emit warning)
 fn check_protected_paths(
-    repo_root: &PathBuf,
+    repo: &git2::Repository,
     staged_files: &[String],
 ) -> Result<(Vec<ProtectedFileInfo>, Vec<ProtectedFileInfo>)> {
-    // Load config
-    let config = Config::load_from_repo(repo_root);
+    let workdir = repo.workdir()
+        .ok_or_else(|| Error::OperationFailed("no working directory".to_string()))?;
     
-    // Load per-workspace overrides
-    let storage = Storage::for_repo(repo_root.clone());
+    // Load config from workspace root
+    let config = Config::load_from_repo(&workdir.to_path_buf());
+    
+    // Get the common git dir (handles worktrees correctly)
+    let git_dir = git::common_dir(repo);
+    
+    // Load per-workspace overrides using proper paths
+    let storage = Storage::new(
+        workdir.to_path_buf(),
+        git_dir,
+        workdir.to_path_buf(),
+    );
     let override_data = protect::load_override(&storage).ok();
     
     // Convert staged files to PathBuf for the protect API

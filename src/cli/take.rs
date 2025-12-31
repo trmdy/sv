@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::lease::{parse_duration, Lease, LeaseIntent, LeaseScope, LeaseStore, LeaseStrength};
+use crate::output::{emit_success, format_human, HumanOutput, OutputOptions};
 use crate::storage::Storage;
 
 /// Options for the take command
@@ -28,6 +29,13 @@ pub struct TakeOptions {
 struct TakeReport {
     leases: Vec<LeaseInfo>,
     conflicts: Vec<ConflictInfo>,
+    summary: TakeSummary,
+}
+
+#[derive(serde::Serialize)]
+struct TakeSummary {
+    created: usize,
+    conflicts: usize,
 }
 
 #[derive(serde::Serialize)]
@@ -110,7 +118,7 @@ pub fn run(options: TakeOptions) -> Result<()> {
     let _expired = store.cleanup_expired(grace);
     
     // Check note requirement
-    if strength.requires_note() && options.note.is_none() {
+    if config.leases.require_note && strength.requires_note() && options.note.is_none() {
         return Err(Error::NoteRequired(strength.to_string()));
     }
     
@@ -169,55 +177,94 @@ pub fn run(options: TakeOptions) -> Result<()> {
     
     // Output results
     let report = TakeReport {
-        leases: created_leases.iter().map(|l| LeaseInfo {
-            id: l.id.to_string(),
-            pathspec: l.pathspec.clone(),
-            strength: l.strength.to_string(),
-            intent: l.intent.to_string(),
-            actor: l.actor.clone(),
-            expires_at: l.expires_at.to_rfc3339(),
-        }).collect(),
+        leases: created_leases
+            .iter()
+            .map(|l| LeaseInfo {
+                id: l.id.to_string(),
+                pathspec: l.pathspec.clone(),
+                strength: l.strength.to_string(),
+                intent: l.intent.to_string(),
+                actor: l.actor.clone(),
+                expires_at: l.expires_at.to_rfc3339(),
+            })
+            .collect(),
         conflicts: conflicts.clone(),
+        summary: TakeSummary {
+            created: created_leases.len(),
+            conflicts: conflicts.len(),
+        },
     };
-    
-    if options.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else if !options.quiet {
-        if !created_leases.is_empty() {
-            println!("Created {} lease(s):", created_leases.len());
-            for lease in &created_leases {
-                println!(
-                    "  {} {} [{}] (expires {})",
-                    lease.id.to_string().split('-').next().unwrap_or(""),
-                    lease.pathspec,
-                    lease.strength,
-                    format_relative_time(&lease.expires_at),
-                );
-            }
-        }
-        
-        if !conflicts.is_empty() {
-            eprintln!("\nConflicts ({}):", conflicts.len());
-            for conflict in &conflicts {
-                eprintln!(
-                    "  {} conflicts with {} lease by {}",
-                    conflict.pathspec,
-                    conflict.conflicting_strength,
-                    conflict.conflicting_actor.as_deref().unwrap_or("(ownerless)"),
-                );
-            }
-        }
-        
-        if created_leases.is_empty() && conflicts.is_empty() {
-            println!("No leases created.");
-        }
+
+    let header = if !created_leases.is_empty() && !conflicts.is_empty() {
+        format!(
+            "sv take: created {} lease(s) ({} conflict(s))",
+            created_leases.len(),
+            conflicts.len()
+        )
+    } else if !created_leases.is_empty() {
+        format!("sv take: created {} lease(s)", created_leases.len())
+    } else if !conflicts.is_empty() {
+        format!("sv take: {} conflict(s)", conflicts.len())
+    } else {
+        "sv take: no leases created".to_string()
+    };
+
+    let actor_label = actor.clone().unwrap_or_else(|| "unknown".to_string());
+    let mut human = HumanOutput::new(header);
+    human.push_summary("actor", actor_label);
+    human.push_summary("leases_created", created_leases.len().to_string());
+    human.push_summary("conflicts", conflicts.len().to_string());
+
+    for lease in &created_leases {
+        human.push_detail(format!(
+            "{} ({}, intent: {}, ttl: {}, expires {})",
+            lease.pathspec,
+            lease.strength,
+            lease.intent,
+            options.ttl,
+            format_relative_time(&lease.expires_at)
+        ));
     }
-    
+
+    for conflict in &conflicts {
+        human.push_warning(format!(
+            "conflict: {} held by {} ({})",
+            conflict.pathspec,
+            conflict.conflicting_actor
+                .as_deref()
+                .unwrap_or("(ownerless)"),
+            conflict.conflicting_strength
+        ));
+    }
+
+    if let Some(conflict) = conflicts.first() {
+        human.push_next_step(format!("sv lease who {}", conflict.pathspec));
+        human.push_next_step("retry with --allow-overlap if intentional");
+    }
+
+    let conflicts_only = created_leases.is_empty() && !conflicts.is_empty();
+    if conflicts_only && !options.json && !options.quiet {
+        println!("{}", format_human(&human));
+    } else if !conflicts_only {
+        emit_success(
+            OutputOptions {
+                json: options.json,
+                quiet: options.quiet,
+            },
+            "take",
+            &report,
+            Some(&human),
+        )?;
+    }
+
     // Return error if there were conflicts and no leases created
-    if created_leases.is_empty() && !conflicts.is_empty() {
+    if conflicts_only {
         return Err(Error::LeaseConflict {
             path: conflicts[0].pathspec.clone().into(),
-            holder: conflicts[0].conflicting_actor.clone().unwrap_or_else(|| "(ownerless)".to_string()),
+            holder: conflicts[0]
+                .conflicting_actor
+                .clone()
+                .unwrap_or_else(|| "(ownerless)".to_string()),
             strength: conflicts[0].conflicting_strength.clone(),
         });
     }

@@ -226,18 +226,16 @@ pub fn create_worktree(
         std::fs::create_dir_all(parent)?;
     }
 
-    // Create the branch
-    repo.branch(&branch, &base_commit, false)?;
-
     // Create the worktree using git command (libgit2's worktree API is limited)
     // This is more reliable than using libgit2 directly for worktree creation
+    // We use -b instead of -B to fail early if branch exists (we check above)
     let repo_path = repo.path();
     let output = Command::new("git")
         .args([
             "worktree",
             "add",
             "--checkout",
-            "-B",
+            "-b",
             &branch,
             &path.to_string_lossy(),
             &base_commit.id().to_string(),
@@ -247,6 +245,14 @@ pub fn create_worktree(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        
+        // Clean up: delete the branch if git worktree add created it but failed
+        // This can happen if worktree add partially succeeded before failing
+        if let Ok(mut branch_ref) = repo.find_branch(&branch, BranchType::Local) {
+            // Only delete if it's not checked out anywhere
+            let _ = branch_ref.delete();
+        }
+        
         return Err(Error::OperationFailed(format!(
             "Failed to create worktree: {}",
             stderr.trim()
@@ -297,12 +303,14 @@ pub fn remove_worktree(repo: &Repository, name: &str, force: bool) -> Result<Pat
     }
 
     // Remove using git command (more reliable than libgit2)
+    // Note: git worktree remove expects a path, not a name
     let repo_path = repo.path();
     let mut args = vec!["worktree", "remove"];
     if force {
         args.push("--force");
     }
-    args.push(name);
+    let path_str = path.to_string_lossy();
+    args.push(&path_str);
 
     let output = Command::new("git")
         .args(&args)
@@ -439,20 +447,21 @@ pub fn diff_files(
         .peel_to_tree()
         .map_err(|e| Error::OperationFailed(format!("Cannot resolve '{}' to tree: {}", from_ref, e)))?;
 
-    let to_tree = match to_ref {
-        Some(ref_name) => Some(
-            repo.revparse_single(ref_name)?
+    // If to_ref is None, diff against the working tree (including staged changes)
+    // Otherwise, diff between two tree references
+    let diff = match to_ref {
+        Some(ref_name) => {
+            let to_tree = repo
+                .revparse_single(ref_name)?
                 .peel_to_tree()
-                .map_err(|e| Error::OperationFailed(format!("Cannot resolve '{}' to tree: {}", ref_name, e)))?
-        ),
-        None => None,
+                .map_err(|e| Error::OperationFailed(format!("Cannot resolve '{}' to tree: {}", ref_name, e)))?;
+            repo.diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None)?
+        }
+        None => {
+            // Diff from_tree against working directory (includes staged + unstaged)
+            repo.diff_tree_to_workdir_with_index(Some(&from_tree), None)?
+        }
     };
-
-    let diff = repo.diff_tree_to_tree(
-        Some(&from_tree),
-        to_tree.as_ref(),
-        None,
-    )?;
 
     parse_diff_to_changes(&diff)
 }

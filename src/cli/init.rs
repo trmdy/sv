@@ -6,14 +6,25 @@ use std::path::{Path, PathBuf};
 
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::output::{emit_success, HumanOutput, OutputOptions};
 
 #[derive(serde::Serialize)]
 struct InitReport {
-    repo_root: PathBuf,
-    created_config: bool,
-    created_git_sv: bool,
-    created_sv_dir: bool,
-    updated_gitignore: bool,
+    repo: PathBuf,
+    created: InitCreated,
+    updated: InitUpdated,
+}
+
+#[derive(serde::Serialize)]
+struct InitCreated {
+    config: bool,
+    sv_dir: bool,
+    git_sv: bool,
+}
+
+#[derive(serde::Serialize)]
+struct InitUpdated {
+    gitignore: bool,
 }
 
 pub fn run(repo: Option<PathBuf>, json: bool, quiet: bool) -> Result<()> {
@@ -38,48 +49,69 @@ pub fn run(repo: Option<PathBuf>, json: bool, quiet: bool) -> Result<()> {
     let created_config = ensure_config(&workdir)?;
     let updated_gitignore = ensure_gitignore(&workdir)?;
 
-    if json {
-        let report = InitReport {
-            repo_root: workdir,
-            created_config,
-            created_git_sv: created_git_sv || created_oplog || created_hoist,
-            created_sv_dir,
-            updated_gitignore,
-        };
-        let payload = serde_json::to_string(&report).unwrap_or_else(|_| {
-            format!(
-                r#"{{"repo_root":"{}","created_config":{},"created_git_sv":{},"created_sv_dir":{},"updated_gitignore":{}}}"#,
-                report.repo_root.display(),
-                report.created_config,
-                report.created_git_sv,
-                report.created_sv_dir,
-                report.updated_gitignore
-            )
-        });
-        println!("{payload}");
-        return Ok(());
+    let created_git_sv = created_git_sv || created_oplog || created_hoist;
+
+    let report = InitReport {
+        repo: workdir.clone(),
+        created: InitCreated {
+            config: created_config,
+            sv_dir: created_sv_dir,
+            git_sv: created_git_sv,
+        },
+        updated: InitUpdated {
+            gitignore: updated_gitignore,
+        },
+    };
+
+    let mut created_items = Vec::new();
+    if created_config {
+        created_items.push(".sv.toml");
+    }
+    if created_sv_dir {
+        created_items.push(".sv/");
+    }
+    if created_git_sv {
+        created_items.push(".git/sv/");
     }
 
-    if !quiet {
-        let mut notes = Vec::new();
-        if created_config {
-            notes.push("created .sv.toml");
-        }
-        if created_git_sv || created_oplog || created_hoist {
-            notes.push("initialized .git/sv/");
-        }
-        if created_sv_dir {
-            notes.push("created .sv/");
-        }
-        if updated_gitignore {
-            notes.push("updated .gitignore");
-        }
-        if notes.is_empty() {
-            println!("sv init: nothing to do");
-        } else {
-            println!("sv init: {}", notes.join(", "));
-        }
+    let mut updated_items = Vec::new();
+    if updated_gitignore {
+        updated_items.push(".gitignore");
     }
+
+    let header = if created_items.is_empty() && updated_items.is_empty() {
+        "sv init: nothing to do".to_string()
+    } else {
+        "sv init: initialized repo".to_string()
+    };
+
+    let mut human = HumanOutput::new(header);
+    human.push_summary("repo", workdir.display().to_string());
+    human.push_summary(
+        "created",
+        if created_items.is_empty() {
+            "none".to_string()
+        } else {
+            created_items.join(", ")
+        },
+    );
+    human.push_summary(
+        "updated",
+        if updated_items.is_empty() {
+            "none".to_string()
+        } else {
+            updated_items.join(", ")
+        },
+    );
+    human.push_next_step("sv actor set <name>");
+    human.push_next_step("sv ws new <workspace>");
+
+    emit_success(
+        OutputOptions { json, quiet },
+        "init",
+        &report,
+        Some(&human),
+    )?;
 
     Ok(())
 }

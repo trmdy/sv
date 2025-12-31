@@ -7,6 +7,8 @@ default = "unknown"
 default_strength = "cooperative"
 default_intent = "other"
 default_ttl = "2h"
+expiration_grace = "0s"
+require_note = true
 
 [leases.compat]
 allow_overlap_cooperative = true
@@ -14,4 +16,7 @@ require_flag_for_strong_overlap = true
 
 [protect]
 mode = "guard"
-paths = []
+paths = [
+    ".beads/**",
+    { pattern = "generated/**", mode = "warn" },
+]
