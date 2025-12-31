@@ -287,49 +287,55 @@ pub fn run_add(options: AddOptions) -> Result<()> {
         config.save(&config_path)?;
     }
     
+    // Return error if all patterns were invalid
+    if added.is_empty() && !options.patterns.is_empty() && !invalid.is_empty() {
+        return Err(Error::InvalidArgument(format!(
+            "Invalid pattern: {}", invalid[0].error
+        )));
+    }
+
     let report = AddReport {
         added: added.clone(),
         already_exists: already_exists.clone(),
         invalid: invalid.clone(),
     };
-    
-    if options.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else if !options.quiet {
-        if !added.is_empty() {
-            println!("Added {} protected pattern(s):", added.len());
-            for pattern in &added {
-                println!("  {} [{}]", pattern, options.mode);
-            }
-        }
-        
-        if !already_exists.is_empty() {
-            eprintln!("\nAlready protected ({}):", already_exists.len());
-            for pattern in &already_exists {
-                eprintln!("  {}", pattern);
-            }
-        }
-        
-        if !invalid.is_empty() {
-            eprintln!("\nInvalid patterns ({}):", invalid.len());
-            for inv in &invalid {
-                eprintln!("  {}: {}", inv.pattern, inv.error);
-            }
-        }
-        
-        if added.is_empty() && already_exists.is_empty() && invalid.is_empty() {
-            println!("No patterns to add.");
-        }
+
+    let header = if !added.is_empty() {
+        format!("sv protect add: added {} pattern(s)", added.len())
+    } else if !already_exists.is_empty() {
+        "sv protect add: patterns already protected".to_string()
+    } else if !invalid.is_empty() {
+        "sv protect add: invalid patterns".to_string()
+    } else {
+        "sv protect add: no changes".to_string()
+    };
+
+    let mut human = HumanOutput::new(header);
+    human.push_summary("added", added.len().to_string());
+    human.push_summary("already_exists", already_exists.len().to_string());
+    human.push_summary("invalid", invalid.len().to_string());
+
+    for pattern in &added {
+        human.push_detail(format!("added: {pattern} [{}]", options.mode));
     }
-    
-    // Return error if all patterns were invalid
-    if added.is_empty() && !options.patterns.is_empty() {
-        if !invalid.is_empty() {
-            return Err(Error::InvalidArgument(format!(
-                "Invalid pattern: {}", invalid[0].error
-            )));
-        }
+    for pattern in &already_exists {
+        human.push_warning(format!("already protected: {pattern}"));
     }
+    for inv in &invalid {
+        human.push_warning(format!("invalid pattern: {} ({})", inv.pattern, inv.error));
+    }
+
+    human.push_next_step("sv protect status");
+
+    emit_success(
+        OutputOptions {
+            json: options.json,
+            quiet: options.quiet,
+        },
+        "protect add",
+        &report,
+        Some(&human),
+    )?;
     
     Ok(())
 }
@@ -487,15 +493,27 @@ pub fn run_rm(options: RmOptions) -> Result<()> {
     let config_path = workdir.join(".sv.toml");
     if !config_path.exists() {
         if options.force {
-            if options.json {
-                let report = RmReport {
-                    removed: vec![],
-                    not_found: options.patterns.clone(),
-                };
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else if !options.quiet {
-                println!("No .sv.toml config file. Nothing to remove.");
+            let report = RmReport {
+                removed: vec![],
+                not_found: options.patterns.clone(),
+            };
+            let mut human = HumanOutput::new("sv protect rm: no config file".to_string());
+            human.push_summary("removed", "0");
+            human.push_summary("not_found", options.patterns.len().to_string());
+            for pattern in &options.patterns {
+                human.push_warning(format!("pattern not found: {pattern}"));
             }
+            human.push_next_step("sv protect add <pattern>");
+
+            emit_success(
+                OutputOptions {
+                    json: options.json,
+                    quiet: options.quiet,
+                },
+                "protect rm",
+                &report,
+                Some(&human),
+            )?;
             return Ok(());
         }
         return Err(Error::OperationFailed("No .sv.toml config file.".to_string()));
@@ -529,39 +547,52 @@ pub fn run_rm(options: RmOptions) -> Result<()> {
         config.save(&config_path)?;
     }
     
-    let report = RmReport {
-        removed: removed.clone(),
-        not_found: not_found.clone(),
-    };
-    
-    if options.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else if !options.quiet {
-        if !removed.is_empty() {
-            println!("Removed {} protected pattern(s):", removed.len());
-            for pattern in &removed {
-                println!("  {}", pattern);
-            }
-        }
-        
-        if !not_found.is_empty() {
-            if options.force {
-                eprintln!("\nNot found (ignored):");
-            } else {
-                eprintln!("\nNot found:");
-            }
-            for pattern in &not_found {
-                eprintln!("  {}", pattern);
-            }
-        }
-    }
-    
     // Return error if patterns not found (unless --force)
     if !not_found.is_empty() && !options.force {
         return Err(Error::OperationFailed(format!(
             "Pattern not found: {}", not_found[0]
         )));
     }
+
+    let report = RmReport {
+        removed: removed.clone(),
+        not_found: not_found.clone(),
+    };
+
+    let header = if !removed.is_empty() {
+        format!("sv protect rm: removed {} pattern(s)", removed.len())
+    } else if !not_found.is_empty() {
+        if options.force {
+            "sv protect rm: patterns not found (ignored)".to_string()
+        } else {
+            "sv protect rm: patterns not found".to_string()
+        }
+    } else {
+        "sv protect rm: no changes".to_string()
+    };
+
+    let mut human = HumanOutput::new(header);
+    human.push_summary("removed", removed.len().to_string());
+    human.push_summary("not_found", not_found.len().to_string());
+
+    for pattern in &removed {
+        human.push_detail(format!("removed: {pattern}"));
+    }
+    for pattern in &not_found {
+        human.push_warning(format!("pattern not found: {pattern}"));
+    }
+
+    human.push_next_step("sv protect status");
+
+    emit_success(
+        OutputOptions {
+            json: options.json,
+            quiet: options.quiet,
+        },
+        "protect rm",
+        &report,
+        Some(&human),
+    )?;
     
     Ok(())
 }

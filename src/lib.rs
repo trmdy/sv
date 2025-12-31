@@ -5,7 +5,7 @@
 //!
 //! # Core Concepts
 //!
-//! - **Workspaces**: Git worktrees as first-class agent sandboxes
+//! - **Workspaces**: agent sandboxes (Git worktrees)
 //! - **Leases**: Graded reservations over paths with intent and TTL
 //! - **Protected Paths**: Global no-edit zones like `.beads/**`
 //! - **Risk Prediction**: Overlap detection and conflict simulation
@@ -18,7 +18,7 @@
 //! - `error`: Error types and result aliases
 //! - `git`: Git operations wrapper using libgit2
 //! - `lease`: Lease system for path reservations
-//! - `workspace`: Workspace (worktree) management
+//! - `workspace`: Workspace management (Git worktree)
 //! - `protect`: Protected path enforcement
 //! - `risk`: Overlap detection and risk scoring
 //! - `oplog`: Operation log and undo support

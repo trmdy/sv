@@ -5,15 +5,17 @@
 
 use clap::{Parser, Subcommand};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 mod actor;
 mod commit;
 mod init;
 mod lease;
+mod onto;
 mod op;
 mod protect;
 mod release;
+mod status;
 mod take;
 mod ws;
 
@@ -25,6 +27,18 @@ mod ws;
 #[command(name = "sv")]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
+#[command(after_help = r#"Examples:
+  sv init
+  sv actor set alice
+  sv ws new agent1
+  sv take src/auth/** --strength cooperative --intent bugfix --note "Fix refresh edge case"
+  sv commit -m "Fix refresh edge case"
+  sv risk --json
+  sv take src/auth/** --json --events /tmp/sv.events.jsonl
+
+Notes:
+  Use --events <path> when combining with --json.
+"#)]
 pub struct Cli {
     /// Path to the repository (defaults to current directory)
     #[arg(long, global = true, env = "SV_REPO")]
@@ -37,6 +51,10 @@ pub struct Cli {
     /// Output in JSON format
     #[arg(long, global = true)]
     pub json: bool,
+
+    /// Emit JSONL events to stdout or a file (use "-" for stdout). Use --events <path> with --json.
+    #[arg(long, global = true, value_name = "path", num_args = 0..=1, default_missing_value = "-")]
+    pub events: Option<String>,
 
     /// Suppress non-essential output
     #[arg(short, long, global = true)]
@@ -53,11 +71,26 @@ pub struct Cli {
 /// Available subcommands
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Workspace management (worktrees)
+    /// Workspace management (workspaces)
     #[command(subcommand)]
+    #[command(long_about = r#"Manage workspaces used as agent sandboxes.
+
+Examples:
+  sv ws new agent1
+  sv ws list
+  sv ws info agent1
+"#)]
     Ws(WsCommands),
 
     /// Take a lease on paths
+    #[command(long_about = r#"Create lease reservations on paths or globs.
+
+Examples:
+  sv take src/auth/** --strength cooperative --intent bugfix --note "Fix refresh edge case"
+  sv take Cargo.lock --strength exclusive --note "Lockfile refresh" --ttl 1h
+  sv take src/api/** --scope ws:agent1
+  sv take src/auth/** --json --events /tmp/sv.events.jsonl
+"#)]
     Take {
         /// Paths to lease (files, directories, or globs)
         #[arg(required = true)]
@@ -85,6 +118,13 @@ pub enum Commands {
     },
 
     /// Release a lease
+    #[command(long_about = r#"Release leases by id or pathspec.
+
+Examples:
+  sv release 01HZXJ6ZP9QK3A5T
+  sv release src/auth/**
+  sv release src/auth/** --events /tmp/sv.events.jsonl
+"#)]
     Release {
         /// Lease IDs or pathspecs to release
         #[arg(required = true)]
@@ -97,13 +137,35 @@ pub enum Commands {
 
     /// Lease management commands
     #[command(subcommand)]
+    #[command(long_about = r#"Inspect and manage active leases.
+
+Examples:
+  sv lease ls
+  sv lease who src/auth/token.rs
+  sv lease renew 01HZXJ6ZP9QK3A5T --ttl 4h
+"#)]
     Lease(LeaseCommands),
 
     /// Protected path management
     #[command(subcommand)]
+    #[command(long_about = r#"Manage protected path rules and overrides.
+
+Examples:
+  sv protect status
+  sv protect add .beads/** --mode guard
+  sv protect off Cargo.lock
+"#)]
     Protect(ProtectCommands),
 
     /// Commit with sv checks (protected paths, lease conflicts, Change-Id)
+    #[command(long_about = r#"Commit with sv checks for protected paths and lease conflicts.
+
+Examples:
+  sv commit -m "Fix refresh edge case"
+  sv commit --amend --no-edit
+  sv commit --allow-protected
+  sv commit --force-lease
+"#)]
     Commit {
         /// Commit message
         #[arg(short, long)]
@@ -135,6 +197,13 @@ pub enum Commands {
     },
 
     /// Risk assessment and conflict prediction
+    #[command(long_about = r#"Show overlap risk across workspaces.
+
+Examples:
+  sv risk
+  sv risk --simulate
+  sv risk --selector "agent*"
+"#)]
     Risk {
         /// Selector for workspaces to analyze
         #[arg(short, long)]
@@ -151,9 +220,21 @@ pub enum Commands {
 
     /// Operation log and undo
     #[command(subcommand)]
+    #[command(long_about = r#"Inspect operation history.
+
+Examples:
+  sv op log --limit 20
+  sv op log --actor alice
+"#)]
     Op(OpCommands),
 
     /// Undo the last operation
+    #[command(long_about = r#"Undo a recent sv operation.
+
+Examples:
+  sv undo
+  sv undo --op 01HZXJ6ZP9QK3A5T
+"#)]
     Undo {
         /// Specific operation ID to undo
         #[arg(long)]
@@ -162,17 +243,66 @@ pub enum Commands {
 
     /// Set or show actor identity
     #[command(subcommand)]
+    #[command(long_about = r#"Manage the actor identity used for leases and ops.
+
+Examples:
+  sv actor set alice
+  sv actor show
+"#)]
     Actor(ActorCommands),
 
     /// Initialize sv in a repository
+    #[command(long_about = r#"Initialize sv state in the repo.
+
+Examples:
+  sv init
+"#)]
     Init,
 
     /// Show current workspace status
+    #[command(long_about = r#"Show a summary of workspace state.
+
+Examples:
+  sv status
+  sv status --json
+"#)]
     Status,
 
+    /// Reposition current workspace onto another workspace's branch
+    #[command(long_about = r#"Rebase or merge current workspace onto target workspace.
+
+Examples:
+  sv onto agent5
+  sv onto agent5 --strategy merge
+  sv onto agent5 --base main
+  sv onto agent5 --preflight
+"#)]
+    Onto {
+        /// Target workspace name to rebase onto
+        target: String,
+
+        /// Strategy: rebase (default), merge, or cherry-pick
+        #[arg(long, default_value = "rebase")]
+        strategy: String,
+
+        /// Base ref for rebase (default: workspace base)
+        #[arg(long)]
+        base: Option<String>,
+
+        /// Preview conflicts before rebasing (dry run with merge simulation)
+        #[arg(long)]
+        preflight: bool,
+    },
+
     /// Hoist workspace branches into an integration branch
+    #[command(long_about = r#"Initialize a hoist run and integration branch.
+
+Examples:
+  sv hoist -s 'ws(active) & ahead("main")' -d main --strategy stack --order workspace
+  sv hoist -s "agent*" -d main --dry-run
+"#)]
     Hoist {
-        /// Selector for workspaces to include (e.g., "actor:agent*" or "all")
+        /// Selector for workspaces to include (e.g., ws(active) & ahead("main") or legacy actor:agent*)
         #[arg(short, long, required = true)]
         selector: String,
 
@@ -191,13 +321,23 @@ pub enum Commands {
         /// Dry run: show what would be done without making changes
         #[arg(long)]
         dry_run: bool,
+
+        /// Continue past conflicts, recording them for later resolution
+        #[arg(long)]
+        continue_on_conflict: bool,
     },
 }
 
 /// Workspace subcommands
 #[derive(Subcommand, Debug)]
 pub enum WsCommands {
-    /// Create a new workspace (worktree)
+    /// Create a new workspace
+    #[command(long_about = r#"Create a workspace and register it.
+
+Examples:
+  sv ws new agent1
+  sv ws new agent1 --base main --dir ../agent1
+"#)]
     New {
         /// Workspace name
         name: String,
@@ -206,7 +346,7 @@ pub enum WsCommands {
         #[arg(long)]
         base: Option<String>,
 
-        /// Directory path for the worktree
+        /// Directory path for the workspace
         #[arg(long)]
         dir: Option<std::path::PathBuf>,
 
@@ -220,6 +360,11 @@ pub enum WsCommands {
     },
 
     /// Register current directory as a workspace
+    #[command(long_about = r#"Register the current directory as a workspace.
+
+Examples:
+  sv ws here --name local
+"#)]
     Here {
         /// Workspace name
         #[arg(long)]
@@ -227,6 +372,12 @@ pub enum WsCommands {
     },
 
     /// List workspaces
+    #[command(long_about = r#"List registered workspaces.
+
+Examples:
+  sv ws list
+  sv ws list -s "agent*"
+"#)]
     List {
         /// Selector to filter workspaces
         #[arg(short, long)]
@@ -234,12 +385,22 @@ pub enum WsCommands {
     },
 
     /// Show detailed workspace info
+    #[command(long_about = r#"Show detailed workspace info.
+
+Examples:
+  sv ws info agent1
+"#)]
     Info {
         /// Workspace name
         name: String,
     },
 
     /// Remove a workspace
+    #[command(long_about = r#"Remove a workspace and unregister it.
+
+Examples:
+  sv ws rm agent1
+"#)]
     Rm {
         /// Workspace name
         name: String,
@@ -254,6 +415,12 @@ pub enum WsCommands {
 #[derive(Subcommand, Debug)]
 pub enum LeaseCommands {
     /// List active leases
+    #[command(long_about = r#"List active leases.
+
+Examples:
+  sv lease ls
+  sv lease ls --actor alice
+"#)]
     Ls {
         /// Selector to filter leases
         #[arg(short, long)]
@@ -265,12 +432,22 @@ pub enum LeaseCommands {
     },
 
     /// Show who holds leases on a path
+    #[command(long_about = r#"Show leases that overlap a path.
+
+Examples:
+  sv lease who src/auth/token.rs
+"#)]
     Who {
         /// Path to check
         path: String,
     },
 
     /// Renew lease TTL
+    #[command(long_about = r#"Extend lease expirations.
+
+Examples:
+  sv lease renew 01HZXJ6ZP9QK3A5T --ttl 4h
+"#)]
     Renew {
         /// Lease IDs to renew
         #[arg(required = true)]
@@ -282,6 +459,11 @@ pub enum LeaseCommands {
     },
 
     /// Break a lease (emergency override)
+    #[command(long_about = r#"Break a lease and record a reason.
+
+Examples:
+  sv lease break 01HZXJ6ZP9QK3A5T --reason "handoff"
+"#)]
     Break {
         /// Lease IDs to break
         #[arg(required = true)]
@@ -297,9 +479,19 @@ pub enum LeaseCommands {
 #[derive(Subcommand, Debug)]
 pub enum ProtectCommands {
     /// Show protection status
+    #[command(long_about = r#"Show protected path rules and overrides.
+
+Examples:
+  sv protect status
+"#)]
     Status,
 
     /// Add protected patterns
+    #[command(long_about = r#"Add protected patterns to .sv.toml.
+
+Examples:
+  sv protect add .beads/** --mode guard
+"#)]
     Add {
         /// Patterns to protect
         #[arg(required = true)]
@@ -311,6 +503,11 @@ pub enum ProtectCommands {
     },
 
     /// Disable protection for patterns in this workspace
+    #[command(long_about = r#"Disable protection for this workspace only.
+
+Examples:
+  sv protect off Cargo.lock
+"#)]
     Off {
         /// Patterns to disable
         #[arg(required = true)]
@@ -318,6 +515,11 @@ pub enum ProtectCommands {
     },
 
     /// Remove protected patterns from config
+    #[command(long_about = r#"Remove protected patterns from .sv.toml.
+
+Examples:
+  sv protect rm Cargo.lock
+"#)]
     Rm {
         /// Patterns to remove
         #[arg(required = true)]
@@ -333,6 +535,12 @@ pub enum ProtectCommands {
 #[derive(Subcommand, Debug)]
 pub enum OpCommands {
     /// Show operation log
+    #[command(long_about = r#"Show recent sv operations.
+
+Examples:
+  sv op log --limit 20
+  sv op log --actor alice
+"#)]
     Log {
         /// Maximum entries to show
         #[arg(long, default_value = "20")]
@@ -360,12 +568,22 @@ pub enum OpCommands {
 #[derive(Subcommand, Debug)]
 pub enum ActorCommands {
     /// Set actor identity
+    #[command(long_about = r#"Persist the actor identity for this workspace.
+
+Examples:
+  sv actor set alice
+"#)]
     Set {
         /// Actor name
         name: String,
     },
 
     /// Show current actor
+    #[command(long_about = r#"Show the resolved actor identity.
+
+Examples:
+  sv actor show
+"#)]
     Show,
 }
 
@@ -449,6 +667,18 @@ fn print_risk_report(report: &crate::risk::RiskReport) {
                 overlap.path,
                 overlap.workspaces.join(", ")
             );
+            if !overlap.suggestions.is_empty() {
+                for suggestion in &overlap.suggestions {
+                    if let Some(command) = &suggestion.command {
+                        println!(
+                            "    - {}: {} ({})",
+                            suggestion.action, suggestion.reason, command
+                        );
+                    } else {
+                        println!("    - {}: {}", suggestion.action, suggestion.reason);
+                    }
+                }
+            }
         }
     }
 }
@@ -497,6 +727,7 @@ pub struct HoistOptions {
     pub strategy: String,
     pub order: String,
     pub dry_run: bool,
+    pub continue_on_conflict: bool,
     pub repo: Option<std::path::PathBuf>,
     pub json: bool,
     pub quiet: bool,
@@ -562,6 +793,128 @@ pub struct HoistOutput {
     pub order: HoistOrder,
     pub workspaces: Vec<String>,
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continue_on_conflict: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<HoistConflictSummary>,
+}
+
+/// Summary of a conflict during hoist
+#[derive(Debug, serde::Serialize)]
+pub struct HoistConflictSummary {
+    pub commit_id: String,
+    pub workspace: String,
+    pub files: Vec<String>,
+}
+
+fn resolve_hoist_workspaces(
+    repo: &git2::Repository,
+    registry: &crate::storage::WorkspacesRegistry,
+    selector: &str,
+) -> Result<Vec<crate::storage::WorkspaceEntry>> {
+    if selector == "all" {
+        return Ok(registry.workspaces.clone());
+    }
+
+    let parsed = crate::selector::parse_selector(selector);
+    if let Ok(expr) = parsed {
+        use crate::selector::{EntityKind, Predicate, SelectorContext, SelectorItem};
+        use std::collections::HashMap;
+
+        let mut workspace_items = Vec::with_capacity(registry.workspaces.len());
+        let mut workspace_lookup = HashMap::new();
+        for entry in &registry.workspaces {
+            workspace_items.push(SelectorItem::new(entry.name.clone(), entry.name.clone()));
+            workspace_lookup.insert(entry.name.clone(), entry);
+        }
+
+        let ctx = SelectorContext::new(&workspace_items, &[], &[], |kind, item, predicate| {
+            if kind != EntityKind::Workspace {
+                return false;
+            }
+            let entry = match workspace_lookup.get(&item.id) {
+                Some(entry) => *entry,
+                None => return false,
+            };
+            match predicate {
+                Predicate::Active => entry.path.exists(),
+                Predicate::Stale => !entry.path.exists(),
+                Predicate::Blocked => false,
+                Predicate::Ahead(ref_spec) => workspace_is_ahead(repo, entry, ref_spec),
+                Predicate::Touching(pathspec) => workspace_touches(repo, entry, pathspec),
+                Predicate::Overlaps(_) => false,
+                Predicate::NameMatches(_) => false,
+            }
+        });
+
+        let matches = crate::selector::evaluate_selector(&expr, &ctx);
+        let mut selected = Vec::new();
+        for hit in matches {
+            if hit.kind != crate::selector::EntityKind::Workspace {
+                continue;
+            }
+            if let Some(entry) = workspace_lookup.get(&hit.item.id) {
+                selected.push((*entry).clone());
+            }
+        }
+        return Ok(selected);
+    }
+
+    Ok(legacy_match_workspaces(registry, selector))
+}
+
+fn legacy_match_workspaces(
+    registry: &crate::storage::WorkspacesRegistry,
+    selector: &str,
+) -> Vec<crate::storage::WorkspaceEntry> {
+    registry
+        .workspaces
+        .iter()
+        .filter(|ws| {
+            if selector == "all" {
+                true
+            } else if let Some(prefix) = selector.strip_suffix('*') {
+                ws.name.starts_with(prefix)
+            } else if let Some(actor_prefix) = selector.strip_prefix("actor:") {
+                ws.actor
+                    .as_ref()
+                    .map(|actor| {
+                        if let Some(prefix) = actor_prefix.strip_suffix('*') {
+                            actor.starts_with(prefix)
+                        } else {
+                            actor == actor_prefix
+                        }
+                    })
+                    .unwrap_or(false)
+            } else {
+                ws.name == selector
+            }
+        })
+        .cloned()
+        .collect()
+}
+
+fn workspace_is_ahead(
+    repo: &git2::Repository,
+    entry: &crate::storage::WorkspaceEntry,
+    ref_spec: &str,
+) -> bool {
+    crate::git::commits_ahead(repo, ref_spec, &entry.branch)
+        .map(|commits| !commits.is_empty())
+        .unwrap_or(false)
+}
+
+fn workspace_touches(
+    repo: &git2::Repository,
+    entry: &crate::storage::WorkspaceEntry,
+    pathspec: &str,
+) -> bool {
+    let changes = match crate::git::diff_files(repo, &entry.base, Some(&entry.branch)) {
+        Ok(changes) => changes,
+        Err(_) => return false,
+    };
+    let filtered = crate::git::filter_changes_by_pathspec(changes, &[pathspec.to_string()]);
+    !filtered.is_empty()
 }
 
 /// Run hoist command
@@ -592,27 +945,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
     // Get workspaces matching selector
     // For now, we support simple selectors: "all" or prefix matching
     let registry = storage.read_workspaces()?;
-    let matching_workspaces: Vec<_> = registry
-        .workspaces
-        .iter()
-        .filter(|ws| {
-            if opts.selector == "all" {
-                true
-            } else if let Some(prefix) = opts.selector.strip_suffix('*') {
-                ws.name.starts_with(prefix)
-            } else if let Some(actor_prefix) = opts.selector.strip_prefix("actor:") {
-                ws.actor.as_ref().map(|a| {
-                    if let Some(prefix) = actor_prefix.strip_suffix('*') {
-                        a.starts_with(prefix)
-                    } else {
-                        a == actor_prefix
-                    }
-                }).unwrap_or(false)
-            } else {
-                ws.name == opts.selector
-            }
-        })
-        .collect();
+    let matching_workspaces = resolve_hoist_workspaces(&repo, &registry, &opts.selector)?;
 
     if matching_workspaces.is_empty() {
         return Err(crate::error::Error::InvalidArgument(format!(
@@ -620,6 +953,27 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
             opts.selector
         )));
     }
+
+    let explicit_order: Vec<String> = matching_workspaces
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect();
+    let order_mode = match order {
+        HoistOrder::Workspace => crate::hoist::OrderMode::Workspace,
+        HoistOrder::Time => crate::hoist::OrderMode::Time,
+        HoistOrder::Explicit => crate::hoist::OrderMode::Explicit(explicit_order),
+    };
+
+    let workspace_refs: Vec<crate::hoist::WorkspaceRef> = matching_workspaces
+        .iter()
+        .map(|entry| crate::hoist::WorkspaceRef {
+            name: entry.name.clone(),
+            branch: entry.branch.clone(),
+        })
+        .collect();
+    let candidates =
+        crate::hoist::select_hoist_commits(&repo, &opts.dest, &workspace_refs, &order_mode)?;
+    let hoist_commits = crate::hoist::build_hoist_commits(&repo, &candidates)?;
 
     // Generate hoist ID and integration branch name
     let hoist_id = Uuid::new_v4().to_string();
@@ -635,6 +989,8 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
             order,
             workspaces: matching_workspaces.iter().map(|w| w.name.clone()).collect(),
             status: "dry_run".to_string(),
+            continue_on_conflict: if opts.continue_on_conflict { Some(true) } else { None },
+            conflicts: Vec::new(),
         };
 
         if opts.json {
@@ -678,7 +1034,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         status: HoistStatus::InProgress,
         started_at: now,
         updated_at: now,
-        commits: Vec::new(), // Will be populated by commit selection task
+        commits: hoist_commits,
     };
     storage.write_hoist_state(&state)?;
 
@@ -691,6 +1047,8 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         order,
         workspaces: matching_workspaces.iter().map(|w| w.name.clone()).collect(),
         status: "in_progress".to_string(),
+        continue_on_conflict: if opts.continue_on_conflict { Some(true) } else { None },
+        conflicts: Vec::new(),
     };
 
     if opts.json {
@@ -702,6 +1060,9 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         println!("  Base: {} ({})", opts.dest, &dest_commit.id().to_string()[..8]);
         println!("  Strategy: {:?}", strategy);
         println!("  Order: {:?}", order);
+        if opts.continue_on_conflict {
+            println!("  Continue on conflict: yes");
+        }
         println!("  Workspaces: {}", matching_workspaces.len());
         for ws in &matching_workspaces {
             println!("    - {} ({})", ws.name, ws.branch);
@@ -716,13 +1077,34 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
 impl Cli {
     /// Execute the CLI command
     pub fn run(self) -> Result<()> {
+        let events_to_stdout = matches!(self.events.as_deref(), Some("-"));
+        if events_to_stdout && self.json {
+            return Err(Error::InvalidArgument(
+                "--json requires --events <path> to avoid mixing JSON output with JSONL events"
+                    .to_string(),
+            ));
+        }
         match self.command {
             Commands::Init => init::run(self.repo, self.json, self.quiet),
             Commands::Status => {
-                if !self.quiet {
-                    println!("sv status - not yet implemented");
-                }
-                Ok(())
+                status::run(status::StatusOptions {
+                    repo: self.repo,
+                    actor: self.actor,
+                    json: self.json,
+                    quiet: self.quiet,
+                })
+            }
+            Commands::Onto { target, strategy, base, preflight } => {
+                onto::run(onto::OntoOptions {
+                    target_workspace: target,
+                    strategy,
+                    base,
+                    preflight,
+                    actor: self.actor,
+                    repo: self.repo,
+                    json: self.json,
+                    quiet: self.quiet,
+                })
             }
             Commands::Ws(cmd) => match cmd {
                 WsCommands::New { name, base, dir, branch, sparse } => {
@@ -782,6 +1164,7 @@ impl Cli {
                     ttl,
                     note,
                     actor: self.actor,
+                    events: self.events.clone(),
                     repo: self.repo,
                     json: self.json,
                     quiet: self.quiet,
@@ -791,6 +1174,7 @@ impl Cli {
                 release::run(release::ReleaseOptions {
                     targets,
                     actor: self.actor,
+                    events: self.events.clone(),
                     repo: self.repo,
                     force,
                     json: self.json,
@@ -854,10 +1238,12 @@ impl Cli {
                     })
                 }
                 ProtectCommands::Off { patterns } => {
-                    if !self.quiet {
-                        println!("sv protect off {:?} - not yet implemented", patterns);
-                    }
-                    Ok(())
+                    protect::run_off(protect::OffOptions {
+                        patterns,
+                        repo: self.repo,
+                        json: self.json,
+                        quiet: self.quiet,
+                    })
                 }
                 ProtectCommands::Rm { patterns, force } => {
                     protect::run_rm(protect::RmOptions {
@@ -934,13 +1320,14 @@ impl Cli {
                     }
                 }
             }
-            Commands::Hoist { selector, dest, strategy, order, dry_run } => {
+            Commands::Hoist { selector, dest, strategy, order, dry_run, continue_on_conflict } => {
                 run_hoist(HoistOptions {
                     selector,
                     dest,
                     strategy,
                     order,
                     dry_run,
+                    continue_on_conflict,
                     repo: self.repo,
                     json: self.json,
                     quiet: self.quiet,

@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::git;
-use crate::oplog::{format_records, OpLog, OpLogFilter, OpOutcome};
+use crate::oplog::{format_records, OpDetails, OpLog, OpLogFilter, OpOutcome};
 use crate::storage::Storage;
 
 /// Options for the op log command.
@@ -33,6 +33,7 @@ struct LogEntry {
     affected_refs: Vec<String>,
     affected_workspaces: Vec<String>,
     outcome: OpOutcome,
+    details: Option<OpDetails>,
 }
 
 #[derive(Serialize)]
@@ -78,6 +79,7 @@ pub fn run_log(options: LogOptions) -> Result<()> {
                 affected_refs: record.affected_refs.clone(),
                 affected_workspaces: record.affected_workspaces.clone(),
                 outcome: record.outcome.clone(),
+                details: record.details.clone(),
             })
             .collect();
 
