@@ -216,7 +216,7 @@ pub fn create_worktree(
             .unwrap_or(false);
         if !is_empty {
             return Err(Error::OperationFailed(format!(
-                "Worktree path already exists and is not empty: {}",
+                "Workspace (worktree) path already exists and is not empty: {}",
                 path.display()
             )));
         }
@@ -255,7 +255,7 @@ pub fn create_worktree(
         }
         
         return Err(Error::OperationFailed(format!(
-            "Failed to create worktree: {}",
+            "Failed to create workspace (worktree): {}",
             stderr.trim()
         )));
     }
@@ -286,7 +286,7 @@ pub fn remove_worktree(repo: &Repository, name: &str, force: bool) -> Result<Pat
         .unwrap_or(false);
     if is_locked && !force {
         return Err(Error::OperationFailed(format!(
-            "Worktree '{}' is locked. Use --force to remove anyway.",
+            "Workspace (worktree) '{}' is locked. Use --force to remove anyway.",
             name
         )));
     }
@@ -296,7 +296,7 @@ pub fn remove_worktree(repo: &Repository, name: &str, force: bool) -> Result<Pat
         if let Ok(wt_repo) = Repository::open(&path) {
             if has_uncommitted_changes(&wt_repo)? {
                 return Err(Error::OperationFailed(format!(
-                    "Worktree '{}' has uncommitted changes. Use --force to remove anyway.",
+                    "Workspace (worktree) '{}' has uncommitted changes. Use --force to remove anyway.",
                     name
                 )));
             }
@@ -321,7 +321,7 @@ pub fn remove_worktree(repo: &Repository, name: &str, force: bool) -> Result<Pat
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(Error::OperationFailed(format!(
-            "Failed to remove worktree: {}",
+            "Failed to remove workspace (worktree): {}",
             stderr.trim()
         )));
     }
@@ -357,7 +357,7 @@ pub fn prune_worktrees(repo: &Repository) -> Result<Vec<String>> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(Error::OperationFailed(format!(
-            "Failed to prune worktrees: {}",
+            "Failed to prune workspaces (worktrees): {}",
             stderr.trim()
         )));
     }

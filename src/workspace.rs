@@ -1,4 +1,4 @@
-//! Worktree operations for managing workspaces.
+//! Workspace operations (Git worktrees).
 
 use std::path::{Path, PathBuf};
 
@@ -6,7 +6,7 @@ use git2::{Repository, Worktree, WorktreeAddOptions, WorktreeLockStatus, Worktre
 
 use crate::error::{Error, Result};
 
-/// Summary of a worktree from the current repository.
+/// Summary of a workspace (worktree) from the current repository.
 #[derive(Debug, Clone)]
 pub struct WorktreeInfo {
     pub name: String,
@@ -15,7 +15,7 @@ pub struct WorktreeInfo {
     pub lock_reason: Option<String>,
 }
 
-/// Options for creating a new worktree.
+/// Options for creating a new workspace (worktree).
 #[derive(Debug, Clone)]
 pub struct WorktreeCreateOptions {
     pub reference: Option<String>,
@@ -33,7 +33,7 @@ impl Default for WorktreeCreateOptions {
     }
 }
 
-/// Resolve a worktree path relative to the repository workdir.
+/// Resolve a workspace (worktree) path relative to the repository workdir.
 pub fn resolve_worktree_path(repo: &Repository, path: &Path) -> Result<PathBuf> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
@@ -45,14 +45,14 @@ pub fn resolve_worktree_path(repo: &Repository, path: &Path) -> Result<PathBuf> 
     Ok(workdir.join(path))
 }
 
-/// Enumerate existing worktrees.
+/// Enumerate existing workspaces (worktrees).
 pub fn list_worktrees(repo: &Repository) -> Result<Vec<WorktreeInfo>> {
     let names = repo.worktrees()?;
     let mut result = Vec::new();
 
     for name_opt in names.iter() {
         let name = name_opt.ok_or_else(|| {
-            Error::OperationFailed("worktree name is not valid utf-8".to_string())
+            Error::OperationFailed("workspace (worktree) name is not valid utf-8".to_string())
         })?;
         let worktree = repo.find_worktree(name)?;
         result.push(worktree_info(name, &worktree)?);
@@ -61,7 +61,7 @@ pub fn list_worktrees(repo: &Repository) -> Result<Vec<WorktreeInfo>> {
     Ok(result)
 }
 
-/// Create a new worktree at the provided path.
+/// Create a new workspace (worktree) at the provided path.
 pub fn add_worktree(
     repo: &Repository,
     name: &str,
@@ -85,7 +85,7 @@ pub fn add_worktree(
     worktree_info(name, &worktree)
 }
 
-/// Remove a worktree by name.
+/// Remove a workspace (worktree) by name.
 pub fn remove_worktree(
     repo: &Repository,
     name: &str,
@@ -102,7 +102,7 @@ pub fn remove_worktree(
     let prunable = worktree.is_prunable(Some(&mut prune_opts))?;
     if !prunable {
         return Err(Error::OperationFailed(format!(
-            "worktree '{name}' is not prunable"
+            "workspace (worktree) '{name}' is not prunable"
         )));
     }
 
