@@ -5,7 +5,6 @@ use assert_cmd::Command;
 use support::TestRepo;
 
 #[test]
-#[ignore = "sv status not implemented yet"]
 fn status_runs_in_repo() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
