@@ -5,11 +5,15 @@
 use std::path::PathBuf;
 
 use chrono::Utc;
+use std::collections::HashSet;
+use git2::Repository;
 use serde::Serialize;
 
+use crate::change_id::find_change_id;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::git;
+use crate::oplog::{OpLog, OpRecord, UndoData, WorkspaceChange};
 use crate::storage::{Storage, WorkspaceEntry};
 
 /// Options for `sv ws new`
@@ -44,16 +48,13 @@ pub fn run_new(opts: NewOptions) -> Result<()> {
     // Open the repository
     let repo = git::open_repo(opts.repo.as_deref())?;
     let workdir = git::workdir(&repo)?;
-    let git_dir = repo.path().to_path_buf();
+    let common_dir = resolve_common_dir(&repo)?;
 
     // Load config for defaults
-    let config = Config::load(&workdir)?;
+    let config = Config::load_from_repo(&workdir);
 
     // Determine the base ref (what to branch from)
-    let base_ref = opts
-        .base
-        .or_else(|| config.workspace.default_base.clone())
-        .unwrap_or_else(|| "HEAD".to_string());
+    let base_ref = opts.base.unwrap_or_else(|| config.base.clone());
 
     // Determine the branch name
     let branch_name = opts
@@ -68,17 +69,12 @@ pub fn run_new(opts: NewOptions) -> Result<()> {
             workdir.join(dir)
         }
     } else {
-        // Default: <worktrees_dir>/<name>
-        let worktrees_dir = config
-            .workspace
-            .worktrees_dir
-            .clone()
-            .unwrap_or_else(|| "worktrees".to_string());
-        workdir.join(worktrees_dir).join(&opts.name)
+        // Default: worktrees/<name>
+        workdir.join("worktrees").join(&opts.name)
     };
 
     // Check if workspace name already exists in registry
-    let storage = Storage::new(workdir.clone(), git_dir, workdir.clone());
+    let storage = Storage::new(workdir.clone(), common_dir.clone(), workdir.clone());
     if storage.find_workspace(&opts.name)?.is_some() {
         return Err(Error::InvalidArgument(format!(
             "workspace '{}' already exists in registry",
@@ -91,20 +87,43 @@ pub fn run_new(opts: NewOptions) -> Result<()> {
 
     // Register in the workspaces registry
     let now = Utc::now().to_rfc3339();
+    let actor = opts.actor.clone();
     let entry = WorkspaceEntry::new(
         opts.name.clone(),
         worktree_path.clone(),
         branch_name.clone(),
         base_ref.clone(),
-        opts.actor,
+        actor.clone(),
         now,
         None,
     );
     storage.add_workspace(entry)?;
 
     // Initialize workspace-local .sv/ directory
-    let ws_storage = Storage::new(workdir.clone(), storage.shared_dir().parent().unwrap().to_path_buf(), worktree_path.clone());
+    let ws_storage = Storage::new(workdir.clone(), common_dir, worktree_path.clone());
     ws_storage.init_local()?;
+
+    // Record operation in oplog
+    let oplog = OpLog::for_storage(&storage);
+    let mut record = OpRecord::new(
+        format!("sv ws new {}", opts.name),
+        actor.clone(),
+    );
+    record.affected_workspaces.push(opts.name.clone());
+    record.affected_refs.push(branch_name.clone());
+    record.undo_data = Some(UndoData {
+        workspace_changes: vec![WorkspaceChange {
+            name: opts.name.clone(),
+            action: "create".to_string(),
+            path: Some(worktree_path.display().to_string()),
+            branch: Some(branch_name.clone()),
+            base: Some(base_ref.clone()),
+        }],
+        created_paths: vec![worktree_path.display().to_string()],
+        ..Default::default()
+    });
+    // Best-effort oplog write - don't fail the command if oplog fails
+    let _ = oplog.append(&record);
 
     // Output result
     let output = NewOutput {
@@ -139,29 +158,47 @@ pub struct WorkspaceListItem {
     pub name: String,
     pub path: PathBuf,
     pub branch: String,
+    pub base: String,
     pub actor: Option<String>,
+    pub last_active: Option<String>,
     pub exists: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ahead_behind: Option<AheadBehind>,
+}
+
+/// Ahead/behind status for a workspace branch against its base.
+#[derive(Debug, Serialize)]
+pub struct AheadBehind {
+    pub base: String,
+    pub ahead: usize,
+    pub behind: usize,
 }
 
 /// Run `sv ws list` command
 pub fn run_list(opts: ListOptions) -> Result<()> {
     let repo = git::open_repo(opts.repo.as_deref())?;
     let workdir = git::workdir(&repo)?;
-    let git_dir = repo.path().to_path_buf();
+    let common_dir = resolve_common_dir(&repo)?;
 
-    let storage = Storage::new(workdir.clone(), git_dir, workdir);
+    let storage = Storage::new(workdir.clone(), common_dir, workdir);
     let registry = storage.read_workspaces()?;
 
     // Convert to list items
     let items: Vec<WorkspaceListItem> = registry
         .workspaces
         .iter()
-        .map(|entry| WorkspaceListItem {
-            name: entry.name.clone(),
-            path: entry.path.clone(),
-            branch: entry.branch.clone(),
-            actor: entry.actor.clone(),
-            exists: entry.path.exists(),
+        .map(|entry| {
+            let ahead_behind = compute_ahead_behind(&repo, &entry.branch, &entry.base);
+            WorkspaceListItem {
+                name: entry.name.clone(),
+                path: entry.path.clone(),
+                branch: entry.branch.clone(),
+                base: entry.base.clone(),
+                actor: entry.actor.clone(),
+                last_active: entry.last_active.clone(),
+                exists: entry.path.exists(),
+                ahead_behind,
+            }
         })
         .collect();
 
@@ -172,18 +209,82 @@ pub fn run_list(opts: ListOptions) -> Result<()> {
             println!("No workspaces registered");
         } else {
             for item in &items {
-                let status = if item.exists { "" } else { " (missing)" };
-                let actor = item
-                    .actor
-                    .as_ref()
-                    .map(|a| format!(" [{}]", a))
-                    .unwrap_or_default();
-                println!("{}{}{}", item.name, actor, status);
+                let missing = if item.exists { "" } else { " (missing)" };
+                println!("{}{}", item.name, missing);
+                println!("  path: {}", item.path.display());
+                println!("  branch: {}", item.branch);
+                println!("  base: {}", item.base);
+                if let Some(actor) = &item.actor {
+                    println!("  actor: {}", actor);
+                }
+                if let Some(last_active) = &item.last_active {
+                    println!("  last active: {}", last_active);
+                }
+                if let Some(status) = &item.ahead_behind {
+                    println!(
+                        "  status: {} ahead / {} behind vs {}",
+                        status.ahead, status.behind, status.base
+                    );
+                }
             }
         }
     }
 
     Ok(())
+}
+
+fn compute_ahead_behind(repo: &Repository, branch: &str, base: &str) -> Option<AheadBehind> {
+    let branch_oid = resolve_oid(repo, branch)?;
+    let base_oid = resolve_oid(repo, base)?;
+    let (ahead, behind) = repo.graph_ahead_behind(branch_oid, base_oid).ok()?;
+    Some(AheadBehind {
+        base: base.to_string(),
+        ahead: ahead as usize,
+        behind: behind as usize,
+    })
+}
+
+fn resolve_oid(repo: &Repository, spec: &str) -> Option<git2::Oid> {
+    let obj = repo.revparse_single(spec).ok()?;
+    let commit = obj.peel_to_commit().ok()?;
+    Some(commit.id())
+}
+
+fn collect_change_ids(repo: &Repository, branch: &str, limit: usize) -> Vec<String> {
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+
+    let head = match repo.revparse_single(branch).and_then(|obj| obj.peel_to_commit()) {
+        Ok(commit) => commit,
+        Err(_) => return results,
+    };
+
+    let mut revwalk = match repo.revwalk() {
+        Ok(walk) => walk,
+        Err(_) => return results,
+    };
+    if revwalk.push(head.id()).is_err() {
+        return results;
+    }
+
+    for oid in revwalk.take(limit) {
+        let oid = match oid {
+            Ok(oid) => oid,
+            Err(_) => continue,
+        };
+        let commit = match repo.find_commit(oid) {
+            Ok(commit) => commit,
+            Err(_) => continue,
+        };
+        let message = commit.message().unwrap_or_default();
+        if let Some(change_id) = find_change_id(message) {
+            if seen.insert(change_id.clone()) {
+                results.push(change_id);
+            }
+        }
+    }
+
+    results
 }
 
 /// Options for `sv ws info`
@@ -206,16 +307,43 @@ pub struct WorkspaceInfo {
     pub created_at: String,
     pub last_active: Option<String>,
     pub exists: bool,
-    pub git_status: Option<String>,
+    /// Current git HEAD (shorthand branch name)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_head: Option<String>,
+    /// Files touched (changed vs base)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub touched_paths: Vec<String>,
+    /// Leases affecting this workspace
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub leases: Vec<WorkspaceLease>,
+    /// Ahead/behind count vs base ref
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ahead_behind_base: Option<AheadBehind>,
+    /// Ahead/behind count vs main/master
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ahead_behind_main: Option<AheadBehind>,
+    /// Recent Change-Ids from commits
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub change_ids: Vec<String>,
+}
+
+/// Lease info for workspace display
+#[derive(Debug, Serialize)]
+pub struct WorkspaceLease {
+    pub id: String,
+    pub pathspec: String,
+    pub strength: String,
+    pub actor: Option<String>,
+    pub expires_at: String,
 }
 
 /// Run `sv ws info` command
 pub fn run_info(opts: InfoOptions) -> Result<()> {
     let repo = git::open_repo(opts.repo.as_deref())?;
     let workdir = git::workdir(&repo)?;
-    let git_dir = repo.path().to_path_buf();
+    let common_dir = resolve_common_dir(&repo)?;
 
-    let storage = Storage::new(workdir.clone(), git_dir, workdir);
+    let storage = Storage::new(workdir.clone(), common_dir, workdir.clone());
     let entry = storage
         .find_workspace(&opts.name)?
         .ok_or_else(|| Error::WorkspaceNotFound(opts.name.clone()))?;
@@ -235,6 +363,47 @@ pub fn run_info(opts: InfoOptions) -> Result<()> {
         None
     };
 
+    let touched_paths = match git::diff_files(&repo, &entry.base, Some(&entry.branch)) {
+        Ok(changes) => {
+            let mut paths: Vec<String> = changes
+                .into_iter()
+                .map(|change| change.path.to_string_lossy().to_string())
+                .collect();
+            paths.sort();
+            paths
+        }
+        Err(_) => Vec::new(),
+    };
+
+    let leases = if touched_paths.is_empty() {
+        Vec::new()
+    } else {
+        match storage.load_leases() {
+            Ok(store) => store
+                .active()
+                .filter(|lease| touched_paths.iter().any(|path| lease.matches_path(path)))
+                .map(|lease| WorkspaceLease {
+                    id: lease.id.to_string(),
+                    pathspec: lease.pathspec.clone(),
+                    strength: lease.strength.to_string(),
+                    actor: lease.actor.clone(),
+                    expires_at: lease.expires_at.to_rfc3339(),
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    };
+
+    let ahead_behind_base = compute_ahead_behind(&repo, &entry.branch, &entry.base);
+    let main_ref = Config::load_from_repo(&workdir).base;
+    let ahead_behind_main = if main_ref != entry.base {
+        compute_ahead_behind(&repo, &entry.branch, &main_ref)
+    } else {
+        None
+    };
+
+    let change_ids = collect_change_ids(&repo, &entry.branch, 10);
+
     let info = WorkspaceInfo {
         id: entry.id,
         name: entry.name,
@@ -245,7 +414,12 @@ pub fn run_info(opts: InfoOptions) -> Result<()> {
         created_at: entry.created_at,
         last_active: entry.last_active,
         exists,
-        git_status,
+        git_head: git_status,
+        touched_paths,
+        leases,
+        ahead_behind_base,
+        ahead_behind_main,
+        change_ids,
     };
 
     if opts.json {
@@ -264,8 +438,39 @@ pub fn run_info(opts: InfoOptions) -> Result<()> {
             println!("  Last active: {}", last_active);
         }
         println!("  Exists: {}", info.exists);
-        if let Some(status) = &info.git_status {
+        if let Some(status) = &info.git_head {
             println!("  Git HEAD: {}", status);
+        }
+        if let Some(status) = &info.ahead_behind_base {
+            println!(
+                "  Ahead/behind vs {}: {} ahead / {} behind",
+                status.base, status.ahead, status.behind
+            );
+        }
+        if let Some(status) = &info.ahead_behind_main {
+            println!(
+                "  Ahead/behind vs {}: {} ahead / {} behind",
+                status.base, status.ahead, status.behind
+            );
+        }
+        if !info.touched_paths.is_empty() {
+            println!("  Touched paths:");
+            for path in &info.touched_paths {
+                println!("    - {}", path);
+            }
+        }
+        if !info.leases.is_empty() {
+            println!("  Leases affecting workspace:");
+            for lease in &info.leases {
+                let actor = lease.actor.as_deref().unwrap_or("-");
+                println!(
+                    "    - {} {} [{}] actor={} expires={}",
+                    lease.id, lease.pathspec, lease.strength, actor, lease.expires_at
+                );
+            }
+        }
+        if !info.change_ids.is_empty() {
+            println!("  Recent Change-Ids: {}", info.change_ids.join(", "));
         }
     }
 
@@ -293,9 +498,9 @@ pub struct RmOutput {
 pub fn run_rm(opts: RmOptions) -> Result<()> {
     let repo = git::open_repo(opts.repo.as_deref())?;
     let workdir = git::workdir(&repo)?;
-    let git_dir = repo.path().to_path_buf();
+    let common_dir = resolve_common_dir(&repo)?;
 
-    let storage = Storage::new(workdir.clone(), git_dir, workdir);
+    let storage = Storage::new(workdir.clone(), common_dir, workdir);
 
     // Find the workspace in registry
     let entry = storage
@@ -327,6 +532,28 @@ pub fn run_rm(opts: RmOptions) -> Result<()> {
     // Remove from registry
     storage.remove_workspace(&opts.name)?;
 
+    // Record operation in oplog
+    let oplog = OpLog::for_storage(&storage);
+    let mut record = OpRecord::new(
+        format!("sv ws rm {}", opts.name),
+        None, // No actor context in RmOptions currently
+    );
+    record.affected_workspaces.push(opts.name.clone());
+    record.affected_refs.push(entry.branch.clone());
+    record.undo_data = Some(UndoData {
+        workspace_changes: vec![WorkspaceChange {
+            name: opts.name.clone(),
+            action: "remove".to_string(),
+            path: Some(path.display().to_string()),
+            branch: Some(entry.branch.clone()),
+            base: Some(entry.base.clone()),
+        }],
+        deleted_paths: vec![path.display().to_string()],
+        ..Default::default()
+    });
+    // Best-effort oplog write
+    let _ = oplog.append(&record);
+
     let output = RmOutput {
         name: opts.name,
         path,
@@ -357,28 +584,30 @@ pub struct HereOptions {
 pub fn run_here(opts: HereOptions) -> Result<()> {
     let repo = git::open_repo(opts.repo.as_deref())?;
     let workdir = git::workdir(&repo)?;
-    let git_dir = repo.path().to_path_buf();
-
-    // Get current directory (the workspace path)
-    let current_dir = std::env::current_dir()?;
+    let common_dir = resolve_common_dir(&repo)?;
 
     // Derive name from directory if not provided
-    let name = opts.name.unwrap_or_else(|| {
-        current_dir
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unnamed")
-            .to_string()
-    });
-
     // Get current branch
     let head_info = git::head_info(&repo)?;
     let branch = head_info.shorthand.unwrap_or_else(|| "HEAD".to_string());
 
+    let derived_name = workdir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|name| !name.is_empty())
+        .map(|name| name.to_string())
+        .or_else(|| Some(branch.clone()))
+        .unwrap_or_else(|| "workspace".to_string());
+
+    let name = opts.name.unwrap_or(derived_name);
+
     // Get base (we'll use the branch name as base since we're registering existing)
     let base = branch.clone();
 
-    let storage = Storage::new(workdir.clone(), git_dir, workdir);
+    let storage = Storage::new(workdir.clone(), common_dir, workdir.clone());
+
+    // Ensure workspace-local state directory exists
+    storage.init_local()?;
 
     // Check if already registered
     if storage.find_workspace(&name)?.is_some() {
@@ -392,18 +621,39 @@ pub fn run_here(opts: HereOptions) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     let entry = WorkspaceEntry::new(
         name.clone(),
-        current_dir.clone(),
+        workdir.clone(),
         branch.clone(),
         base.clone(),
-        opts.actor,
+        opts.actor.clone(),
         now,
         None,
     );
     storage.add_workspace(entry)?;
 
+    // Record operation in oplog
+    let oplog = OpLog::for_storage(&storage);
+    let mut record = OpRecord::new(
+        format!("sv ws here {}", name),
+        opts.actor,
+    );
+    record.affected_workspaces.push(name.clone());
+    record.affected_refs.push(branch.clone());
+    record.undo_data = Some(UndoData {
+        workspace_changes: vec![WorkspaceChange {
+            name: name.clone(),
+            action: "register".to_string(),
+            path: Some(workdir.display().to_string()),
+            branch: Some(branch.clone()),
+            base: Some(base.clone()),
+        }],
+        ..Default::default()
+    });
+    // Best-effort oplog write
+    let _ = oplog.append(&record);
+
     let output = NewOutput {
         name: name.clone(),
-        path: current_dir,
+        path: workdir,
         branch,
         base,
     };
@@ -417,4 +667,98 @@ pub fn run_here(opts: HereOptions) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_common_dir(repository: &git2::Repository) -> Result<PathBuf> {
+    let git_dir = repository.path();
+    let commondir_path = git_dir.join("commondir");
+    if !commondir_path.exists() {
+        return Ok(git_dir.to_path_buf());
+    }
+
+    let content = std::fs::read_to_string(&commondir_path)?;
+    let rel = content.trim();
+    if rel.is_empty() {
+        return Err(Error::OperationFailed(format!(
+            "commondir file is empty: {}",
+            commondir_path.display()
+        )));
+    }
+
+    Ok(git_dir.join(rel))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use git2::{IndexAddOption, Repository, Signature};
+    use tempfile::TempDir;
+
+    fn commit_all(repo: &Repository, message: &str) {
+        let mut index = repo.index().expect("index");
+        index
+            .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+            .expect("add");
+        index.write().expect("write index");
+
+        let tree_id = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_id).expect("tree");
+        let sig = Signature::now("sv-test", "sv-test@example.com").expect("sig");
+
+        let parent = repo
+            .head()
+            .ok()
+            .and_then(|head| head.target())
+            .and_then(|oid| repo.find_commit(oid).ok());
+
+        match parent {
+            Some(parent) => repo
+                .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])
+                .expect("commit"),
+            None => repo
+                .commit(Some("HEAD"), &sig, &sig, message, &tree, &[])
+                .expect("commit"),
+        };
+    }
+
+    #[test]
+    fn run_here_registers_repo_root_and_creates_local_state() -> Result<()> {
+        let temp = TempDir::new().expect("temp dir");
+        let repo = Repository::init(temp.path()).expect("init repo");
+
+        std::fs::write(temp.path().join("README.md"), "base").expect("write readme");
+        commit_all(&repo, "initial commit");
+
+        let original_dir = std::env::current_dir()?;
+        std::env::set_current_dir(temp.path())?;
+
+        let result = run_here(HereOptions {
+            name: None,
+            actor: Some("agent1".to_string()),
+            repo: None,
+            json: false,
+            quiet: true,
+        });
+
+        std::env::set_current_dir(original_dir)?;
+        result?;
+
+        let storage = Storage::for_repo(temp.path().to_path_buf());
+        let registry = storage.read_workspaces()?;
+        assert_eq!(registry.workspaces.len(), 1);
+
+        let entry = &registry.workspaces[0];
+        let expected_name = temp
+            .path()
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("workspace");
+
+        assert_eq!(entry.name, expected_name);
+        assert_eq!(entry.path, temp.path().to_path_buf());
+        assert_eq!(entry.actor.as_deref(), Some("agent1"));
+        assert!(storage.local_dir().exists());
+
+        Ok(())
+    }
 }
