@@ -25,6 +25,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
 use serde::{de::DeserializeOwned, Serialize};
 use uuid::Uuid;
 
@@ -119,6 +120,26 @@ impl Storage {
         self.shared_dir().join("oplog")
     }
 
+    /// Path to the hoist state directory
+    pub fn hoist_dir(&self) -> PathBuf {
+        self.shared_dir().join("hoist")
+    }
+
+    /// Path to the hoist state directory for a destination ref
+    pub fn hoist_state_dir(&self, dest_ref: &str) -> PathBuf {
+        self.hoist_dir().join(hoist_key(dest_ref))
+    }
+
+    /// Path to the hoist state file for a destination ref
+    pub fn hoist_state_file(&self, dest_ref: &str) -> PathBuf {
+        self.hoist_state_dir(dest_ref).join("state.json")
+    }
+
+    /// Path to the hoist conflicts file for a destination ref
+    pub fn hoist_conflicts_file(&self, dest_ref: &str) -> PathBuf {
+        self.hoist_state_dir(dest_ref).join("conflicts.jsonl")
+    }
+
     // =========================================================================
     // Directory initialization
     // =========================================================================
@@ -145,6 +166,9 @@ impl Storage {
         
         // Create oplog subdirectory
         fs::create_dir_all(self.oplog_dir())?;
+
+        // Create hoist state subdirectory
+        fs::create_dir_all(self.hoist_dir())?;
         
         // Initialize empty workspaces registry if it doesn't exist
         let workspaces_file = self.workspaces_file();
@@ -424,6 +448,83 @@ impl Storage {
         
         Ok(())
     }
+
+    // =========================================================================
+    // Hoist state operations
+    // =========================================================================
+
+    /// Read hoist state for a destination ref.
+    pub fn read_hoist_state(&self, dest_ref: &str) -> Result<Option<HoistState>> {
+        let path = self.hoist_state_file(dest_ref);
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let lock_path = path.with_extension("lock");
+        let _lock = FileLock::acquire(&lock_path, DEFAULT_LOCK_TIMEOUT_MS)?;
+        let state = self.read_json(&path)?;
+        Ok(Some(state))
+    }
+
+    /// Write hoist state for a destination ref.
+    pub fn write_hoist_state(&self, state: &HoistState) -> Result<()> {
+        let path = self.hoist_state_file(&state.dest_ref);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let lock_path = path.with_extension("lock");
+        let _lock = FileLock::acquire(&lock_path, DEFAULT_LOCK_TIMEOUT_MS)?;
+
+        let json = serde_json::to_string_pretty(state)?;
+        lock::write_atomic(&path, json.as_bytes())?;
+        Ok(())
+    }
+
+    /// Append a hoist conflict record for a destination ref.
+    pub fn append_hoist_conflict(&self, dest_ref: &str, record: &HoistConflict) -> Result<()> {
+        let path = self.hoist_conflicts_file(dest_ref);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let lock_path = path.with_extension("lock");
+        let _lock = FileLock::acquire(&lock_path, DEFAULT_LOCK_TIMEOUT_MS)?;
+        self.append_jsonl(&path, record)?;
+        Ok(())
+    }
+
+    /// Read all hoist conflict records for a destination ref.
+    pub fn read_hoist_conflicts(&self, dest_ref: &str) -> Result<Vec<HoistConflict>> {
+        let path = self.hoist_conflicts_file(dest_ref);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let lock_path = path.with_extension("lock");
+        let _lock = FileLock::acquire(&lock_path, DEFAULT_LOCK_TIMEOUT_MS)?;
+        self.read_jsonl(&path)
+    }
+
+    /// Clear hoist state and conflicts for a destination ref.
+    pub fn clear_hoist_state(&self, dest_ref: &str) -> Result<()> {
+        let state_path = self.hoist_state_file(dest_ref);
+        let conflicts_path = self.hoist_conflicts_file(dest_ref);
+
+        if state_path.exists() {
+            let lock_path = state_path.with_extension("lock");
+            let _lock = FileLock::acquire(&lock_path, DEFAULT_LOCK_TIMEOUT_MS)?;
+            let _ = fs::remove_file(&state_path);
+        }
+
+        if conflicts_path.exists() {
+            let lock_path = conflicts_path.with_extension("lock");
+            let _lock = FileLock::acquire(&lock_path, DEFAULT_LOCK_TIMEOUT_MS)?;
+            let _ = fs::remove_file(&conflicts_path);
+        }
+
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -536,6 +637,59 @@ pub struct ProtectOverride {
     pub disabled_patterns: Vec<String>,
 }
 
+/// Persisted hoist state for a destination ref.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct HoistState {
+    pub hoist_id: String,
+    pub dest_ref: String,
+    pub integration_ref: String,
+    pub status: HoistStatus,
+    pub started_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commits: Vec<HoistCommit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoistStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct HoistCommit {
+    pub commit_id: String,
+    pub status: HoistCommitStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoistCommitStatus {
+    Pending,
+    Applied,
+    Skipped,
+    Conflict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct HoistConflict {
+    pub hoist_id: String,
+    pub commit_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub recorded_at: DateTime<Utc>,
+}
+
 fn default_workspace_id() -> String {
     Uuid::new_v4().to_string()
 }
@@ -571,6 +725,22 @@ impl WorkspaceEntry {
 
 fn workspaces_lock_path(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.lock", path.display()))
+}
+
+fn hoist_key(dest_ref: &str) -> String {
+    let mut key = String::new();
+    for ch in dest_ref.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            key.push(ch);
+        } else {
+            key.push('_');
+        }
+    }
+    if key.is_empty() {
+        "_".to_string()
+    } else {
+        key
+    }
 }
 
 // =============================================================================
@@ -630,6 +800,7 @@ mod tests {
         assert_eq!(storage.workspaces_file(), repo_root.join(".git/sv/workspaces.json"));
         assert_eq!(storage.leases_file(), repo_root.join(".git/sv/leases.jsonl"));
         assert_eq!(storage.oplog_dir(), repo_root.join(".git/sv/oplog"));
+        assert_eq!(storage.hoist_dir(), repo_root.join(".git/sv/hoist"));
     }
 
     #[test]
@@ -647,6 +818,7 @@ mod tests {
         assert!(storage.local_dir().exists());
         assert!(storage.shared_dir().exists());
         assert!(storage.oplog_dir().exists());
+        assert!(storage.hoist_dir().exists());
         assert!(storage.overrides_dir().exists());
         
         // Check files exist
