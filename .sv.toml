@@ -1,0 +1,17 @@
+base = "main"
+
+[actor]
+default = "unknown"
+
+[leases]
+default_strength = "cooperative"
+default_intent = "other"
+default_ttl = "2h"
+
+[leases.compat]
+allow_overlap_cooperative = true
+require_flag_for_strong_overlap = true
+
+[protect]
+mode = "guard"
+paths = []
