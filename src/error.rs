@@ -107,6 +107,57 @@ impl Error {
             | Error::OperationFailed(_) => exit_codes::OPERATION_FAILED,
         }
     }
+
+    /// Structured details for JSON error output.
+    pub fn details(&self) -> Option<serde_json::Value> {
+        use serde_json::json;
+
+        let path_value = |path: &PathBuf| json!({ "path": path.display().to_string() });
+        let mut details = match self {
+            Error::NotARepo(path) => Some(path_value(path)),
+            Error::RepoNotFound(path) => Some(path_value(path)),
+            Error::InvalidConfig(message) => Some(json!({ "message": message })),
+            Error::InvalidArgument(message) => Some(json!({ "message": message })),
+            Error::WorkspaceNotFound(name) => Some(json!({ "name": name })),
+            Error::LeaseNotFound(id) => Some(json!({ "id": id })),
+            Error::ProtectedPath(path) => Some(path_value(path)),
+            Error::LeaseConflict {
+                path,
+                holder,
+                strength,
+            } => Some(json!({
+                "path": path.display().to_string(),
+                "holder": holder,
+                "strength": strength,
+            })),
+            Error::NoteRequired(strength) => Some(json!({ "strength": strength })),
+            Error::Git(err) => Some(json!({
+                "message": err.message(),
+                "code": format!("{:?}", err.code()),
+            })),
+            Error::Io(err) => Some(json!({
+                "message": err.to_string(),
+                "kind": err.kind().to_string(),
+            })),
+            Error::Json(err) => Some(json!({ "message": err.to_string() })),
+            Error::TomlParse(err) => Some(json!({ "message": err.to_string() })),
+            Error::TomlSerialize(err) => Some(json!({ "message": err.to_string() })),
+            Error::LockFailed(path) => Some(path_value(path)),
+            Error::MergeConflict(path) => Some(path_value(path)),
+            Error::OperationFailed(message) => Some(json!({ "message": message })),
+        };
+
+        let sources = error_sources(self);
+        if !sources.is_empty() {
+            if let Some(value) = details.as_mut() {
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("sources".to_string(), json!(sources));
+                }
+            }
+        }
+
+        details
+    }
 }
 
 /// Result type alias for sv operations
@@ -126,7 +177,19 @@ impl From<&Error> for JsonError {
         JsonError {
             error: err.to_string(),
             code: err.exit_code(),
-            details: None,
+            details: err.details(),
         }
     }
+}
+
+fn error_sources(err: &dyn std::error::Error) -> Vec<String> {
+    use std::error::Error as StdError;
+
+    let mut sources = Vec::new();
+    let mut current = StdError::source(err);
+    while let Some(source) = current {
+        sources.push(source.to_string());
+        current = StdError::source(source);
+    }
+    sources
 }
