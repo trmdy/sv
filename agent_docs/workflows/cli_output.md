@@ -33,6 +33,16 @@ command that prints to stdout/stderr.
 - Suppress non-essential output on success.
 - Errors still print (human mode: stderr; JSON mode: stdout error object).
 
+### Events mode (`--events [path]`)
+
+- Emits a JSONL event stream to stdout (no path) or to the specified file.
+- Events are independent of human/JSON output; `--quiet` only suppresses
+  human output, not events.
+- `--json` requires `--events <path>` to avoid mixing the JSON envelope
+  with the JSONL event stream on stdout.
+- If you want human output and events, prefer `--events <path>` to keep
+  outputs separate.
+
 ## Human output layout
 
 ### Header
