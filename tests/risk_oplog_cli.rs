@@ -82,9 +82,12 @@ fn op_log_reports_records_json() -> Result<(), Box<dyn std::error::Error>> {
     assert!(output.status.success());
 
     let report: Value = serde_json::from_slice(&output.stdout)?;
-    assert_eq!(report["total"], 1);
-    assert_eq!(report["records"][0]["command"], "sv ws new ws-a");
-    assert_eq!(report["records"][0]["actor"], "agent1");
+    assert_eq!(report["total"].as_u64(), Some(1));
+    assert_eq!(
+        report["records"][0]["command"].as_str(),
+        Some("sv ws new ws-a")
+    );
+    assert_eq!(report["records"][0]["actor"].as_str(), Some("agent1"));
 
     Ok(())
 }

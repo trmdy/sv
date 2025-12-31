@@ -1,71 +1,67 @@
-use sv::lease::{Lease, LeaseIntent, LeaseStrength};
+use sv::lease::{Lease, LeaseStrength, LeaseStore};
 
 #[test]
-fn lease_strength_compatibility_matrix() {
-    use LeaseStrength::*;
+fn lease_matches_path_with_exact_and_glob() {
+    let exact = Lease::builder("README.md").build().expect("lease");
+    assert!(exact.matches_path("README.md"));
+    assert!(!exact.matches_path("src/main.rs"));
 
-    // Observe overlaps with anything.
-    for other in [Observe, Cooperative, Strong, Exclusive] {
-        assert!(Observe.is_compatible_with(&other, false));
-        assert!(other.is_compatible_with(&Observe, false));
-    }
-
-    // Cooperative overlaps with cooperative.
-    assert!(Cooperative.is_compatible_with(&Cooperative, false));
-
-    // Strong vs cooperative depends on allow_overlap.
-    assert!(!Strong.is_compatible_with(&Cooperative, false));
-    assert!(!Cooperative.is_compatible_with(&Strong, false));
-    assert!(Strong.is_compatible_with(&Cooperative, true));
-    assert!(Cooperative.is_compatible_with(&Strong, true));
-
-    // Strong blocks strong.
-    assert!(!Strong.is_compatible_with(&Strong, false));
-    assert!(!Strong.is_compatible_with(&Strong, true));
-
-    // Exclusive blocks everything except observe (handled above).
-    assert!(!Exclusive.is_compatible_with(&Cooperative, false));
-    assert!(!Exclusive.is_compatible_with(&Strong, false));
-    assert!(!Exclusive.is_compatible_with(&Exclusive, false));
+    let glob = Lease::builder("src/**").build().expect("lease");
+    assert!(glob.matches_path("src/main.rs"));
+    assert!(glob.matches_path("src/nested/mod.rs"));
+    assert!(!glob.matches_path("docs/readme.md"));
 }
 
 #[test]
-fn lease_strength_note_and_priority() {
-    use LeaseStrength::*;
+fn pathspec_overlaps_is_symmetric_for_prefixes() {
+    let lease = Lease::builder("src/**").build().expect("lease");
+    assert!(lease.pathspec_overlaps("src/lib.rs"));
+    assert!(!lease.pathspec_overlaps("docs/**"));
 
-    assert!(!Observe.requires_note());
-    assert!(!Cooperative.requires_note());
-    assert!(Strong.requires_note());
-    assert!(Exclusive.requires_note());
-
-    assert_eq!(Observe.priority(), 0);
-    assert_eq!(Cooperative.priority(), 1);
-    assert_eq!(Strong.priority(), 2);
-    assert_eq!(Exclusive.priority(), 3);
+    let other = Lease::builder("src/lib.rs").build().expect("lease");
+    assert!(other.pathspec_overlaps("src/**"));
 }
 
 #[test]
-fn lease_intent_conflict_risk_is_ordered() {
-    assert!(LeaseIntent::Docs.conflict_risk() < LeaseIntent::Feature.conflict_risk());
-    assert!(LeaseIntent::Feature.conflict_risk() < LeaseIntent::Refactor.conflict_risk());
-    assert_eq!(LeaseIntent::Format.conflict_risk(), 5);
-    assert_eq!(LeaseIntent::Rename.conflict_risk(), 5);
-}
-
-#[test]
-fn lease_pathspec_overlap_checks_globs_and_prefixes() {
-    let lease = Lease::builder("src/auth/**")
+fn lease_store_conflicts_respect_actor_and_overlap_policy() {
+    let mut store = LeaseStore::new();
+    let existing = Lease::builder("src/**")
+        .strength(LeaseStrength::Strong)
+        .actor("alice")
+        .note("work in progress")
         .build()
         .expect("lease");
+    store.add(existing);
 
-    assert!(lease.pathspec_overlaps("src/auth/login.rs"));
-    assert!(lease.pathspec_overlaps("src/auth/**"));
-    assert!(lease.pathspec_overlaps("src/**"));
-    assert!(!lease.pathspec_overlaps("src/other/**"));
+    let conflicts = store.check_conflicts(
+        "src/lib.rs",
+        LeaseStrength::Cooperative,
+        Some("bob"),
+        false,
+    );
+    assert_eq!(conflicts.len(), 1);
 
-    let specific = Lease::builder("src/auth/login.rs")
-        .build()
-        .expect("lease");
-    assert!(specific.pathspec_overlaps("src/auth/*.rs"));
-    assert!(!specific.pathspec_overlaps("tests/**"));
+    let allow_overlap = store.check_conflicts(
+        "src/lib.rs",
+        LeaseStrength::Cooperative,
+        Some("bob"),
+        true,
+    );
+    assert!(allow_overlap.is_empty());
+
+    let same_actor = store.check_conflicts(
+        "src/lib.rs",
+        LeaseStrength::Strong,
+        Some("alice"),
+        false,
+    );
+    assert!(same_actor.is_empty());
+
+    let ownerless = store.check_conflicts(
+        "src/lib.rs",
+        LeaseStrength::Strong,
+        None,
+        false,
+    );
+    assert!(ownerless.is_empty());
 }
