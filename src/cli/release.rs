@@ -8,15 +8,18 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::events::{Event, EventDestination, EventKind};
 use crate::lease::{Lease, LeaseStatus, LeaseStore};
 use crate::lock::{FileLock, DEFAULT_LOCK_TIMEOUT_MS};
 use crate::oplog::{LeaseChange, OpLog, OpRecord, UndoData};
+use crate::output::{emit_success, HumanOutput, OutputOptions};
 use crate::storage::Storage;
 
 /// Options for the release command
 pub struct ReleaseOptions {
     pub targets: Vec<String>,
     pub actor: Option<String>,
+    pub events: Option<String>,
     pub repo: Option<PathBuf>,
     pub force: bool,
     pub json: bool,
@@ -43,6 +46,20 @@ struct NotOwnedInfo {
     target: String,
     lease_id: String,
     owner: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct LeaseReleaseEventData {
+    id: String,
+    pathspec: String,
+    strength: String,
+    intent: String,
+    scope: String,
+    actor: Option<String>,
+    ttl: String,
+    expires_at: String,
+    released_at: Option<String>,
+    note: Option<String>,
 }
 
 pub fn run(options: ReleaseOptions) -> Result<()> {
@@ -74,6 +91,12 @@ pub fn run(options: ReleaseOptions) -> Result<()> {
     
     // Load config
     let config = Config::load_from_repo(&workdir);
+
+    let event_destination = EventDestination::parse(options.events.as_deref());
+    let mut event_sink = event_destination
+        .as_ref()
+        .map(|dest| dest.open())
+        .transpose()?;
     
     // Determine current actor
     let current_actor = options.actor
@@ -99,6 +122,7 @@ pub fn run(options: ReleaseOptions) -> Result<()> {
     store.expire_stale();
     
     let mut released = Vec::new();
+    let mut released_details = Vec::new();
     let mut not_found = Vec::new();
     let mut not_owned = Vec::new();
     
@@ -113,6 +137,7 @@ pub fn run(options: ReleaseOptions) -> Result<()> {
                         pathspec: lease.pathspec.clone(),
                         actor: lease.actor.clone(),
                     });
+                    released_details.push(lease);
                 }
                 ReleaseResult::NotFound => {
                     not_found.push(target.clone());
@@ -145,6 +170,7 @@ pub fn run(options: ReleaseOptions) -> Result<()> {
                                 pathspec: lease.pathspec.clone(),
                                 actor: lease.actor.clone(),
                             });
+                            released_details.push(lease);
                         }
                         ReleaseResult::NotOwned(lease) => {
                             not_owned.push(NotOwnedInfo {
@@ -184,57 +210,103 @@ pub fn run(options: ReleaseOptions) -> Result<()> {
         // Best effort - don't fail the command if oplog write fails
         let _ = oplog.append(&record);
     }
-    
-    // Output results
-    let report = ReleaseReport {
-        released: released.clone(),
-        not_found: not_found.clone(),
-        not_owned: not_owned.clone(),
-    };
-    
-    if options.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else if !options.quiet {
-        if !released.is_empty() {
-            println!("Released {} lease(s):", released.len());
-            for lease in &released {
-                let short_id = lease.id.split('-').next().unwrap_or(&lease.id);
-                println!("  {} {}", short_id, lease.pathspec);
+
+    let mut event_warning: Option<String> = None;
+    if let Some(sink) = event_sink.as_mut() {
+        for lease in &released_details {
+            let event = match Event::new(EventKind::LeaseReleased, lease.actor.clone()).with_data(
+                LeaseReleaseEventData {
+                    id: lease.id.to_string(),
+                    pathspec: lease.pathspec.clone(),
+                    strength: lease.strength.to_string(),
+                    intent: lease.intent.to_string(),
+                    scope: lease.scope.to_string(),
+                    actor: lease.actor.clone(),
+                    ttl: lease.ttl.clone(),
+                    expires_at: lease.expires_at.to_rfc3339(),
+                    released_at: lease
+                        .status_changed_at
+                        .as_ref()
+                        .map(|ts| ts.to_rfc3339()),
+                    note: lease.note.clone(),
+                },
+            ) {
+                Ok(event) => event,
+                Err(err) => {
+                    event_warning = Some(format!("event output failed: {err}"));
+                    break;
+                }
+            };
+            if let Err(err) = sink.emit(&event) {
+                event_warning = Some(format!("event output failed: {err}"));
+                break;
             }
-        }
-        
-        if !not_found.is_empty() {
-            eprintln!("\nNot found ({}):", not_found.len());
-            for target in &not_found {
-                eprintln!("  {}", target);
-            }
-        }
-        
-        if !not_owned.is_empty() {
-            eprintln!("\nNot owned by you ({}):", not_owned.len());
-            for info in &not_owned {
-                eprintln!(
-                    "  {} owned by {} (use --force to override)",
-                    info.target,
-                    info.owner.as_deref().unwrap_or("(ownerless)")
-                );
-            }
-        }
-        
-        if released.is_empty() && not_found.is_empty() && not_owned.is_empty() {
-            println!("No leases matched.");
         }
     }
     
     // Return error if nothing was released and there were targets
     if released.is_empty() && (!not_found.is_empty() || !not_owned.is_empty()) {
         if !not_owned.is_empty() {
-            return Err(Error::OperationFailed(format!(
+            return Err(Error::OperationFailed(
                 "Cannot release lease owned by another actor. Use --force to override."
-            )));
+                    .to_string(),
+            ));
         }
         return Err(Error::OperationFailed("No matching leases found.".to_string()));
     }
+
+    // Output results
+    let report = ReleaseReport {
+        released: released.clone(),
+        not_found: not_found.clone(),
+        not_owned: not_owned.clone(),
+    };
+
+    let header = if !released.is_empty() {
+        format!("sv release: released {} lease(s)", released.len())
+    } else if !not_found.is_empty() || !not_owned.is_empty() {
+        "sv release: partial matches".to_string()
+    } else {
+        "sv release: no matches".to_string()
+    };
+
+    let mut human = HumanOutput::new(header);
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("released", released.len().to_string());
+    human.push_summary("not_found", not_found.len().to_string());
+    human.push_summary("not_owned", not_owned.len().to_string());
+
+    for lease in &released {
+        let short_id = lease.id.split('-').next().unwrap_or(&lease.id);
+        human.push_detail(format!("{short_id} {}", lease.pathspec));
+    }
+    for target in &not_found {
+        human.push_warning(format!("not found: {target}"));
+    }
+    for info in &not_owned {
+        human.push_warning(format!(
+            "not owned: {} (owner {})",
+            info.target,
+            info.owner.as_deref().unwrap_or("(ownerless)")
+        ));
+    }
+
+    if !not_owned.is_empty() {
+        human.push_next_step("rerun with --force to override");
+    }
+
+    let events_to_stdout = matches!(event_destination, Some(EventDestination::Stdout));
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "release",
+        &report,
+        Some(&human),
+    )?;
     
     Ok(())
 }
