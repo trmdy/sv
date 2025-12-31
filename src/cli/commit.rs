@@ -16,7 +16,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::git;
 use crate::lease::{Lease, LeaseScope, LeaseStrength, LeaseStore};
-use crate::oplog::{OpLog, OpRecord, RefUpdate, UndoData};
+use crate::oplog::{CommitDetails, OpDetails, OpLog, OpRecord, RefUpdate, UndoData};
 use crate::protect;
 use crate::storage::Storage;
 
@@ -117,14 +117,6 @@ pub fn run(options: CommitOptions) -> Result<()> {
     
     // Block on guard-mode protected files unless --allow-protected
     if !protected_guard.is_empty() && !options.allow_protected {
-        // Print human-readable error (JSON errors are handled by main)
-        if !options.json && !options.quiet {
-            eprintln!("Error: Commit blocked by protected paths:");
-            for pf in &protected_guard {
-                eprintln!("  {} (pattern: {}, mode: {})", pf.file, pf.pattern, pf.mode);
-            }
-            eprintln!("\nUse --allow-protected to override.");
-        }
         // Return error with exit code 3 (policy blocked)
         return Err(Error::ProtectedPath(protected_guard[0].file.clone().into()));
     }
@@ -165,15 +157,6 @@ pub fn run(options: CommitOptions) -> Result<()> {
     )?;
     
     if !lease_conflicts.is_empty() && !options.force_lease {
-        // Print human-readable error (JSON errors are handled by main)
-        if !options.json && !options.quiet {
-            eprintln!("Error: Commit blocked by lease conflicts:");
-            for conflict in &lease_conflicts {
-                eprintln!("  {} is held by {} with {} strength (lease: {})",
-                    conflict.file, conflict.holder, conflict.strength, conflict.lease_id);
-            }
-            eprintln!("\nUse --force-lease to override.");
-        }
         // Return error with exit code 3 (policy blocked)
         return Err(Error::LeaseConflict {
             path: lease_conflicts[0].file.clone().into(),
@@ -213,15 +196,15 @@ pub fn run(options: CommitOptions) -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     if !output.status.success() {
-        // Print human-readable error (JSON errors are handled by main)
-        if !options.json && !options.quiet {
-            eprint!("{}", stderr);
-        }
         return Err(Error::OperationFailed(format!("git commit failed: {}", stderr.trim())));
     }
 
     // Extract commit hash from output or HEAD
     let commit_hash = get_head_commit_hash(&repository)?;
+    let commit_message = git::head_commit_message(&repository).ok();
+    let change_id = commit_message
+        .as_deref()
+        .and_then(change_id::find_change_id);
 
     // Record operation in oplog for undo support
     {
@@ -241,6 +224,15 @@ pub fn run(options: CommitOptions) -> Result<()> {
             actor_name,
         );
         record.affected_refs = head_ref.iter().cloned().collect();
+        record.details = Some(OpDetails {
+            commit: Some(CommitDetails {
+                commit_hash: commit_hash.clone(),
+                change_id,
+                files: staged_files.clone(),
+                allow_protected: if options.allow_protected { Some(true) } else { None },
+                force_lease: if options.force_lease { Some(true) } else { None },
+            }),
+        });
         record.undo_data = Some(UndoData {
             ref_updates: head_ref.map(|ref_name| vec![RefUpdate {
                 name: ref_name,
@@ -371,6 +363,10 @@ fn check_lease_conflicts(
                 if current == lease_actor {
                     continue;
                 }
+            }
+            // Ownerless leases are advisory and should not block commits.
+            if lease.actor.is_none() {
+                continue;
             }
             
             // Check lease scope - skip if scope doesn't apply to current context
