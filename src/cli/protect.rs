@@ -6,7 +6,9 @@ use std::path::PathBuf;
 
 use crate::config::{Config, ProtectPath};
 use crate::error::{Error, Result};
-use crate::protect::load_override;
+use crate::git;
+use crate::output::{emit_success, HumanOutput, OutputOptions};
+use crate::protect::{compute_status, load_override};
 use crate::storage::Storage;
 
 /// Options for the protect status command
@@ -51,9 +53,8 @@ struct InvalidPattern {
 /// Result of protect status command
 #[derive(serde::Serialize)]
 struct StatusReport {
-    mode: String,
     rules: Vec<RuleInfo>,
-    disabled_patterns: Vec<String>,
+    matches: MatchInfo,
 }
 
 #[derive(serde::Serialize)]
@@ -61,6 +62,12 @@ struct RuleInfo {
     pattern: String,
     mode: String,
     disabled: bool,
+}
+
+#[derive(serde::Serialize)]
+struct MatchInfo {
+    staged: Vec<String>,
+    disabled: Vec<String>,
 }
 
 /// Result of protect rm command
@@ -94,56 +101,92 @@ pub fn run_status(options: StatusOptions) -> Result<()> {
     
     // Load overrides
     let override_data = load_override(&storage).ok();
-    
-    // Get rules
-    let rules = config.protect.rules()?;
-    let disabled_patterns = override_data
-        .as_ref()
-        .map(|o| o.disabled_patterns.clone())
-        .unwrap_or_default();
-    
-    let rule_infos: Vec<RuleInfo> = rules
+
+    // Determine staged files
+    let staged_paths = git::staged_paths(&repository)?;
+
+    // Compute status with staged matches
+    let status = compute_status(&config, override_data.as_ref(), &staged_paths)?;
+    let disabled_patterns = status.disabled_patterns.clone();
+    let disabled_count = disabled_patterns.len();
+
+    let rule_infos: Vec<RuleInfo> = status
+        .rules
         .iter()
         .map(|r| RuleInfo {
-            pattern: r.pattern.clone(),
-            mode: r.mode.clone(),
-            disabled: disabled_patterns.contains(&r.pattern),
+            pattern: r.rule.pattern.clone(),
+            mode: r.rule.mode.clone(),
+            disabled: r.disabled,
         })
         .collect();
-    
-    let report = StatusReport {
-        mode: config.protect.mode.clone(),
-        rules: rule_infos,
-        disabled_patterns,
-    };
-    
-    if options.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else if !options.quiet {
-        if report.rules.is_empty() {
-            println!("No protected paths configured.");
-            println!("\nUse 'sv protect add <pattern>' to add protected paths.");
-        } else {
-            println!("Protected paths (default mode: {}):", report.mode);
-            println!();
-            for rule in &report.rules {
-                let status = if rule.disabled { " [disabled]" } else { "" };
-                let mode_note = if rule.mode != report.mode {
-                    format!(" (mode: {})", rule.mode)
-                } else {
-                    String::new()
-                };
-                println!("  {}{}{}", rule.pattern, mode_note, status);
-            }
-            
-            if !report.disabled_patterns.is_empty() {
-                println!("\nDisabled in this workspace:");
-                for pattern in &report.disabled_patterns {
-                    println!("  {}", pattern);
-                }
-            }
+
+    let mut staged_matches = Vec::new();
+    for rule in &status.rules {
+        if rule.disabled {
+            continue;
+        }
+        for path in &rule.matched_files {
+            staged_matches.push(path.display().to_string());
         }
     }
+    staged_matches.sort();
+    staged_matches.dedup();
+
+    let report = StatusReport {
+        rules: rule_infos,
+        matches: MatchInfo {
+            staged: staged_matches.clone(),
+            disabled: disabled_patterns.clone(),
+        },
+    };
+
+    let header = if status.rules.is_empty() {
+        "sv protect status: no rules".to_string()
+    } else if disabled_count > 0 {
+        format!(
+            "sv protect status: {} rules ({} disabled)",
+            status.rules.len(),
+            disabled_count
+        )
+    } else {
+        format!("sv protect status: {} rules", status.rules.len())
+    };
+
+    let mut human = HumanOutput::new(header);
+    human.push_summary("rules", status.rules.len().to_string());
+    human.push_summary("disabled_for_workspace", disabled_count.to_string());
+
+    for rule in &status.rules {
+        let mut line = format!("{} ({})", rule.rule.pattern, rule.rule.mode);
+        if rule.disabled {
+            line.push_str(" [disabled]");
+        }
+        human.push_detail(line);
+    }
+
+    if !staged_matches.is_empty() {
+        human.push_warning(format!(
+            "staged files match protected patterns: {}",
+            staged_matches.join(", ")
+        ));
+    }
+
+    if status.rules.is_empty() {
+        human.push_next_step("sv protect add <pattern>");
+    } else {
+        human.push_next_step("sv protect off <pattern>");
+        human.push_next_step("sv protect rm <pattern>");
+    }
+
+    emit_success(
+        OutputOptions {
+            json: options.json,
+            quiet: options.quiet,
+        },
+        "protect status",
+        &report,
+        Some(&human),
+    )?;
     
     Ok(())
 }
