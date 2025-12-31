@@ -5,7 +5,7 @@
 
 use clap::Parser;
 use sv::cli::Cli;
-use sv::error::JsonError;
+use sv::output::{emit_error, infer_command_name_from_args};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 fn main() {
@@ -15,18 +15,11 @@ fn main() {
         .with(EnvFilter::from_default_env())
         .init();
 
+    let command = infer_command_name_from_args();
     let cli = Cli::parse();
     let json = cli.json;
     if let Err(err) = cli.run() {
-        if json {
-            let payload = JsonError::from(&err);
-            let text = serde_json::to_string(&payload).unwrap_or_else(|_| {
-                format!(r#"{{"error":"{}","code":{}}}"#, err, err.exit_code())
-            });
-            println!("{text}");
-        } else {
-            eprintln!("error: {err}");
-        }
+        let _ = emit_error(&command, &err, json);
         std::process::exit(err.exit_code());
     }
 }

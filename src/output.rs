@@ -97,6 +97,56 @@ pub fn emit_success<T: Serialize>(
     Ok(())
 }
 
+pub fn emit_error(command: &str, err: &crate::error::Error, json: bool) -> Result<()> {
+    let next_steps = error_next_steps(err);
+    let hint = next_steps.first().map(|step| step.as_str());
+    if json {
+        #[derive(Serialize)]
+        struct ErrorBody<'a> {
+            message: &'a str,
+            code: i32,
+            kind: &'static str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            details: Option<serde_json::Value>,
+        }
+
+        #[derive(Serialize)]
+        struct Envelope<'a> {
+            schema_version: &'static str,
+            command: &'a str,
+            status: &'static str,
+            error: ErrorBody<'a>,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            warnings: Vec<String>,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            next_steps: Vec<String>,
+        }
+
+        let payload = Envelope {
+            schema_version: SCHEMA_VERSION,
+            command,
+            status: "error",
+            error: ErrorBody {
+                message: &err.to_string(),
+                code: err.exit_code(),
+                kind: error_kind(err),
+                details: None,
+            },
+            warnings: Vec::new(),
+            next_steps,
+        };
+
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    eprintln!("error: {err}");
+    if let Some(hint) = hint {
+        eprintln!("hint: {hint}");
+    }
+    Ok(())
+}
+
 pub fn format_human(output: &HumanOutput) -> String {
     let mut lines = Vec::new();
     lines.push(output.header.clone());
@@ -107,6 +157,65 @@ pub fn format_human(output: &HumanOutput) -> String {
     push_section(&mut lines, "Next steps", &output.next_steps);
 
     lines.join("\n")
+}
+
+pub fn infer_command_name_from_args() -> String {
+    let mut args = std::env::args().skip(1);
+    let mut command = None;
+    let mut subcommand = None;
+
+    while let Some(arg) = args.next() {
+        if arg.starts_with('-') {
+            continue;
+        }
+        command = Some(arg);
+        break;
+    }
+
+    let command = match command {
+        Some(cmd) => cmd,
+        None => return "sv".to_string(),
+    };
+
+    if matches!(command.as_str(), "ws" | "lease" | "protect" | "op" | "actor") {
+        while let Some(arg) = args.next() {
+            if arg.starts_with('-') {
+                continue;
+            }
+            subcommand = Some(arg);
+            break;
+        }
+    }
+
+    if let Some(sub) = subcommand {
+        format!("{command} {sub}")
+    } else {
+        command
+    }
+}
+
+fn error_kind(err: &crate::error::Error) -> &'static str {
+    match err.exit_code() {
+        2 => "user_error",
+        3 => "policy_blocked",
+        _ => "operation_failed",
+    }
+}
+
+fn error_next_steps(err: &crate::error::Error) -> Vec<String> {
+    use crate::error::Error;
+
+    match err {
+        Error::ProtectedPath(_) => vec!["sv protect status".to_string()],
+        Error::LeaseConflict { path, .. } => vec![format!(
+            "sv lease who {}",
+            path.to_string_lossy()
+        )],
+        Error::NoteRequired(_) => vec!["sv take <path> --note \"...\"".to_string()],
+        Error::RepoNotFound(_) | Error::NotARepo(_) => vec!["sv init".to_string()],
+        Error::InvalidConfig(_) => vec!["fix .sv.toml then retry".to_string()],
+        _ => Vec::new(),
+    }
 }
 
 fn push_summary(lines: &mut Vec<String>, summary: &[(String, String)]) {
