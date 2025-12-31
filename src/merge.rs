@@ -11,10 +11,17 @@ use crate::error::{Error, Result};
 /// Result of a virtual merge simulation.
 #[derive(Debug, Clone, Serialize)]
 pub struct MergeSimulation {
+    #[serde(serialize_with = "serialize_oid")]
     pub base: Oid,
+    #[serde(serialize_with = "serialize_oid")]
     pub ours: Oid,
+    #[serde(serialize_with = "serialize_oid")]
     pub theirs: Oid,
     pub conflicts: Vec<MergeConflict>,
+}
+
+fn serialize_oid<S: serde::Serializer>(oid: &Oid, s: S) -> std::result::Result<S::Ok, S::Error> {
+    s.serialize_str(&oid.to_string())
 }
 
 /// A single merge conflict entry.
@@ -63,7 +70,7 @@ pub fn simulate_merge(
     options.find_renames(true);
 
     let index = repo.merge_trees(
-        Some(&base_tree),
+        &base_tree,
         &ours_tree,
         &theirs_tree,
         Some(&mut options),
@@ -79,12 +86,12 @@ pub fn simulate_merge(
     })
 }
 
-fn resolve_commit(repo: &Repository, spec: &str) -> Result<Commit> {
+fn resolve_commit<'a>(repo: &'a Repository, spec: &str) -> Result<Commit<'a>> {
     let obj = repo.revparse_single(spec)?;
     obj.peel_to_commit().map_err(Error::Git)
 }
 
-fn merge_base_commit(repo: &Repository, ours: Oid, theirs: Oid) -> Result<Commit> {
+fn merge_base_commit<'a>(repo: &'a Repository, ours: Oid, theirs: Oid) -> Result<Commit<'a>> {
     let base_oid = repo.merge_base(ours, theirs).map_err(|err| {
         if err.code() == ErrorCode::NotFound {
             Error::OperationFailed("no merge base found for inputs".to_string())
@@ -105,8 +112,8 @@ fn collect_conflicts(index: &Index) -> Result<Vec<MergeConflict>> {
     for entry in iter {
         let entry = entry?;
         let ancestor_path = entry.ancestor.as_ref().map(entry_path);
-        let ours_path = entry.ours.as_ref().map(entry_path);
-        let theirs_path = entry.theirs.as_ref().map(entry_path);
+        let ours_path = entry.our.as_ref().map(entry_path);
+        let theirs_path = entry.their.as_ref().map(entry_path);
 
         let kind = classify_conflict(&ancestor_path, &ours_path, &theirs_path);
         let path = primary_path(&ancestor_path, &ours_path, &theirs_path);
