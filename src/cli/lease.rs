@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::git;
 use crate::lease::{parse_duration, Lease, LeaseStatus, LeaseStore};
+use crate::lock::{FileLock, DEFAULT_LOCK_TIMEOUT_MS};
 use crate::oplog::{LeaseChange, OpLog, OpOutcome, OpRecord, UndoData};
 use crate::storage::Storage;
 
@@ -317,6 +318,243 @@ fn print_lease(lease: &LeaseEntry) {
     // Show note if present (indented)
     if let Some(ref note) = lease.note {
         println!("       └─ {}", note);
+    }
+}
+
+// =============================================================================
+// sv lease renew
+// =============================================================================
+
+/// Options for the lease renew command
+pub struct RenewOptions {
+    pub ids: Vec<String>,
+    pub ttl: Option<String>,
+    pub actor: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+/// Result of renewing a lease
+#[derive(Clone, serde::Serialize)]
+struct RenewedLeaseInfo {
+    id: String,
+    pathspec: String,
+    actor: Option<String>,
+    ttl: String,
+    expires_at: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct NotOwnedInfo {
+    target: String,
+    lease_id: String,
+    owner: Option<String>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct NotActiveInfo {
+    target: String,
+    lease_id: String,
+    status: String,
+}
+
+/// Report for lease renew command
+#[derive(serde::Serialize)]
+struct RenewReport {
+    renewed: Vec<RenewedLeaseInfo>,
+    not_found: Vec<String>,
+    not_owned: Vec<NotOwnedInfo>,
+    not_active: Vec<NotActiveInfo>,
+}
+
+/// Run the lease renew command
+pub fn run_renew(options: RenewOptions) -> Result<()> {
+    if let Some(ttl) = options.ttl.as_deref() {
+        if ttl.trim().is_empty() {
+            return Err(Error::InvalidArgument(
+                "--ttl cannot be empty".to_string()
+            ));
+        }
+    }
+
+    let start = options.repo.clone().unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
+
+    let repository = git2::Repository::discover(&start)
+        .map_err(|_| Error::RepoNotFound(start.clone()))?;
+
+    let workdir = repository
+        .workdir()
+        .ok_or_else(|| Error::NotARepo(start.clone()))?
+        .to_path_buf();
+
+    let common_dir = resolve_common_dir(&repository)?;
+    let storage = Storage::new(workdir.clone(), common_dir.clone(), workdir.clone());
+
+    if !storage.is_initialized() {
+        return Err(Error::OperationFailed(
+            "sv not initialized. Run 'sv init' first.".to_string()
+        ));
+    }
+
+    let config = Config::load_from_repo(&workdir);
+    let current_actor = options.actor
+        .or_else(|| storage.read_actor())
+        .or_else(|| {
+            if config.actor.default != "unknown" {
+                Some(config.actor.default.clone())
+            } else {
+                None
+            }
+        });
+
+    let leases_file = storage.leases_file();
+    let lock_path = leases_file.with_extension("lock");
+    let _lock = FileLock::acquire(&lock_path, DEFAULT_LOCK_TIMEOUT_MS)?;
+
+    let mut store = LeaseStore::from_vec(storage.read_jsonl(&leases_file)?);
+    store.expire_stale();
+    let mut leases = store.into_vec();
+
+    let mut renewed = Vec::new();
+    let mut not_found = Vec::new();
+    let mut not_owned = Vec::new();
+    let mut not_active = Vec::new();
+
+    for target in &options.ids {
+        let idx = match find_lease_index(&leases, target) {
+            Some(idx) => idx,
+            None => {
+                not_found.push(target.clone());
+                continue;
+            }
+        };
+
+        let lease = &mut leases[idx];
+        if lease.status != LeaseStatus::Active {
+            not_active.push(NotActiveInfo {
+                target: target.clone(),
+                lease_id: lease.id.to_string(),
+                status: lease_status_label(&lease.status),
+            });
+            continue;
+        }
+
+        if let Some(owner) = lease.actor.as_deref() {
+            match current_actor.as_deref() {
+                Some(actor) if actor == owner => {}
+                Some(_) | None => {
+                    not_owned.push(NotOwnedInfo {
+                        target: target.clone(),
+                        lease_id: lease.id.to_string(),
+                        owner: lease.actor.clone(),
+                    });
+                    continue;
+                }
+            }
+        }
+
+        let ttl = options.ttl.clone().unwrap_or_else(|| {
+            if lease.ttl.trim().is_empty() {
+                config.leases.default_ttl.clone()
+            } else {
+                lease.ttl.clone()
+            }
+        });
+
+        lease.renew(ttl.clone())?;
+        renewed.push(RenewedLeaseInfo {
+            id: lease.id.to_string(),
+            pathspec: lease.pathspec.clone(),
+            actor: lease.actor.clone(),
+            ttl: lease.ttl.clone(),
+            expires_at: lease.expires_at.to_rfc3339(),
+        });
+    }
+
+    if !renewed.is_empty() {
+        write_leases_jsonl(&storage.leases_file(), &leases)?;
+
+        let oplog = OpLog::for_storage(&storage);
+        let mut record = OpRecord::new(
+            format!("sv lease renew {}", options.ids.join(" ")),
+            current_actor.clone(),
+        );
+        record.outcome = OpOutcome::success();
+        let _ = oplog.append(&record);
+    }
+
+    let report = RenewReport {
+        renewed: renewed.clone(),
+        not_found: not_found.clone(),
+        not_owned: not_owned.clone(),
+        not_active: not_active.clone(),
+    };
+
+    if options.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else if !options.quiet {
+        if !renewed.is_empty() {
+            println!("Renewed {} lease(s):", renewed.len());
+            for info in &renewed {
+                let short_id = info.id.split('-').next().unwrap_or(&info.id);
+                let actor_display = info.actor.as_deref().unwrap_or("(ownerless)");
+                println!(
+                    "  {} {} by {} (expires {})",
+                    short_id, info.pathspec, actor_display, info.expires_at
+                );
+            }
+        }
+        if !not_owned.is_empty() {
+            println!("\nNot owned ({}):", not_owned.len());
+            for info in &not_owned {
+                let short_id = info.lease_id.split('-').next().unwrap_or(&info.lease_id);
+                let owner_display = info.owner.as_deref().unwrap_or("(ownerless)");
+                println!("  {} (owner: {})", short_id, owner_display);
+            }
+        }
+        if !not_active.is_empty() {
+            println!("\nNot active ({}):", not_active.len());
+            for info in &not_active {
+                let short_id = info.lease_id.split('-').next().unwrap_or(&info.lease_id);
+                println!("  {} (status: {})", short_id, info.status);
+            }
+        }
+        if !not_found.is_empty() {
+            println!("\nNot found ({}):", not_found.len());
+            for id in &not_found {
+                println!("  {}", id);
+            }
+        }
+    }
+
+    if renewed.is_empty() && !not_found.is_empty() && not_owned.is_empty() && not_active.is_empty()
+    {
+        return Err(Error::LeaseNotFound(not_found.join(", ")));
+    }
+
+    Ok(())
+}
+
+fn find_lease_index(leases: &[Lease], id_str: &str) -> Option<usize> {
+    if let Ok(uuid) = Uuid::parse_str(id_str) {
+        return leases.iter().position(|lease| lease.id == uuid);
+    }
+
+    let normalized = id_str.to_lowercase();
+    leases
+        .iter()
+        .position(|lease| lease.id.to_string().to_lowercase().starts_with(&normalized))
+}
+
+fn lease_status_label(status: &LeaseStatus) -> String {
+    match status {
+        LeaseStatus::Active => "active".to_string(),
+        LeaseStatus::Released => "released".to_string(),
+        LeaseStatus::Expired => "expired".to_string(),
+        LeaseStatus::Broken => "broken".to_string(),
     }
 }
 
