@@ -28,7 +28,7 @@ Multi-agent coding in a shared repo fails for predictable reasons:
 * Big, interleaved diffs **reduce velocity**
 * Automation mistakes are costly and hard to unwind
 
-Git provides isolation (branches and workspaces via Git worktrees) but no built-in coordination primitives (leases), no conflict prediction, and no safe “bulk integration” UX.
+Git provides isolation (branches and workspaces (Git worktrees)) but no built-in coordination primitives (leases), no conflict prediction, and no safe “bulk integration” UX.
 
 sv fills those gaps while staying Git-native.
 
@@ -82,7 +82,7 @@ A normal Git repository. sv stores:
 
 * **Tracked config**: `.sv.toml`
 * **Local per-workspace state**: `.sv/` (ignored)
-* **Shared local state (per clone)**: `.git/sv/` (ignored, shared across workspaces (worktrees) in that clone)
+* **Shared local state (per clone)**: `.git/sv/` (ignored, shared across workspaces (Git worktrees) in that clone)
 
 ### 3.2 Actor
 
@@ -136,7 +136,7 @@ Example defaults commonly include:
 sv can enforce protection by:
 
 * `guard` (default): allow edits but block commits unless explicitly allowed
-* `readonly`: make paths read-only in that workspace (worktree)
+* `readonly`: make paths read-only in that workspace (Git worktree)
 * `warn`: only warn
 
 ### 3.6 Change ID (JJ-inspired)
@@ -584,7 +584,7 @@ Undo semantics:
 sv must record enough information to undo safely:
 
 * old/new ref tips
-* created/deleted workspace paths (worktree paths)
+* created/deleted workspace paths (Git worktree paths)
 * lease changes
 
 ---
@@ -594,7 +594,7 @@ sv must record enough information to undo safely:
 sv must not “lock users in.”
 
 * The repo remains a standard Git repo.
-* Workspaces map to Git's native workspace mechanism (worktrees); can be managed by Git directly if needed.
+* Workspaces map to Git's native workspace mechanism (Git worktrees); can be managed by Git directly if needed.
 * Leases and policies are additive; they don’t change Git history format.
 * If sv disappears, the repo remains usable with Git alone.
 
@@ -661,7 +661,7 @@ sv must not “lock users in.”
 5. **Behavior in “same workspace multi-agent”**
 
    * sv can coordinate leases, but Git cannot safely support simultaneous commits.
-   * Recommendation: document clearly; encourage separate workspaces (worktrees) for real parallelism.
+   * Recommendation: document clearly; encourage separate workspaces (Git worktrees) for real parallelism.
 
 ---
 

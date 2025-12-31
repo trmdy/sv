@@ -18,6 +18,7 @@
 - Workflows:
   - `workflows/coordination.md`
   - `workflows/commit_pass.md`
+- Events schema: `events.md`
 
 ## Updating these docs
 If you changed behavior, workflow commands, deployment, or found a footgun:

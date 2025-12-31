@@ -43,6 +43,10 @@ When in doubt: ask first.
 - No mass reformatting.
 - No “cleanup” outside the leased scope.
 
+### Beads hygiene
+
+- Close Beads tasks immediately when done; do not leave completed work in `in_progress`.
+
 ---
 
 ## 2) Fast Start Checklist (do this at the beginning of a task)
