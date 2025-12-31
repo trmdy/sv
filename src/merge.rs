@@ -48,6 +48,20 @@ pub enum MergeConflictKind {
     Unknown,
 }
 
+/// Summarize conflicts for human-readable output.
+pub fn summarize_conflicts(conflicts: &[MergeConflict]) -> Vec<String> {
+    conflicts
+        .iter()
+        .map(|conflict| {
+            format!(
+                "{} ({})",
+                conflict.path,
+                conflict_kind_label(conflict.kind)
+            )
+        })
+        .collect()
+}
+
 /// Simulate a merge between two commit-ish references.
 pub fn simulate_merge(
     repo: &Repository,
@@ -179,9 +193,53 @@ fn classify_conflict(
     }
 }
 
+fn conflict_kind_label(kind: MergeConflictKind) -> &'static str {
+    match kind {
+        MergeConflictKind::Content => "content",
+        MergeConflictKind::AddAdd => "add/add",
+        MergeConflictKind::ModifyDelete => "modify/delete",
+        MergeConflictKind::Rename => "rename",
+        MergeConflictKind::Unknown => "unknown",
+    }
+}
+
 fn paths_differ(left: &Option<String>, right: &Option<String>) -> bool {
     match (left, right) {
         (Some(l), Some(r)) => l != r,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summarize_conflicts_formats_lines() {
+        let conflicts = vec![
+            MergeConflict {
+                path: "src/lib.rs".to_string(),
+                kind: MergeConflictKind::Content,
+                ancestor_path: None,
+                ours_path: None,
+                theirs_path: None,
+            },
+            MergeConflict {
+                path: "README.md".to_string(),
+                kind: MergeConflictKind::Rename,
+                ancestor_path: None,
+                ours_path: None,
+                theirs_path: None,
+            },
+        ];
+
+        let summary = summarize_conflicts(&conflicts);
+        assert_eq!(
+            summary,
+            vec![
+                "src/lib.rs (content)".to_string(),
+                "README.md (rename)".to_string(),
+            ]
+        );
     }
 }
