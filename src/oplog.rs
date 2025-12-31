@@ -27,6 +27,8 @@ pub struct OpRecord {
     pub affected_workspaces: Vec<String>,
     pub outcome: OpOutcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<OpDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undo_data: Option<UndoData>,
 }
 
@@ -40,6 +42,7 @@ impl OpRecord {
             affected_refs: Vec::new(),
             affected_workspaces: Vec::new(),
             outcome: OpOutcome::success(),
+            details: None,
             undo_data: None,
         }
     }
@@ -82,6 +85,27 @@ pub struct UndoData {
     pub lease_changes: Vec<LeaseChange>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_changes: Vec<WorkspaceChange>,
+}
+
+/// Optional operation-specific details.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct OpDetails {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit: Option<CommitDetails>,
+}
+
+/// Commit details for op log entries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CommitDetails {
+    pub commit_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_protected: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub force_lease: Option<bool>,
 }
 
 /// Ref update for undo
@@ -253,16 +277,49 @@ pub fn format_record(record: &OpRecord) -> String {
         None => record.outcome.status.clone(),
     };
 
+    let details = format_details(record);
+
     format!(
         "{ts} {op_id} actor={actor} outcome={outcome} command=\"{command}\" refs=[{refs}] workspaces=[{workspaces}]",
         op_id = record.op_id,
         command = record.command
     )
+    + &details
 }
 
 /// Format multiple records as lines
 pub fn format_records(records: &[OpRecord]) -> String {
     records.iter().map(format_record).collect::<Vec<_>>().join("\n")
+}
+
+fn format_details(record: &OpRecord) -> String {
+    let Some(details) = &record.details else {
+        return String::new();
+    };
+
+    if let Some(commit) = &details.commit {
+        let mut parts = Vec::new();
+        parts.push(format!("commit={}", commit.commit_hash));
+        if let Some(change_id) = &commit.change_id {
+            parts.push(format!("change_id={change_id}"));
+        }
+        if !commit.files.is_empty() {
+            parts.push(format!("files={}", commit.files.len()));
+        }
+        let mut overrides = Vec::new();
+        if commit.allow_protected.unwrap_or(false) {
+            overrides.push("allow_protected");
+        }
+        if commit.force_lease.unwrap_or(false) {
+            overrides.push("force_lease");
+        }
+        if !overrides.is_empty() {
+            parts.push(format!("overrides={}", overrides.join(",")));
+        }
+        return format!(" details=[{}]", parts.join(" "));
+    }
+
+    String::new()
 }
 
 fn operation_from_command(command: &str) -> &str {
