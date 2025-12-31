@@ -227,48 +227,94 @@ fn severity_for(overlap_count: usize, leases: &[&Lease]) -> RiskSeverity {
 }
 
 fn suggestions_for(path: &str, workspaces: &[String], severity: RiskSeverity) -> Vec<Suggestion> {
-    let mut suggestions = Vec::new();
+    use std::collections::HashMap;
 
-    suggestions.push(Suggestion {
-        action: "take_lease".to_string(),
-        reason: "Declare intent on the overlapping path to reduce duplicate work.".to_string(),
-        command: Some(format!("sv take {path} --strength cooperative")),
-    });
+    let mut suggestions = HashMap::new();
 
-    suggestions.push(Suggestion {
-        action: "inspect_leases".to_string(),
-        reason: "See who currently holds overlapping leases and coordinate.".to_string(),
-        command: Some(format!("sv lease who {path}")),
-    });
+    suggestions.insert(
+        "take_lease",
+        Suggestion {
+            action: "take_lease".to_string(),
+            reason: "Declare intent on the overlapping path to reduce duplicate work.".to_string(),
+            command: Some(format!("sv take {path} --strength cooperative")),
+        },
+    );
 
-    suggestions.push(Suggestion {
-        action: "downgrade_lease".to_string(),
-        reason: "If you hold a strong/exclusive lease, consider downgrading to cooperative."
-            .to_string(),
-        command: Some(format!(
-            "sv release <lease-id> && sv take {path} --strength cooperative"
-        )),
-    });
+    suggestions.insert(
+        "inspect_leases",
+        Suggestion {
+            action: "inspect_leases".to_string(),
+            reason: "See who currently holds overlapping leases and coordinate.".to_string(),
+            command: Some(format!("sv lease who {path}")),
+        },
+    );
+
+    suggestions.insert(
+        "downgrade_lease",
+        Suggestion {
+            action: "downgrade_lease".to_string(),
+            reason: "If you hold a strong/exclusive lease, consider downgrading to cooperative."
+                .to_string(),
+            command: Some(format!(
+                "sv release <lease-id> && sv take {path} --strength cooperative"
+            )),
+        },
+    );
 
     let onto_target = workspaces
         .get(0)
         .map(|name| name.as_str())
         .unwrap_or("<workspace>");
-    suggestions.push(Suggestion {
-        action: "rebase_onto".to_string(),
-        reason: "Rebase onto an overlapping workspace to resolve conflicts earlier.".to_string(),
-        command: Some(format!("sv onto {onto_target}")),
-    });
+    suggestions.insert(
+        "rebase_onto",
+        Suggestion {
+            action: "rebase_onto".to_string(),
+            reason: "Rebase onto an overlapping workspace to resolve conflicts earlier.".to_string(),
+            command: Some(format!("sv onto {onto_target}")),
+        },
+    );
 
     if matches!(severity, RiskSeverity::High | RiskSeverity::Critical) {
-        suggestions.push(Suggestion {
-            action: "pick_another_task".to_string(),
-            reason: "High overlap risk; consider switching tasks.".to_string(),
-            command: Some("bd ready --json".to_string()),
-        });
+        suggestions.insert(
+            "pick_another_task",
+            Suggestion {
+                action: "pick_another_task".to_string(),
+                reason: "High overlap risk; consider switching tasks.".to_string(),
+                command: Some("bd ready --json".to_string()),
+            },
+        );
     }
 
-    suggestions
+    let order: &[&str] = match severity {
+        RiskSeverity::Low => &[
+            "take_lease",
+            "inspect_leases",
+            "downgrade_lease",
+            "rebase_onto",
+        ],
+        RiskSeverity::Medium => &[
+            "inspect_leases",
+            "take_lease",
+            "downgrade_lease",
+            "rebase_onto",
+        ],
+        RiskSeverity::High | RiskSeverity::Critical => &[
+            "pick_another_task",
+            "rebase_onto",
+            "inspect_leases",
+            "take_lease",
+            "downgrade_lease",
+        ],
+    };
+
+    let mut ordered = Vec::with_capacity(order.len());
+    for action in order {
+        if let Some(suggestion) = suggestions.remove(*action) {
+            ordered.push(suggestion);
+        }
+    }
+
+    ordered
 }
 
 fn touched_files(repo: &Repository, base_ref: &str, branch_ref: &str) -> Result<Vec<String>> {
@@ -418,5 +464,15 @@ mod tests {
         let suggestions = suggestions_for("src/lib.rs", &["ws-a".to_string(), "ws-b".to_string()], RiskSeverity::Critical);
         let actions: Vec<&str> = suggestions.iter().map(|s| s.action.as_str()).collect();
         assert!(actions.contains(&"pick_another_task"));
+    }
+
+    #[test]
+    fn suggestions_prioritize_high_severity() {
+        let suggestions = suggestions_for(
+            "src/lib.rs",
+            &["ws-a".to_string(), "ws-b".to_string()],
+            RiskSeverity::High,
+        );
+        assert_eq!(suggestions.first().unwrap().action, "pick_another_task");
     }
 }
