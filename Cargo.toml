@@ -1,0 +1,56 @@
+[package]
+name = "sv"
+version = "0.1.0"
+edition = "2021"
+description = "Simultaneous Versioning - Git coordination for parallel agents"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/example/sv"
+keywords = ["git", "versioning", "agents", "coordination"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "sv"
+path = "src/main.rs"
+
+[lib]
+name = "sv"
+path = "src/lib.rs"
+
+[dependencies]
+# CLI framework
+clap = { version = "4", features = ["derive", "env", "string"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Git integration
+git2 = "0.19"
+
+# Async runtime (for future use)
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+glob = "0.3"
+directories = "5"
+fs2 = "0.4"  # File locking
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+lto = true
+strip = true
