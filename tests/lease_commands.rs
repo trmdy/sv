@@ -1,7 +1,10 @@
 mod support;
 
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
+use std::thread::sleep;
+use std::time::Duration;
 
 use support::TestRepo;
 
@@ -11,14 +14,18 @@ fn setup_repo() -> TestRepo {
     repo
 }
 
+fn sv_cmd(repo: &TestRepo) -> Command {
+    let mut cmd = Command::cargo_bin("sv").expect("binary");
+    cmd.current_dir(repo.path());
+    cmd
+}
+
 #[test]
-#[ignore = "sv take not implemented yet"]
 fn take_creates_lease() {
     let repo = setup_repo();
 
-    Command::cargo_bin("sv")
-        .expect("binary")
-        .current_dir(repo.path())
+    sv_cmd(&repo)
+        .env("SV_ACTOR", "alice")
         .args([
             "take",
             "src/lib.rs",
@@ -31,70 +38,257 @@ fn take_creates_lease() {
         ])
         .assert()
         .success();
+
+    let leases = repo.read_leases().expect("read leases");
+    assert_eq!(leases.len(), 1);
+    assert_eq!(leases[0].pathspec, "src/lib.rs");
 }
 
 #[test]
-#[ignore = "sv lease ls not implemented yet"]
 fn lease_ls_lists_active_leases() {
     let repo = setup_repo();
 
-    Command::cargo_bin("sv")
-        .expect("binary")
-        .current_dir(repo.path())
-        .args(["lease", "ls"])
+    sv_cmd(&repo)
+        .env("SV_ACTOR", "alice")
+        .args([
+            "take",
+            "src/lib.rs",
+            "--strength",
+            "cooperative",
+            "--intent",
+            "refactor",
+            "--note",
+            "test",
+        ])
         .assert()
         .success();
+
+    sv_cmd(&repo)
+        .args(["lease", "ls"])
+        .assert()
+        .success()
+        .stdout(contains("src/lib.rs").and(contains("by alice")));
 }
 
 #[test]
-#[ignore = "sv lease who not implemented yet"]
 fn lease_who_reports_holders() {
     let repo = setup_repo();
 
-    Command::cargo_bin("sv")
-        .expect("binary")
-        .current_dir(repo.path())
+    sv_cmd(&repo)
+        .env("SV_ACTOR", "alice")
+        .args([
+            "take",
+            "src/lib.rs",
+            "--strength",
+            "cooperative",
+            "--intent",
+            "refactor",
+            "--note",
+            "test",
+        ])
+        .assert()
+        .success();
+
+    sv_cmd(&repo)
         .args(["lease", "who", "src/lib.rs"])
         .assert()
         .success()
-        .stdout(contains("src/lib.rs"));
+        .stdout(contains("Leases on 'src/lib.rs'").and(contains("by alice")));
 }
 
 #[test]
-#[ignore = "sv release not implemented yet"]
 fn release_clears_lease() {
     let repo = setup_repo();
 
-    Command::cargo_bin("sv")
-        .expect("binary")
-        .current_dir(repo.path())
+    sv_cmd(&repo)
+        .env("SV_ACTOR", "alice")
+        .args([
+            "take",
+            "src/lib.rs",
+            "--strength",
+            "cooperative",
+            "--intent",
+            "refactor",
+            "--note",
+            "test",
+        ])
+        .assert()
+        .success();
+
+    sv_cmd(&repo)
+        .env("SV_ACTOR", "alice")
         .args(["release", "src/lib.rs"])
         .assert()
         .success();
+
+    sv_cmd(&repo)
+        .args(["lease", "ls"])
+        .assert()
+        .success()
+        .stdout(contains("No active leases."));
 }
 
 #[test]
-#[ignore = "sv lease renew not implemented yet"]
 fn lease_renew_extends_ttl() {
     let repo = setup_repo();
 
-    Command::cargo_bin("sv")
-        .expect("binary")
-        .current_dir(repo.path())
-        .args(["lease", "renew", "lease-id-1", "--ttl", "3h"])
+    sv_cmd(&repo)
+        .env("SV_ACTOR", "alice")
+        .args([
+            "take",
+            "src/ttl.rs",
+            "--strength",
+            "cooperative",
+            "--intent",
+            "refactor",
+            "--ttl",
+            "1h",
+        ])
         .assert()
         .success();
+
+    let leases = repo.read_leases().expect("read leases");
+    let lease = leases.first().expect("lease exists");
+    let lease_id = lease.id.to_string();
+    let old_expires = lease.expires_at;
+
+    sv_cmd(&repo)
+        .env("SV_ACTOR", "alice")
+        .args(["lease", "renew", &lease_id, "--ttl", "3h"])
+        .assert()
+        .success();
+
+    let leases = repo.read_leases().expect("read leases");
+    let renewed = leases
+        .iter()
+        .find(|l| l.id.to_string() == lease_id)
+        .expect("renewed lease");
+    assert_eq!(renewed.ttl, "3h");
+    assert!(renewed.expires_at > old_expires);
 }
 
 #[test]
-#[ignore = "sv lease break not implemented yet"]
-fn lease_break_requires_reason() {
+fn lease_break_marks_inactive() {
     let repo = setup_repo();
 
-    Command::cargo_bin("sv")
-        .expect("binary")
-        .current_dir(repo.path())
-        .args(["lease", "break", "lease-id-1", "--reason", "test"])
+    sv_cmd(&repo)
+        .env("SV_ACTOR", "alice")
+        .args([
+            "take",
+            "src/lib.rs",
+            "--strength",
+            "cooperative",
+            "--intent",
+            "refactor",
+            "--note",
+            "test",
+        ])
         .assert()
         .success();
+
+    let leases = repo.read_leases().expect("read leases");
+    let lease_id = leases
+        .first()
+        .expect("lease exists")
+        .id
+        .to_string();
+
+    sv_cmd(&repo)
+        .env("SV_ACTOR", "alice")
+        .args(["lease", "break", &lease_id, "--reason", "test"])
+        .assert()
+        .success();
+
+    sv_cmd(&repo)
+        .args(["lease", "ls"])
+        .assert()
+        .success()
+        .stdout(contains("No active leases."));
+}
+
+#[test]
+fn take_conflict_blocks_second_actor() {
+    let repo = setup_repo();
+
+    sv_cmd(&repo)
+        .env("SV_ACTOR", "alice")
+        .args([
+            "take",
+            "src/conflict.rs",
+            "--strength",
+            "exclusive",
+            "--intent",
+            "refactor",
+            "--note",
+            "lock",
+        ])
+        .assert()
+        .success();
+
+    sv_cmd(&repo)
+        .env("SV_ACTOR", "bob")
+        .args([
+            "take",
+            "src/conflict.rs",
+            "--strength",
+            "cooperative",
+            "--intent",
+            "refactor",
+            "--note",
+            "try",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("Lease conflict"));
+}
+
+#[test]
+fn lease_expiration_hides_from_list() {
+    let repo = setup_repo();
+
+    sv_cmd(&repo)
+        .env("SV_ACTOR", "alice")
+        .args([
+            "take",
+            "src/ttl.rs",
+            "--strength",
+            "cooperative",
+            "--intent",
+            "refactor",
+            "--ttl",
+            "1s",
+        ])
+        .assert()
+        .success();
+
+    sleep(Duration::from_secs(2));
+
+    sv_cmd(&repo)
+        .args(["lease", "ls"])
+        .assert()
+        .success()
+        .stdout(contains("No active leases."));
+}
+
+#[test]
+fn ownerless_lease_is_labeled() {
+    let repo = setup_repo();
+
+    sv_cmd(&repo)
+        .args([
+            "take",
+            "src/ownerless.rs",
+            "--strength",
+            "cooperative",
+            "--intent",
+            "docs",
+        ])
+        .assert()
+        .success();
+
+    sv_cmd(&repo)
+        .args(["lease", "ls"])
+        .assert()
+        .success()
+        .stdout(contains("(ownerless)"));
 }
