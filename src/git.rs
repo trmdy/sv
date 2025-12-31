@@ -5,10 +5,11 @@
 //! - Worktree enumeration, creation, and removal
 //! - HEAD and branch information
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
-use git2::{BranchType, ErrorCode, Oid, Repository};
+use git2::{BranchType, ErrorCode, Oid, Repository, Sort};
 
 use crate::error::{Error, Result};
 
@@ -758,6 +759,77 @@ pub fn head_commit_message(repo: &Repository) -> Result<String> {
     Ok(commit.message().unwrap_or_default().to_string())
 }
 
+/// List commits reachable from `branch_ref` but not from `base_ref`.
+///
+/// Returns commits in topological/time order (newest first).
+pub fn commits_ahead(repo: &Repository, base_ref: &str, branch_ref: &str) -> Result<Vec<Oid>> {
+    let mut revwalk = repo.revwalk()?;
+    let range = format!("{base_ref}..{branch_ref}");
+    revwalk.push_range(&range).map_err(|err| {
+        Error::OperationFailed(format!(
+            "unable to walk range '{}': {}",
+            range, err
+        ))
+    })?;
+    revwalk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
+
+    let mut commits = Vec::new();
+    for oid in revwalk {
+        let oid = oid?;
+        commits.push(oid);
+    }
+
+    Ok(commits)
+}
+
+/// Compute a stable patch-id for a commit.
+///
+/// Uses `git patch-id --stable` to match Git's own dedup behavior.
+pub fn patch_id(repo: &Repository, oid: Oid) -> Result<String> {
+    let workdir = workdir(repo)?;
+    let show = Command::new("git")
+        .args(["show", "--pretty=format:", "--no-color", &oid.to_string()])
+        .current_dir(&workdir)
+        .output()?;
+
+    if !show.status.success() {
+        return Err(Error::OperationFailed(format!(
+            "git show failed: {}",
+            String::from_utf8_lossy(&show.stderr)
+        )));
+    }
+
+    let mut child = Command::new("git")
+        .args(["patch-id", "--stable"])
+        .current_dir(&workdir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    {
+        let mut stdin = child.stdin.take().ok_or_else(|| {
+            Error::OperationFailed("git patch-id stdin unavailable".to_string())
+        })?;
+        stdin.write_all(&show.stdout)?;
+    }
+
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(Error::OperationFailed(format!(
+            "git patch-id failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let patch_id = stdout
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| Error::OperationFailed("git patch-id returned empty output".to_string()))?;
+
+    Ok(patch_id.to_string())
+}
+
 // =============================================================================
 // Trailer Operations
 // =============================================================================
@@ -1344,6 +1416,54 @@ mod tests {
 
         let msg = head_commit_message(&repo).unwrap();
         assert!(msg.contains("Initial commit"));
+    }
+
+    #[test]
+    fn test_commits_ahead() {
+        let (temp, repo) = init_test_repo();
+        let base_branch = repo
+            .head()
+            .unwrap()
+            .shorthand()
+            .unwrap()
+            .to_string();
+
+        Command::new("git")
+            .args(["checkout", "-b", "feature"])
+            .current_dir(temp.path())
+            .output()
+            .unwrap();
+
+        std::fs::write(temp.path().join("change.txt"), "one").unwrap();
+        Command::new("git")
+            .args(["add", "change.txt"])
+            .current_dir(temp.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "First change"])
+            .current_dir(temp.path())
+            .output()
+            .unwrap();
+        let first = repo.head().unwrap().target().unwrap();
+
+        std::fs::write(temp.path().join("change.txt"), "two").unwrap();
+        Command::new("git")
+            .args(["add", "change.txt"])
+            .current_dir(temp.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "Second change"])
+            .current_dir(temp.path())
+            .output()
+            .unwrap();
+        let second = repo.head().unwrap().target().unwrap();
+
+        let commits = commits_ahead(&repo, &base_branch, "feature").unwrap();
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0], second);
+        assert_eq!(commits[1], first);
     }
 
     // ==========================================================================
