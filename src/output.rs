@@ -6,128 +6,133 @@ use crate::error::Result;
 
 pub const SCHEMA_VERSION: &str = "sv.v1";
 
+#[derive(Debug, Clone, Copy)]
+pub struct OutputOptions {
+    pub json: bool,
+    pub quiet: bool,
+}
+
 #[derive(Debug, Clone)]
-pub struct Output {
-    command: String,
+pub struct HumanOutput {
     header: String,
-    data: serde_json::Value,
     summary: Vec<(String, String)>,
     details: Vec<String>,
     warnings: Vec<String>,
     next_steps: Vec<String>,
 }
 
-impl Output {
-    pub fn new<T: Serialize>(
-        command: impl Into<String>,
-        header: impl Into<String>,
-        data: T,
-    ) -> Result<Self> {
-        Ok(Self {
-            command: command.into(),
+impl HumanOutput {
+    pub fn new(header: impl Into<String>) -> Self {
+        Self {
             header: header.into(),
-            data: serde_json::to_value(data)?,
             summary: Vec::new(),
             details: Vec::new(),
             warnings: Vec::new(),
             next_steps: Vec::new(),
-        })
+        }
     }
 
-    pub fn summary(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+    pub fn push_summary(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.summary.push((key.into(), value.into()));
-        self
     }
 
-    pub fn detail(mut self, value: impl Into<String>) -> Self {
+    pub fn push_detail(&mut self, value: impl Into<String>) {
         self.details.push(value.into());
-        self
     }
 
-    pub fn warning(mut self, value: impl Into<String>) -> Self {
+    pub fn push_warning(&mut self, value: impl Into<String>) {
         self.warnings.push(value.into());
-        self
     }
 
-    pub fn next_step(mut self, value: impl Into<String>) -> Self {
+    pub fn push_next_step(&mut self, value: impl Into<String>) {
         self.next_steps.push(value.into());
-        self
     }
+}
 
-    pub fn emit(&self, json: bool, quiet: bool) -> Result<()> {
-        if json {
-            self.emit_json()?;
-            return Ok(());
-        }
+pub fn emit_success<T: Serialize>(
+    options: OutputOptions,
+    command: &str,
+    data: &T,
+    human: Option<&HumanOutput>,
+) -> Result<()> {
+    if options.json {
+        let warnings = human.map(|h| h.warnings.clone()).unwrap_or_default();
+        let next_steps = human
+            .map(|h| h.next_steps.clone())
+            .unwrap_or_default();
 
-        if quiet {
-            return Ok(());
-        }
-
-        self.emit_human();
-        Ok(())
-    }
-
-    fn emit_json(&self) -> Result<()> {
         #[derive(Serialize)]
-        struct Envelope<'a> {
+        struct Envelope<'a, T: Serialize> {
             schema_version: &'static str,
             command: &'a str,
             status: &'static str,
-            data: &'a serde_json::Value,
+            data: &'a T,
             #[serde(skip_serializing_if = "Vec::is_empty")]
-            warnings: &'a Vec<String>,
+            warnings: Vec<String>,
             #[serde(skip_serializing_if = "Vec::is_empty")]
-            next_steps: &'a Vec<String>,
+            next_steps: Vec<String>,
         }
 
         let payload = Envelope {
             schema_version: SCHEMA_VERSION,
-            command: &self.command,
+            command,
             status: "success",
-            data: &self.data,
-            warnings: &self.warnings,
-            next_steps: &self.next_steps,
+            data,
+            warnings,
+            next_steps,
         };
 
         println!("{}", serde_json::to_string_pretty(&payload)?);
-        Ok(())
+        return Ok(());
     }
 
-    fn emit_human(&self) {
-        println!("{}", self.header);
-
-        print_summary(&self.summary);
-        print_section("Details", &self.details);
-        print_section("Warnings", &self.warnings);
-        print_section("Next steps", &self.next_steps);
+    if options.quiet {
+        return Ok(());
     }
+
+    if let Some(human) = human {
+        println!("{}", format_human(human));
+    }
+
+    Ok(())
 }
 
-fn print_summary(summary: &[(String, String)]) {
+pub fn format_human(output: &HumanOutput) -> String {
+    let mut lines = Vec::new();
+    lines.push(output.header.clone());
+
+    push_summary(&mut lines, &output.summary);
+    push_section(&mut lines, "Details", &output.details);
+    push_section(&mut lines, "Warnings", &output.warnings);
+    push_section(&mut lines, "Next steps", &output.next_steps);
+
+    lines.join("\n")
+}
+
+fn push_summary(lines: &mut Vec<String>, summary: &[(String, String)]) {
     if summary.is_empty() {
         return;
     }
 
-    println!();
-    println!("Summary:");
+    lines.push(String::new());
+    lines.push("Summary:".to_string());
     for (key, value) in summary {
         if value.is_empty() {
-            println!("- {key}");
+            lines.push(format!("- {key}"));
         } else {
-            println!("- {key}: {value}");
+            lines.push(format!("- {key}: {value}"));
         }
     }
 }
 
-fn print_section(title: &str, items: &[String]) {
+fn push_section(lines: &mut Vec<String>, title: &str, items: &[String]) {
     if items.is_empty() {
         return;
     }
 
-    println!();
-    println!("{title}:");
+    lines.push(String::new());
+    lines.push(format!("{title}:"));
     for item in items {
-        println!("- {item}");
+        lines.push(format!("- {item}"));
     }
 }

@@ -79,8 +79,9 @@ pub fn run(repo: Option<PathBuf>, json: bool, quiet: bool) -> Result<()> {
         updated_items.push(".gitignore");
     }
 
-    let header = if created_items.is_empty() && updated_items.is_empty() {
-        "sv init: nothing to do".to_string()
+    let no_changes = created_items.is_empty() && updated_items.is_empty();
+    let header = if no_changes {
+        "sv init: already initialized".to_string()
     } else {
         "sv init: initialized repo".to_string()
     };
@@ -103,8 +104,12 @@ pub fn run(repo: Option<PathBuf>, json: bool, quiet: bool) -> Result<()> {
             updated_items.join(", ")
         },
     );
-    human.push_next_step("sv actor set <name>");
-    human.push_next_step("sv ws new <workspace>");
+    if no_changes {
+        human.push_next_step("sv status");
+    } else {
+        human.push_next_step("sv actor set <name>");
+        human.push_next_step("sv ws new <workspace>");
+    }
 
     emit_success(
         OutputOptions { json, quiet },
