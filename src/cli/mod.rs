@@ -13,6 +13,7 @@ mod lease;
 mod protect;
 mod release;
 mod take;
+mod ws;
 
 /// sv - Simultaneous Versioning
 ///
@@ -166,6 +167,29 @@ pub enum Commands {
 
     /// Show current workspace status
     Status,
+
+    /// Hoist workspace branches into an integration branch
+    Hoist {
+        /// Selector for workspaces to include (e.g., "actor:agent*" or "all")
+        #[arg(short, long, required = true)]
+        selector: String,
+
+        /// Destination ref to integrate onto (e.g., "main")
+        #[arg(short, long, required = true)]
+        dest: String,
+
+        /// Integration strategy: stack, rebase, or merge
+        #[arg(long, default_value = "stack")]
+        strategy: String,
+
+        /// Ordering mode: workspace, time, or explicit
+        #[arg(long, default_value = "workspace")]
+        order: String,
+
+        /// Dry run: show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// Workspace subcommands
@@ -331,6 +355,350 @@ pub enum ActorCommands {
     Show,
 }
 
+/// Options for risk command
+pub struct RiskOptions {
+    pub selector: Option<String>,
+    pub base: Option<String>,
+    pub simulate: bool,
+    pub repo: Option<std::path::PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+/// Run risk assessment command
+fn run_risk(opts: RiskOptions) -> Result<()> {
+    use crate::config::Config;
+    use crate::git;
+    use crate::risk;
+
+    let repo = git::open_repo(opts.repo.as_deref())?;
+    let workdir = git::workdir(&repo)?;
+    let config = Config::load_from_repo(&workdir);
+
+    // Determine base ref
+    let base_ref = opts
+        .base
+        .unwrap_or_else(|| config.base.clone());
+
+    if opts.simulate {
+        // Run virtual merge simulation
+        let report = risk::simulate_conflicts(&repo, &base_ref)?;
+        
+        if opts.json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else if !opts.quiet {
+            print_simulation_report(&report);
+        }
+    } else {
+        // Run basic overlap detection
+        let report = risk::compute_risk(&repo, &base_ref)?;
+        
+        if opts.json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else if !opts.quiet {
+            print_risk_report(&report);
+        }
+    }
+
+    Ok(())
+}
+
+fn print_risk_report(report: &crate::risk::RiskReport) {
+    println!("Risk Report (base: {})", report.base_ref);
+    println!();
+
+    if report.workspaces.is_empty() {
+        println!("No workspaces registered.");
+        return;
+    }
+
+    println!("Workspaces analyzed: {}", report.workspaces.len());
+    for ws in &report.workspaces {
+        println!("  {} ({}) - {} files touched", ws.name, ws.branch, ws.files.len());
+    }
+    println!();
+
+    if report.overlaps.is_empty() {
+        println!("No overlapping files detected.");
+    } else {
+        println!("Overlapping files: {}", report.overlaps.len());
+        for overlap in &report.overlaps {
+            let severity_str = match overlap.severity {
+                crate::risk::RiskSeverity::Low => "LOW",
+                crate::risk::RiskSeverity::Medium => "MEDIUM",
+                crate::risk::RiskSeverity::High => "HIGH",
+                crate::risk::RiskSeverity::Critical => "CRITICAL",
+            };
+            println!(
+                "  [{}] {} (workspaces: {})",
+                severity_str,
+                overlap.path,
+                overlap.workspaces.join(", ")
+            );
+        }
+    }
+}
+
+fn print_simulation_report(report: &crate::risk::SimulationReport) {
+    println!("Merge Simulation Report (base: {})", report.base_ref);
+    println!();
+
+    if report.workspace_pairs.is_empty() {
+        println!("No workspace pairs to simulate.");
+        return;
+    }
+
+    println!("Workspace pairs analyzed: {}", report.workspace_pairs.len());
+    println!();
+
+    let mut has_conflicts = false;
+    for pair in &report.workspace_pairs {
+        if pair.conflicts.is_empty() {
+            println!("  {} vs {} - no conflicts", pair.workspace_a, pair.workspace_b);
+        } else {
+            has_conflicts = true;
+            println!(
+                "  {} vs {} - {} conflict(s):",
+                pair.workspace_a,
+                pair.workspace_b,
+                pair.conflicts.len()
+            );
+            for conflict in &pair.conflicts {
+                let kind_str = format!("{:?}", conflict.kind).to_lowercase();
+                println!("    [{}] {}", kind_str, conflict.path);
+            }
+        }
+    }
+
+    if !has_conflicts {
+        println!();
+        println!("All workspace pairs can merge cleanly.");
+    }
+}
+
+/// Options for hoist command
+pub struct HoistOptions {
+    pub selector: String,
+    pub dest: String,
+    pub strategy: String,
+    pub order: String,
+    pub dry_run: bool,
+    pub repo: Option<std::path::PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+/// Hoist strategy
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HoistStrategy {
+    Stack,
+    Rebase,
+    Merge,
+}
+
+impl std::str::FromStr for HoistStrategy {
+    type Err = crate::error::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "stack" => Ok(HoistStrategy::Stack),
+            "rebase" => Ok(HoistStrategy::Rebase),
+            "merge" => Ok(HoistStrategy::Merge),
+            _ => Err(crate::error::Error::InvalidArgument(format!(
+                "invalid strategy '{}': must be stack, rebase, or merge",
+                s
+            ))),
+        }
+    }
+}
+
+/// Ordering mode for hoist
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HoistOrder {
+    Workspace,
+    Time,
+    Explicit,
+}
+
+impl std::str::FromStr for HoistOrder {
+    type Err = crate::error::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "workspace" => Ok(HoistOrder::Workspace),
+            "time" => Ok(HoistOrder::Time),
+            "explicit" => Ok(HoistOrder::Explicit),
+            _ => Err(crate::error::Error::InvalidArgument(format!(
+                "invalid order '{}': must be workspace, time, or explicit",
+                s
+            ))),
+        }
+    }
+}
+
+/// Hoist output for JSON
+#[derive(Debug, serde::Serialize)]
+pub struct HoistOutput {
+    pub hoist_id: String,
+    pub dest_ref: String,
+    pub integration_ref: String,
+    pub strategy: HoistStrategy,
+    pub order: HoistOrder,
+    pub workspaces: Vec<String>,
+    pub status: String,
+}
+
+/// Run hoist command
+fn run_hoist(opts: HoistOptions) -> Result<()> {
+    use chrono::Utc;
+    use uuid::Uuid;
+    use crate::git;
+    use crate::storage::{Storage, HoistState, HoistStatus};
+
+    // Parse and validate strategy
+    let strategy: HoistStrategy = opts.strategy.parse()?;
+    let order: HoistOrder = opts.order.parse()?;
+
+    // Open repository
+    let repo = git::open_repo(opts.repo.as_deref())?;
+    let workdir = git::workdir(&repo)?;
+    let git_dir = repo.path().to_path_buf();
+    let storage = Storage::new(workdir.clone(), git_dir, workdir);
+
+    // Validate dest ref exists
+    repo.revparse_single(&opts.dest).map_err(|_| {
+        crate::error::Error::InvalidArgument(format!(
+            "destination ref '{}' does not exist",
+            opts.dest
+        ))
+    })?;
+
+    // Get workspaces matching selector
+    // For now, we support simple selectors: "all" or prefix matching
+    let registry = storage.read_workspaces()?;
+    let matching_workspaces: Vec<_> = registry
+        .workspaces
+        .iter()
+        .filter(|ws| {
+            if opts.selector == "all" {
+                true
+            } else if let Some(prefix) = opts.selector.strip_suffix('*') {
+                ws.name.starts_with(prefix)
+            } else if let Some(actor_prefix) = opts.selector.strip_prefix("actor:") {
+                ws.actor.as_ref().map(|a| {
+                    if let Some(prefix) = actor_prefix.strip_suffix('*') {
+                        a.starts_with(prefix)
+                    } else {
+                        a == actor_prefix
+                    }
+                }).unwrap_or(false)
+            } else {
+                ws.name == opts.selector
+            }
+        })
+        .collect();
+
+    if matching_workspaces.is_empty() {
+        return Err(crate::error::Error::InvalidArgument(format!(
+            "no workspaces match selector '{}'",
+            opts.selector
+        )));
+    }
+
+    // Generate hoist ID and integration branch name
+    let hoist_id = Uuid::new_v4().to_string();
+    let integration_ref = format!("sv/hoist/{}", opts.dest);
+
+    if opts.dry_run {
+        // Dry run output
+        let output = HoistOutput {
+            hoist_id: hoist_id.clone(),
+            dest_ref: opts.dest.clone(),
+            integration_ref: integration_ref.clone(),
+            strategy,
+            order,
+            workspaces: matching_workspaces.iter().map(|w| w.name.clone()).collect(),
+            status: "dry_run".to_string(),
+        };
+
+        if opts.json {
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else if !opts.quiet {
+            println!("Hoist (dry run)");
+            println!("  ID: {}", hoist_id);
+            println!("  Dest: {} -> {}", opts.dest, integration_ref);
+            println!("  Strategy: {:?}", strategy);
+            println!("  Order: {:?}", order);
+            println!("  Workspaces: {}", matching_workspaces.len());
+            for ws in &matching_workspaces {
+                println!("    - {} ({})", ws.name, ws.branch);
+            }
+        }
+
+        return Ok(());
+    }
+
+    // Create or reset integration branch to dest ref
+    let dest_commit = repo.revparse_single(&opts.dest)?.peel_to_commit()?;
+    
+    // Check if integration branch exists
+    let branch_exists = repo.find_branch(&integration_ref, git2::BranchType::Local).is_ok();
+    
+    if branch_exists {
+        // Reset existing branch to dest
+        let mut branch = repo.find_branch(&integration_ref, git2::BranchType::Local)?;
+        branch.get_mut().set_target(dest_commit.id(), &format!("sv hoist: reset to {}", opts.dest))?;
+    } else {
+        // Create new branch at dest
+        repo.branch(&integration_ref, &dest_commit, false)?;
+    }
+
+    // Initialize hoist state
+    let now = Utc::now();
+    let state = HoistState {
+        hoist_id: hoist_id.clone(),
+        dest_ref: opts.dest.clone(),
+        integration_ref: integration_ref.clone(),
+        status: HoistStatus::InProgress,
+        started_at: now,
+        updated_at: now,
+        commits: Vec::new(), // Will be populated by commit selection task
+    };
+    storage.write_hoist_state(&state)?;
+
+    // Output result
+    let output = HoistOutput {
+        hoist_id: hoist_id.clone(),
+        dest_ref: opts.dest.clone(),
+        integration_ref: integration_ref.clone(),
+        strategy,
+        order,
+        workspaces: matching_workspaces.iter().map(|w| w.name.clone()).collect(),
+        status: "in_progress".to_string(),
+    };
+
+    if opts.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else if !opts.quiet {
+        println!("Hoist initialized");
+        println!("  ID: {}", hoist_id);
+        println!("  Integration branch: {}", integration_ref);
+        println!("  Base: {} ({})", opts.dest, &dest_commit.id().to_string()[..8]);
+        println!("  Strategy: {:?}", strategy);
+        println!("  Order: {:?}", order);
+        println!("  Workspaces: {}", matching_workspaces.len());
+        for ws in &matching_workspaces {
+            println!("    - {} ({})", ws.name, ws.branch);
+        }
+        println!();
+        println!("Next: commits will be selected and replayed (separate task)");
+    }
+
+    Ok(())
+}
+
 impl Cli {
     /// Execute the CLI command
     pub fn run(self) -> Result<()> {
@@ -342,11 +710,54 @@ impl Cli {
                 }
                 Ok(())
             }
-            Commands::Ws(cmd) => {
-                if !self.quiet {
-                    println!("sv ws {:?} - not yet implemented", cmd);
+            Commands::Ws(cmd) => match cmd {
+                WsCommands::New { name, base, dir, branch, sparse } => {
+                    ws::run_new(ws::NewOptions {
+                        name,
+                        base,
+                        dir,
+                        branch,
+                        sparse,
+                        actor: self.actor,
+                        repo: self.repo,
+                        json: self.json,
+                        quiet: self.quiet,
+                    })
                 }
-                Ok(())
+                WsCommands::Here { name } => {
+                    ws::run_here(ws::HereOptions {
+                        name,
+                        actor: self.actor,
+                        repo: self.repo,
+                        json: self.json,
+                        quiet: self.quiet,
+                    })
+                }
+                WsCommands::List { selector } => {
+                    ws::run_list(ws::ListOptions {
+                        selector,
+                        repo: self.repo,
+                        json: self.json,
+                        quiet: self.quiet,
+                    })
+                }
+                WsCommands::Info { name } => {
+                    ws::run_info(ws::InfoOptions {
+                        name,
+                        repo: self.repo,
+                        json: self.json,
+                        quiet: self.quiet,
+                    })
+                }
+                WsCommands::Rm { name, force } => {
+                    ws::run_rm(ws::RmOptions {
+                        name,
+                        force,
+                        repo: self.repo,
+                        json: self.json,
+                        quiet: self.quiet,
+                    })
+                }
             }
             Commands::Take { paths, strength, intent, scope, ttl, note } => {
                 take::run(take::TakeOptions {
@@ -397,10 +808,14 @@ impl Cli {
                     Ok(())
                 }
                 LeaseCommands::Break { ids, reason } => {
-                    if !self.quiet {
-                        println!("sv lease break {:?} {:?} - not yet implemented", ids, reason);
-                    }
-                    Ok(())
+                    lease::run_break(lease::BreakOptions {
+                        ids,
+                        reason,
+                        actor: self.actor,
+                        repo: self.repo,
+                        json: self.json,
+                        quiet: self.quiet,
+                    })
                 }
             }
             Commands::Protect(cmd) => match cmd {
@@ -450,11 +865,15 @@ impl Cli {
                     quiet: self.quiet,
                 })
             }
-            Commands::Risk { .. } => {
-                if !self.quiet {
-                    println!("sv risk - not yet implemented");
-                }
-                Ok(())
+            Commands::Risk { selector, base, simulate } => {
+                run_risk(RiskOptions {
+                    selector,
+                    base,
+                    simulate,
+                    repo: self.repo,
+                    json: self.json,
+                    quiet: self.quiet,
+                })
             }
             Commands::Op(cmd) => {
                 if !self.quiet {
@@ -473,6 +892,18 @@ impl Cli {
                     println!("sv actor {:?} - not yet implemented", cmd);
                 }
                 Ok(())
+            }
+            Commands::Hoist { selector, dest, strategy, order, dry_run } => {
+                run_hoist(HoistOptions {
+                    selector,
+                    dest,
+                    strategy,
+                    order,
+                    dry_run,
+                    repo: self.repo,
+                    json: self.json,
+                    quiet: self.quiet,
+                })
             }
         }
     }
