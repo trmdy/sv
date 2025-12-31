@@ -89,7 +89,7 @@ Beads (`bd`) is the canonical task tracker.
 - Find ready work: `bd ready --json`
 - Claim work: `bd update <id> --status in_progress --json`
 - Create follow-ups: `bd create "Title" -t task -p 2 --json`
-- Close work: `bd close <id> --reason "…" --json`
+- Close work: `bd close <id> --reason "…" --json` (must close beads immediately when done; do not leave completed work in `in_progress`)
 
 Project state:
 - `.beads/` is authoritative and should be committed alongside related code changes.
@@ -235,7 +235,7 @@ bd sync               # Commit and push changes
 1. **Start**: Run `bd ready` to find actionable work
 2. **Claim**: Use `bd update <id> --status=in_progress`
 3. **Work**: Implement the task
-4. **Complete**: Use `bd close <id>`
+4. **Complete**: Use `bd close <id>` immediately when done (no completed tasks should remain `in_progress`)
 5. **Sync**: Always run `bd sync` at session end
 
 ### Key Concepts
@@ -252,6 +252,7 @@ bd sync               # Commit and push changes
 ```bash
 git status              # Check what changed
 git add <files>         # Stage code changes
+bd close <id> --reason="Completed"  # Close completed beads before syncing
 bd sync                 # Commit beads changes
 git commit -m "..."     # Commit code
 bd sync                 # Commit any new beads changes
@@ -261,7 +262,7 @@ git push                # Push to remote
 ### Best Practices
 
 - Check `bd ready` at session start to find available work
-- Update status as you work (in_progress → closed)
+- Update status as you work (in_progress → closed immediately on completion)
 - Create new issues with `bd create` when you discover tasks
 - Use descriptive titles and set appropriate priority/type
 - Always `bd sync` before ending session
