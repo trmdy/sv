@@ -130,7 +130,7 @@ pub fn emit_error(command: &str, err: &crate::error::Error, json: bool) -> Resul
                 message: &err.to_string(),
                 code: err.exit_code(),
                 kind: error_kind(err),
-                details: None,
+                details: err.details(),
             },
             warnings: Vec::new(),
             next_steps,
