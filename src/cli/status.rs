@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::actor;
+use crate::cli::ws;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::git;
@@ -69,34 +70,33 @@ struct AheadBehind {
 }
 
 pub fn run(options: StatusOptions) -> Result<()> {
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     let repository = git::open_repo(Some(start.as_path()))?;
     let workdir = git::workdir(&repository)?;
 
     let common_dir = resolve_common_dir(&repository)?;
-    let repo_root = common_dir
-        .parent()
-        .unwrap_or(&workdir)
-        .to_path_buf();
+    let repo_root = common_dir.parent().unwrap_or(&workdir).to_path_buf();
     let storage = Storage::new(workdir.clone(), common_dir, workdir.clone());
 
     let config = Config::load_from_repo(&workdir);
 
     let actor_name = actor::resolve_actor(Some(&workdir), options.actor.as_deref())?;
 
-    let workspaces = if storage.is_initialized() {
-        storage.list_workspaces()?
+    // Ensure current workspace is registered (auto-registers if needed when sv is initialized)
+    let workspace_entry = if storage.is_initialized() {
+        Some(ws::ensure_current_workspace(
+            &storage,
+            &repository,
+            &workdir,
+            options.actor.as_deref(),
+        )?)
     } else {
-        Vec::new()
+        None
     };
-
-    let workspace_entry = workspaces
-        .iter()
-        .find(|entry| entry.path == workdir)
-        .cloned();
 
     let workspace_name = workspace_entry
         .as_ref()
@@ -212,11 +212,6 @@ pub fn run(options: StatusOptions) -> Result<()> {
         next_steps.push("sv actor set <name>".to_string());
     }
 
-    if workspace_entry.is_none() {
-        warnings.push("workspace not registered".to_string());
-        next_steps.push("sv ws here --name <workspace>".to_string());
-    }
-
     if expired_count > 0 {
         warnings.push(format!("expired leases detected: {expired_count}"));
     }
@@ -239,8 +234,6 @@ pub fn run(options: StatusOptions) -> Result<()> {
 
     let header = if !storage.is_initialized() {
         "sv status: sv not initialized".to_string()
-    } else if workspace_entry.is_none() {
-        "sv status: workspace not registered".to_string()
     } else {
         "sv status: workspace ready".to_string()
     };
@@ -310,11 +303,7 @@ pub fn run(options: StatusOptions) -> Result<()> {
     Ok(())
 }
 
-fn compute_ahead_behind(
-    repo: &git2::Repository,
-    branch: &str,
-    base: &str,
-) -> Option<AheadBehind> {
+fn compute_ahead_behind(repo: &git2::Repository, branch: &str, base: &str) -> Option<AheadBehind> {
     let branch_oid = resolve_oid(repo, branch)?;
     let base_oid = resolve_oid(repo, base)?;
     let (ahead, behind) = repo.graph_ahead_behind(branch_oid, base_oid).ok()?;

@@ -578,6 +578,95 @@ pub struct HereOptions {
     pub quiet: bool,
 }
 
+/// Ensure the current workspace is registered, auto-registering if needed.
+///
+/// This is the preferred way for commands to get the current workspace context.
+/// If the current directory is not registered as a workspace, it will be
+/// automatically registered with a name derived from the directory name.
+///
+/// Returns the workspace entry for the current directory.
+pub fn ensure_current_workspace(
+    storage: &Storage,
+    repo: &git2::Repository,
+    workdir: &std::path::Path,
+    actor: Option<&str>,
+) -> Result<WorkspaceEntry> {
+    let registry = storage.read_workspaces()?;
+
+    // Check if already registered
+    if let Some(entry) = registry.workspaces.iter().find(|e| e.path == workdir) {
+        return Ok(entry.clone());
+    }
+
+    // Auto-register the workspace
+    // Handle unborn branches (repos with no commits yet) gracefully
+    let branch = git::head_info(repo)
+        .ok()
+        .and_then(|info| info.shorthand)
+        .unwrap_or_else(|| "HEAD".to_string());
+
+    let name = workdir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|n| !n.is_empty())
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| branch.clone());
+
+    // Ensure the name is unique
+    let final_name = if registry.find(&name).is_some() {
+        // Name collision - append a suffix
+        let mut candidate = name.clone();
+        let mut counter = 1;
+        while registry.find(&candidate).is_some() {
+            candidate = format!("{}-{}", name, counter);
+            counter += 1;
+        }
+        candidate
+    } else {
+        name
+    };
+
+    let base = branch.clone();
+
+    // Ensure workspace-local state directory exists
+    storage.init_local()?;
+
+    // Register
+    let now = Utc::now().to_rfc3339();
+    let entry = WorkspaceEntry::new(
+        final_name.clone(),
+        workdir.to_path_buf(),
+        branch.clone(),
+        base.clone(),
+        actor.map(|s| s.to_string()),
+        now,
+        None,
+    );
+    storage.add_workspace(entry.clone())?;
+
+    // Record operation in oplog (best-effort)
+    let oplog = OpLog::for_storage(storage);
+    let mut record = OpRecord::new(
+        format!("auto-register workspace {}", final_name),
+        actor.map(|s| s.to_string()),
+    );
+    record.affected_workspaces.push(final_name.clone());
+    record.affected_refs.push(branch.clone());
+    record.undo_data = Some(UndoData {
+        workspace_changes: vec![WorkspaceChange {
+            name: final_name,
+            action: "register".to_string(),
+            path: Some(workdir.display().to_string()),
+            branch: Some(branch),
+            base: Some(base),
+        }],
+        ..Default::default()
+    });
+    let _ = oplog.append(&record);
+
+    Ok(entry)
+}
+
 /// Run `sv ws here` command
 ///
 /// Registers the current directory as a workspace.

@@ -9,6 +9,7 @@ use std::str::FromStr;
 use serde::Serialize;
 
 use crate::actor;
+use crate::cli::ws;
 use crate::error::{Error, Result};
 use crate::git;
 use crate::merge;
@@ -94,16 +95,11 @@ pub fn run(options: OntoOptions) -> Result<()> {
         ));
     }
 
-    let registry = storage.read_workspaces()?;
-    let current_entry = registry
-        .workspaces
-        .iter()
-        .find(|entry| entry.path == workdir)
-        .cloned()
-        .ok_or_else(|| {
-            Error::OperationFailed("workspace not registered. Run 'sv ws here'.".to_string())
-        })?;
+    // Ensure current workspace is registered (auto-registers if needed)
+    let current_entry =
+        ws::ensure_current_workspace(&storage, &repo, &workdir, options.actor.as_deref())?;
 
+    let registry = storage.read_workspaces()?;
     let target_entry = registry
         .find(&options.target_workspace)
         .cloned()
@@ -179,10 +175,16 @@ pub fn run(options: OntoOptions) -> Result<()> {
         if options.json {
             println!("{}", serde_json::to_string_pretty(&report)?);
         } else if !options.quiet {
-            println!("sv onto preflight: {} -> {}", current_entry.name, target_entry.name);
+            println!(
+                "sv onto preflight: {} -> {}",
+                current_entry.name, target_entry.name
+            );
             println!();
             println!("Summary:");
-            println!("  Current: {} ({})", current_entry.name, current_entry.branch);
+            println!(
+                "  Current: {} ({})",
+                current_entry.name, current_entry.branch
+            );
             println!("  Target: {} ({})", target_entry.name, target_entry.branch);
             println!("  Base: {}", base_display);
             println!("  Strategy: {:?}", strategy);
@@ -228,12 +230,7 @@ pub fn run(options: OntoOptions) -> Result<()> {
 
     match strategy {
         OntoStrategy::Rebase => {
-            cmd.args([
-                "rebase",
-                "--onto",
-                &target_entry.branch,
-                &base_ref,
-            ]);
+            cmd.args(["rebase", "--onto", &target_entry.branch, &base_ref]);
         }
         OntoStrategy::Merge => {
             cmd.args(["merge", &target_entry.branch]);
@@ -286,10 +283,16 @@ pub fn run(options: OntoOptions) -> Result<()> {
         current_entry.branch, target_entry.branch
     ));
     if let Some(head_before) = head_before.as_deref() {
-        human.push_detail(format!("head before: {}", &head_before[..8.min(head_before.len())]));
+        human.push_detail(format!(
+            "head before: {}",
+            &head_before[..8.min(head_before.len())]
+        ));
     }
     if let Some(head_after) = head_after.as_deref() {
-        human.push_detail(format!("head after: {}", &head_after[..8.min(head_after.len())]));
+        human.push_detail(format!(
+            "head after: {}",
+            &head_after[..8.min(head_after.len())]
+        ));
     }
     human.push_next_step("sv risk".to_string());
 
@@ -305,7 +308,10 @@ pub fn run(options: OntoOptions) -> Result<()> {
 
     let oplog = OpLog::for_storage(&storage);
     let mut record = OpRecord::new(
-        format!("sv onto {} --strategy {}", target_entry.name, options.strategy),
+        format!(
+            "sv onto {} --strategy {}",
+            target_entry.name, options.strategy
+        ),
         Some(actor_name),
     );
     record.affected_workspaces.push(current_entry.name.clone());
