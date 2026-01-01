@@ -115,6 +115,11 @@ impl Storage {
         self.shared_dir().join("leases.jsonl")
     }
 
+    /// Path to the conflicts file (JSONL format)
+    pub fn conflicts_file(&self) -> PathBuf {
+        self.shared_dir().join("conflicts.jsonl")
+    }
+
     /// Path to the operation log directory
     pub fn oplog_dir(&self) -> PathBuf {
         self.shared_dir().join("oplog")
@@ -450,6 +455,63 @@ impl Storage {
     }
 
     // =========================================================================
+    // Conflict tracking operations
+    // =========================================================================
+
+    /// Load all conflict records from the conflicts file into a ConflictStore
+    pub fn load_conflicts(&self) -> Result<crate::conflict::ConflictStore> {
+        let records: Vec<crate::conflict::ConflictRecord> = self.read_jsonl(&self.conflicts_file())?;
+        Ok(crate::conflict::ConflictStore::from_vec(records))
+    }
+
+    /// Append a conflict record to the conflicts file
+    pub fn append_conflict(&self, record: &crate::conflict::ConflictRecord) -> Result<()> {
+        self.append_jsonl(&self.conflicts_file(), record)
+    }
+
+    /// Save all conflicts to the conflicts file (overwrites)
+    pub fn save_conflicts(&self, store: &crate::conflict::ConflictStore) -> Result<()> {
+        let path = self.conflicts_file();
+        
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        
+        // Write to temp file first
+        let temp_path = path.with_extension("tmp");
+        let mut file = File::create(&temp_path)?;
+        
+        for record in store.all() {
+            let json = serde_json::to_string(record)?;
+            writeln!(file, "{}", json)?;
+        }
+        
+        file.sync_all()?;
+        
+        // Atomic rename
+        fs::rename(&temp_path, &path)?;
+        
+        Ok(())
+    }
+
+    /// Get all unresolved conflicts
+    pub fn unresolved_conflicts(&self) -> Result<Vec<crate::conflict::ConflictRecord>> {
+        let store = self.load_conflicts()?;
+        Ok(store.unresolved().cloned().collect())
+    }
+
+    /// Mark a conflict as resolved by commit ID
+    pub fn mark_conflict_resolved(&self, commit_id: &str) -> Result<bool> {
+        let mut store = self.load_conflicts()?;
+        let found = store.mark_resolved(commit_id);
+        if found {
+            self.save_conflicts(&store)?;
+        }
+        Ok(found)
+    }
+
+    // =========================================================================
     // Hoist state operations
     // =========================================================================
 
@@ -677,6 +739,8 @@ pub enum HoistCommitStatus {
     Applied,
     Skipped,
     Conflict,
+    /// Commit was applied but contains unresolved conflict markers (jj-style)
+    InConflict,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
