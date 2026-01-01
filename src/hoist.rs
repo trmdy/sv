@@ -126,13 +126,15 @@ impl ReplayOutcome {
         let mut summary = ReplaySummary {
             applied: 0,
             conflicts: 0,
+            in_conflict: 0,
             skipped: 0,
         };
 
         for entry in &self.entries {
             match entry.status {
                 HoistCommitStatus::Applied => summary.applied += 1,
-                HoistCommitStatus::Conflict | HoistCommitStatus::InConflict => summary.conflicts += 1,
+                HoistCommitStatus::Conflict => summary.conflicts += 1,
+                HoistCommitStatus::InConflict => summary.in_conflict += 1,
                 HoistCommitStatus::Skipped => summary.skipped += 1,
                 HoistCommitStatus::Pending => {}
             }

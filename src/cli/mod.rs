@@ -1216,23 +1216,39 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         println!();
         println!("Replay summary:");
         println!("  Applied: {}", replay_summary.applied);
-        println!("  Conflicts: {}", replay_summary.conflicts);
-        println!("  Skipped: {}", replay_summary.skipped);
+        if replay_summary.in_conflict > 0 {
+            println!("  In-conflict: {} (committed with markers)", replay_summary.in_conflict);
+        }
+        if replay_summary.conflicts > 0 {
+            println!("  Conflicts: {} (stopped)", replay_summary.conflicts);
+        }
+        if replay_summary.skipped > 0 {
+            println!("  Skipped: {}", replay_summary.skipped);
+        }
         if !conflict_output.is_empty() {
             println!();
-            println!("Conflicts:");
+            if replay_summary.in_conflict > 0 {
+                println!("In-conflict commits (resolve with 'sv resolve'):");
+            } else {
+                println!("Conflicts:");
+            }
             for conflict in &conflict_output {
                 println!("  {} - files: {}", &conflict.commit_id[..8], conflict.files.join(", "));
             }
         }
         println!();
         if applied {
-            println!("{} updated to include {} commit(s)", dest, replay_summary.applied);
+            let commit_count = replay_summary.applied + replay_summary.in_conflict;
+            if replay_summary.in_conflict > 0 {
+                println!("{} updated to include {} commit(s) ({} with conflicts)", dest, commit_count, replay_summary.in_conflict);
+            } else {
+                println!("{} updated to include {} commit(s)", dest, commit_count);
+            }
         } else if opts.no_apply {
             println!("Skipped apply (--no-apply). To apply: git checkout {} && git merge --ff-only {}", dest, integration_ref);
         } else if replay_summary.conflicts > 0 {
             println!("Apply skipped due to conflicts. Resolve conflicts and retry.");
-        } else if replay_summary.applied == 0 {
+        } else if total_applied == 0 {
             println!("Nothing to apply (no commits replayed).");
         }
     }
