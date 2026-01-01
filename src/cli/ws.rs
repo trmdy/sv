@@ -5,9 +5,9 @@
 use std::path::PathBuf;
 
 use chrono::Utc;
-use std::collections::HashSet;
 use git2::Repository;
 use serde::Serialize;
+use std::collections::HashSet;
 
 use crate::change_id::find_change_id;
 use crate::config::Config;
@@ -83,7 +83,13 @@ pub fn run_new(opts: NewOptions) -> Result<()> {
     }
 
     // Create the worktree using git module
-    git::create_worktree(&repo, &opts.name, &worktree_path, &base_ref, Some(&branch_name))?;
+    git::create_worktree(
+        &repo,
+        &opts.name,
+        &worktree_path,
+        &base_ref,
+        Some(&branch_name),
+    )?;
 
     // Register in the workspaces registry
     let now = Utc::now().to_rfc3339();
@@ -105,10 +111,7 @@ pub fn run_new(opts: NewOptions) -> Result<()> {
 
     // Record operation in oplog
     let oplog = OpLog::for_storage(&storage);
-    let mut record = OpRecord::new(
-        format!("sv ws new {}", opts.name),
-        actor.clone(),
-    );
+    let mut record = OpRecord::new(format!("sv ws new {}", opts.name), actor.clone());
     record.affected_workspaces.push(opts.name.clone());
     record.affected_refs.push(branch_name.clone());
     record.undo_data = Some(UndoData {
@@ -136,7 +139,11 @@ pub fn run_new(opts: NewOptions) -> Result<()> {
     if opts.json {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else if !opts.quiet {
-        println!("Created workspace '{}' at {}", output.name, output.path.display());
+        println!(
+            "Created workspace '{}' at {}",
+            output.name,
+            output.path.display()
+        );
         println!("  Branch: {}", output.branch);
         println!("  Base: {}", output.base);
     }
@@ -254,7 +261,10 @@ fn collect_change_ids(repo: &Repository, branch: &str, limit: usize) -> Vec<Stri
     let mut results = Vec::new();
     let mut seen = HashSet::new();
 
-    let head = match repo.revparse_single(branch).and_then(|obj| obj.peel_to_commit()) {
+    let head = match repo
+        .revparse_single(branch)
+        .and_then(|obj| obj.peel_to_commit())
+    {
         Ok(commit) => commit,
         Err(_) => return results,
     };
@@ -563,7 +573,11 @@ pub fn run_rm(opts: RmOptions) -> Result<()> {
     if opts.json {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else if !opts.quiet {
-        println!("Removed workspace '{}' at {}", output.name, output.path.display());
+        println!(
+            "Removed workspace '{}' at {}",
+            output.name,
+            output.path.display()
+        );
     }
 
     Ok(())
@@ -721,10 +735,7 @@ pub fn run_here(opts: HereOptions) -> Result<()> {
 
     // Record operation in oplog
     let oplog = OpLog::for_storage(&storage);
-    let mut record = OpRecord::new(
-        format!("sv ws here {}", name),
-        opts.actor,
-    );
+    let mut record = OpRecord::new(format!("sv ws here {}", name), opts.actor);
     record.affected_workspaces.push(name.clone());
     record.affected_refs.push(branch.clone());
     record.undo_data = Some(UndoData {
