@@ -459,6 +459,26 @@ impl Lease {
         self.expires_at = Utc::now() + duration;
         Ok(())
     }
+
+    /// Update lease properties (upsert behavior)
+    /// Updates strength, intent, scope, ttl, note and refreshes expiration
+    pub fn update(
+        &mut self,
+        strength: LeaseStrength,
+        intent: LeaseIntent,
+        scope: LeaseScope,
+        ttl: &str,
+        note: Option<String>,
+    ) -> Result<()> {
+        let duration = parse_duration(ttl)?;
+        self.strength = strength;
+        self.intent = intent;
+        self.scope = scope;
+        self.ttl = ttl.to_string();
+        self.note = note;
+        self.expires_at = Utc::now() + duration;
+        Ok(())
+    }
     
     /// Validate the lease
     pub fn validate(&self) -> Result<()> {
@@ -690,6 +710,24 @@ impl LeaseStore {
     /// Add a lease to the store
     pub fn add(&mut self, lease: Lease) {
         self.leases.push(lease);
+    }
+
+    /// Find an existing active lease by actor and exact pathspec
+    pub fn find_by_actor_and_path(&self, actor: &str, pathspec: &str) -> Option<&Lease> {
+        self.leases.iter().find(|l| {
+            l.is_active()
+                && l.actor.as_ref().map(|a| a == actor).unwrap_or(false)
+                && l.pathspec == pathspec
+        })
+    }
+
+    /// Find an existing active lease by actor and exact pathspec (mutable)
+    pub fn find_by_actor_and_path_mut(&mut self, actor: &str, pathspec: &str) -> Option<&mut Lease> {
+        self.leases.iter_mut().find(|l| {
+            l.is_active()
+                && l.actor.as_ref().map(|a| a == actor).unwrap_or(false)
+                && l.pathspec == pathspec
+        })
     }
     
     /// Check if a new lease would conflict with existing leases
@@ -984,6 +1022,66 @@ mod tests {
             false,
         );
         assert_eq!(conflicts.len(), 0);
+    }
+
+    #[test]
+    fn test_find_by_actor_and_path() {
+        let mut store = LeaseStore::new();
+        
+        // Add a lease
+        store.add(
+            Lease::builder("src/lib.rs")
+                .strength(LeaseStrength::Cooperative)
+                .actor("agent1")
+                .build()
+                .unwrap()
+        );
+        
+        // Should find the lease
+        let found = store.find_by_actor_and_path("agent1", "src/lib.rs");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().pathspec, "src/lib.rs");
+        
+        // Should not find for different actor
+        let not_found = store.find_by_actor_and_path("agent2", "src/lib.rs");
+        assert!(not_found.is_none());
+        
+        // Should not find for different path
+        let not_found = store.find_by_actor_and_path("agent1", "src/main.rs");
+        assert!(not_found.is_none());
+    }
+    
+    #[test]
+    fn test_find_by_actor_and_path_mut_and_update() {
+        let mut store = LeaseStore::new();
+        
+        store.add(
+            Lease::builder("src/lib.rs")
+                .strength(LeaseStrength::Cooperative)
+                .intent(LeaseIntent::Feature)
+                .actor("agent1")
+                .build()
+                .unwrap()
+        );
+        
+        // Find and update
+        let existing = store.find_by_actor_and_path_mut("agent1", "src/lib.rs");
+        assert!(existing.is_some());
+        
+        let lease = existing.unwrap();
+        lease.update(
+            LeaseStrength::Strong,
+            LeaseIntent::Refactor,
+            LeaseScope::Repo,
+            "4h",
+            Some("updated note".to_string()),
+        ).unwrap();
+        
+        // Verify update
+        let updated = store.find_by_actor_and_path("agent1", "src/lib.rs").unwrap();
+        assert_eq!(updated.strength, LeaseStrength::Strong);
+        assert_eq!(updated.intent, LeaseIntent::Refactor);
+        assert_eq!(updated.note, Some("updated note".to_string()));
     }
 
     #[test]
