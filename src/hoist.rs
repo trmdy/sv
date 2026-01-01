@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use git2::{Index, MergeOptions, Oid, Repository, Sort};
 
 use crate::change_id::find_change_id;
+use crate::conflict::write_conflict_tree;
 use crate::error::Result;
 use crate::git;
 use crate::storage::{HoistCommit, HoistCommitStatus, HoistConflict};
@@ -104,14 +105,20 @@ pub struct ReplayOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReplaySummary {
     pub applied: usize,
+    /// Hard conflicts that stopped the replay (not propagated)
     pub conflicts: usize,
+    /// Conflicts that were propagated (committed with markers)
+    pub in_conflict: usize,
     pub skipped: usize,
 }
 
 /// Options for replaying commits onto an integration branch.
 #[derive(Debug, Clone, Default)]
 pub struct ReplayOptions {
+    /// Continue replaying after conflicts (skip conflicting commits)
     pub continue_on_conflict: bool,
+    /// Propagate conflicts: commit conflict markers instead of skipping (jj-style)
+    pub propagate_conflicts: bool,
 }
 
 impl ReplayOutcome {
@@ -125,7 +132,7 @@ impl ReplayOutcome {
         for entry in &self.entries {
             match entry.status {
                 HoistCommitStatus::Applied => summary.applied += 1,
-                HoistCommitStatus::Conflict => summary.conflicts += 1,
+                HoistCommitStatus::Conflict | HoistCommitStatus::InConflict => summary.conflicts += 1,
                 HoistCommitStatus::Skipped => summary.skipped += 1,
                 HoistCommitStatus::Pending => {}
             }
@@ -236,9 +243,46 @@ pub fn replay_commits(
             let files = conflict_paths(&index)?;
             outcome.conflicts.push(ReplayConflict {
                 commit_id: *oid,
-                files,
+                files: files.clone(),
                 message: Some("conflict applying commit".to_string()),
             });
+
+            if options.propagate_conflicts {
+                // jj-style: commit the conflict markers instead of skipping
+                let tree_id = write_conflict_tree(repo, &mut index)?;
+                let tree = repo.find_tree(tree_id)?;
+                let author = commit.author();
+                let committer = commit.committer();
+                
+                // Add a note to the commit message indicating it has conflicts
+                let conflict_message = format!(
+                    "{}\n\nSv-Conflict: true\nSv-Conflict-Files: {}",
+                    message.trim_end(),
+                    files.join(", ")
+                );
+                
+                let new_oid = repo.commit(
+                    Some(&refname),
+                    &author,
+                    &committer,
+                    &conflict_message,
+                    &tree,
+                    &[&current],
+                )?;
+
+                current = repo.find_commit(new_oid)?;
+                outcome.entries.push(ReplayEntry {
+                    commit_id: *oid,
+                    applied_id: Some(new_oid),
+                    status: HoistCommitStatus::InConflict,
+                    change_id,
+                    summary,
+                });
+                // Continue to next commit - conflicts propagate
+                continue;
+            }
+
+            // Original behavior: mark as conflict, optionally skip remaining
             outcome.entries.push(ReplayEntry {
                 commit_id: *oid,
                 applied_id: None,
@@ -957,6 +1001,7 @@ mod tests {
             &[alpha, bravo],
             &ReplayOptions {
                 continue_on_conflict: false,
+                propagate_conflicts: false,
             },
         )
         .unwrap();
@@ -990,6 +1035,7 @@ mod tests {
             &[alpha, bravo, charlie],
             &ReplayOptions {
                 continue_on_conflict: true,
+                propagate_conflicts: false,
             },
         )
         .unwrap();
@@ -1027,6 +1073,7 @@ mod tests {
             &[alpha, bravo, charlie],
             &ReplayOptions {
                 continue_on_conflict: false,
+                propagate_conflicts: false,
             },
         )
         .unwrap();
@@ -1056,6 +1103,7 @@ mod tests {
             &[alpha, bravo],
             &ReplayOptions {
                 continue_on_conflict: false,
+                propagate_conflicts: false,
             },
         )
         .unwrap();
