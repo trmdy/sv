@@ -124,8 +124,8 @@ fn risk_reports_overlaps_for_shared_paths() -> Result<(), Box<dyn std::error::Er
     )?;
 
     let storage = Storage::for_repo(repo.path().to_path_buf());
-    let worktree_a = repo.path().join("worktrees/ws-a");
-    let worktree_b = repo.path().join("worktrees/ws-b");
+    let worktree_a = repo.path().join(".sv/worktrees/ws-a");
+    let worktree_b = repo.path().join(".sv/worktrees/ws-b");
     fs::create_dir_all(&worktree_a)?;
     fs::create_dir_all(&worktree_b)?;
 

@@ -32,7 +32,7 @@ fn add_workspace_requires_existing_path() {
 fn add_find_remove_workspace() {
     let (_temp, storage) = setup_storage();
     let repo_root = storage.local_dir().parent().unwrap().to_path_buf();
-    let workspace_path = repo_root.join("worktrees/ws1");
+    let workspace_path = repo_root.join(".sv/worktrees/ws1");
     std::fs::create_dir_all(&workspace_path).unwrap();
 
     let entry = WorkspaceEntry::new(
@@ -59,7 +59,7 @@ fn add_find_remove_workspace() {
 fn cleanup_stale_workspace_removes_missing_paths() {
     let (_temp, storage) = setup_storage();
     let repo_root = storage.local_dir().parent().unwrap().to_path_buf();
-    let workspace_path = repo_root.join("worktrees/stale");
+    let workspace_path = repo_root.join(".sv/worktrees/stale");
     std::fs::create_dir_all(&workspace_path).unwrap();
 
     let entry = WorkspaceEntry::new(
@@ -83,7 +83,7 @@ fn cleanup_stale_workspace_removes_missing_paths() {
 fn update_workspace_mutates_fields() {
     let (_temp, storage) = setup_storage();
     let repo_root = storage.local_dir().parent().unwrap().to_path_buf();
-    let workspace_path = repo_root.join("worktrees/ws2");
+    let workspace_path = repo_root.join(".sv/worktrees/ws2");
     std::fs::create_dir_all(&workspace_path).unwrap();
 
     let entry = WorkspaceEntry::new(
@@ -119,7 +119,7 @@ fn list_workspaces_returns_all() {
     // Create multiple workspace directories
     let paths: Vec<_> = (1..=3)
         .map(|i| {
-            let path = repo_root.join(format!("worktrees/ws{}", i));
+            let path = repo_root.join(format!(".sv/worktrees/ws{}", i));
             std::fs::create_dir_all(&path).unwrap();
             path
         })
@@ -167,7 +167,7 @@ fn find_nonexistent_workspace_returns_none() {
 fn add_duplicate_workspace_fails() {
     let (_temp, storage) = setup_storage();
     let repo_root = storage.local_dir().parent().unwrap().to_path_buf();
-    let workspace_path = repo_root.join("worktrees/dup");
+    let workspace_path = repo_root.join(".sv/worktrees/dup");
     std::fs::create_dir_all(&workspace_path).unwrap();
 
     let entry = WorkspaceEntry::new(
@@ -198,8 +198,8 @@ fn workspace_entry_has_unique_id() {
     let (_temp, storage) = setup_storage();
     let repo_root = storage.local_dir().parent().unwrap().to_path_buf();
 
-    let path1 = repo_root.join("worktrees/id1");
-    let path2 = repo_root.join("worktrees/id2");
+    let path1 = repo_root.join(".sv/worktrees/id1");
+    let path2 = repo_root.join(".sv/worktrees/id2");
     std::fs::create_dir_all(&path1).unwrap();
     std::fs::create_dir_all(&path2).unwrap();
 

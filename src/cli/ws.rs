@@ -69,8 +69,8 @@ pub fn run_new(opts: NewOptions) -> Result<()> {
             workdir.join(dir)
         }
     } else {
-        // Default: worktrees/<name>
-        workdir.join("worktrees").join(&opts.name)
+        // Default: .sv/worktrees/<name>
+        workdir.join(".sv").join("worktrees").join(&opts.name)
     };
 
     // Check if workspace name already exists in registry

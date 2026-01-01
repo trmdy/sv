@@ -1159,7 +1159,7 @@ mod tests {
     fn test_create_and_list_worktree() {
         let (temp, repo) = init_test_repo();
         
-        let wt_path = temp.path().join("worktrees").join("test-wt");
+        let wt_path = temp.path().join(".sv").join("worktrees").join("test-wt");
         
         // Create worktree
         create_worktree(&repo, "test-wt", &wt_path, "HEAD", None).unwrap();
@@ -1181,7 +1181,7 @@ mod tests {
     fn test_remove_worktree() {
         let (temp, repo) = init_test_repo();
         
-        let wt_path = temp.path().join("worktrees").join("to-remove");
+        let wt_path = temp.path().join(".sv").join("worktrees").join("to-remove");
         
         // Create worktree
         create_worktree(&repo, "to-remove", &wt_path, "HEAD", None).unwrap();

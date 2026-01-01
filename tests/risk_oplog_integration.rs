@@ -38,7 +38,7 @@ fn risk_reports_overlap() -> Result<(), Box<dyn std::error::Error>> {
     repo.checkout_branch("main")?;
 
     let storage = Storage::for_repo(repo.path().to_path_buf());
-    let worktrees_root = repo.path().join("worktrees");
+    let worktrees_root = repo.path().join(".sv/worktrees");
     fs::create_dir_all(worktrees_root.join("ws1"))?;
     fs::create_dir_all(worktrees_root.join("ws2"))?;
 

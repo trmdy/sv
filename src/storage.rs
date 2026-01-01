@@ -915,7 +915,7 @@ mod tests {
         let mut registry = storage.read_workspaces().unwrap();
         assert!(registry.workspaces.is_empty());
         
-        let workspace_path = repo_root.join("worktrees/ws1");
+        let workspace_path = repo_root.join(".sv/worktrees/ws1");
         fs::create_dir_all(&workspace_path).unwrap();
 
         // Add a workspace

@@ -24,7 +24,7 @@ fn sv_cmd(repo: &TestRepo) -> Command {
 #[test]
 fn ws_new_creates_worktree_and_registry() -> Result<(), Box<dyn std::error::Error>> {
     let repo = setup_repo()?;
-    let worktree_path = repo.path().join("worktrees/ws1");
+    let worktree_path = repo.path().join(".sv/worktrees/ws1");
 
     sv_cmd(&repo)
         .args(["ws", "new", "ws1", "--base", "HEAD"])
@@ -87,7 +87,7 @@ fn ws_info_reports_details() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn ws_rm_unregisters_workspace() -> Result<(), Box<dyn std::error::Error>> {
     let repo = setup_repo()?;
-    let worktree_path = repo.path().join("worktrees/ws1");
+    let worktree_path = repo.path().join(".sv/worktrees/ws1");
 
     sv_cmd(&repo)
         .args(["ws", "new", "ws1", "--base", "HEAD"])
