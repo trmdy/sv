@@ -3,7 +3,7 @@
 //! This module defines the CLI structure using clap derive macros.
 //! Each subcommand is defined in its own submodule.
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 use crate::error::{Error, Result};
 
@@ -19,6 +19,87 @@ mod status;
 mod take;
 mod ws;
 
+const ROBOT_HELP: &str = r#"sv --robot-help
+
+Purpose
+  sv is a Git-native coordination CLI for multiple agents in one repo. It adds:
+  - Workspaces (Git worktrees) as isolated sandboxes
+  - Leases on paths to signal intent and reduce collisions
+  - Protected paths to guard critical files
+  - Risk analysis for overlap/conflict detection
+  - Hoist/onto workflows for multi-branch integration
+
+Quickstart (typical agent flow)
+  sv init
+  sv actor set <name>
+  sv ws new <workspace>
+  sv take <paths...> --strength cooperative --intent <intent> --note "why"
+  sv commit -m "message"
+  sv release <paths...>
+
+Environment
+  SV_REPO   -> default repo path (otherwise current directory)
+  SV_ACTOR  -> default actor name for leases/ops
+
+Storage layout
+  .sv.toml           Config (tracked)
+  .sv/               Workspace-local state (ignored)
+  .sv/worktrees/     Default root for new workspaces (unless --dir is used)
+  .git/sv/           Shared local state (leases, registry, oplog, hoist state)
+
+Output contracts
+  --json   Machine-readable output with envelope:
+           { schema_version, command, status, data, warnings, next_steps }
+  --events Emit JSONL events to file or stdout ("-"). Use --events <path> with --json.
+
+Exit codes
+  0 success
+  2 user error (bad args, missing repo)
+  3 blocked by policy (protected paths, lease conflict)
+  4 operation failed (git error, merge conflict)
+
+Commands (high level)
+  sv init                   Initialize repo state
+  sv actor set|show          Configure actor identity
+  sv ws new|list|info|rm|here Workspace management
+  sv take                   Create leases on paths/globs
+  sv release                Release leases
+  sv lease ls|who|renew|break Inspect/manage leases
+  sv protect status|add|off|rm Protected paths
+  sv commit                 Commit with sv checks + Change-Id
+  sv risk                   Overlap/conflict analysis
+  sv onto                   Rebase/merge current workspace onto another
+  sv hoist                  Bulk integrate workspaces into an integration branch
+  sv op log                 Operation history
+  sv undo                   Undo recent ops (limited)
+
+Selectors (for hoist -s)
+  ws(active)                Active workspaces
+  ahead("main")             Workspaces ahead of main
+  name~"agent*"             Name matches pattern
+  touching("src/**")        Touching pathspec
+  a | b  union, a & b intersection, ~a complement
+
+Leases
+  Strength: observe < cooperative < strong < exclusive
+  Intent: bugfix, feature, docs, refactor, rename, format, mechanical, investigation, other
+  Scope: repo (default), branch:<name>, ws:<workspace>
+  TTL: default 2h, configurable in .sv.toml
+
+Protected paths
+  Modes: guard (block), warn (allow with warning)
+  Per-workspace overrides stored in .sv/overrides/protect.json
+
+Events (JSONL)
+  lease_created, lease_released, workspace_created, workspace_removed,
+  commit_blocked, commit_created
+
+Tips for agent automation
+  - Use --json for parsing; prefer --events for continuous monitoring.
+  - Treat ownerless leases as advisory unless policy says otherwise.
+  - Acquire leases before editing paths; release when done.
+"#;
+
 /// sv - Simultaneous Versioning
 ///
 /// A CLI that makes Git practical for many parallel agents by adding
@@ -27,6 +108,7 @@ mod ws;
 #[command(name = "sv")]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
+#[command(subcommand_required = false)]
 #[command(after_help = r#"Examples:
   sv init
   sv actor set alice
@@ -56,6 +138,10 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "path", num_args = 0..=1, default_missing_value = "-")]
     pub events: Option<String>,
 
+    /// Print detailed robot-oriented help and exit
+    #[arg(long, global = true)]
+    pub robot_help: bool,
+
     /// Suppress non-essential output
     #[arg(short, long, global = true)]
     pub quiet: bool,
@@ -65,7 +151,7 @@ pub struct Cli {
     pub verbose: bool,
 
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 /// Available subcommands
@@ -1259,21 +1345,47 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
 impl Cli {
     /// Execute the CLI command
     pub fn run(self) -> Result<()> {
-        let events_to_stdout = matches!(self.events.as_deref(), Some("-"));
-        if events_to_stdout && self.json {
+        let Cli {
+            repo,
+            actor,
+            json,
+            events,
+            robot_help,
+            quiet,
+            verbose: _,
+            command,
+        } = self;
+
+        if robot_help {
+            println!("{ROBOT_HELP}");
+            return Ok(());
+        }
+
+        let events_to_stdout = matches!(events.as_deref(), Some("-"));
+        if events_to_stdout && json {
             return Err(Error::InvalidArgument(
                 "--json requires --events <path> to avoid mixing JSON output with JSONL events"
                     .to_string(),
             ));
         }
-        match self.command {
-            Commands::Init => init::run(self.repo, self.json, self.quiet),
+        let command = match command {
+            Some(command) => command,
+            None => {
+                let mut cli = Cli::command();
+                cli.print_help()?;
+                println!();
+                return Err(Error::InvalidArgument("missing command".to_string()));
+            }
+        };
+
+        match command {
+            Commands::Init => init::run(repo, json, quiet),
             Commands::Status => {
                 status::run(status::StatusOptions {
-                    repo: self.repo,
-                    actor: self.actor,
-                    json: self.json,
-                    quiet: self.quiet,
+                    repo,
+                    actor,
+                    json,
+                    quiet,
                 })
             }
             Commands::Onto { target, strategy, base, preflight } => {
@@ -1282,10 +1394,10 @@ impl Cli {
                     strategy,
                     base,
                     preflight,
-                    actor: self.actor,
-                    repo: self.repo,
-                    json: self.json,
-                    quiet: self.quiet,
+                    actor,
+                    repo,
+                    json,
+                    quiet,
                 })
             }
             Commands::Ws(cmd) => match cmd {
@@ -1296,44 +1408,44 @@ impl Cli {
                         dir,
                         branch,
                         sparse,
-                        actor: self.actor,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
                 WsCommands::Here { name } => {
                     ws::run_here(ws::HereOptions {
                         name,
-                        actor: self.actor,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
                 WsCommands::List { selector } => {
                     ws::run_list(ws::ListOptions {
                         selector,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
                 WsCommands::Info { name } => {
                     ws::run_info(ws::InfoOptions {
                         name,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
                 WsCommands::Rm { name, force } => {
                     ws::run_rm(ws::RmOptions {
                         name,
                         force,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
             }
@@ -1345,22 +1457,22 @@ impl Cli {
                     scope,
                     ttl,
                     note,
-                    actor: self.actor,
-                    events: self.events.clone(),
-                    repo: self.repo,
-                    json: self.json,
-                    quiet: self.quiet,
+                    actor,
+                    events: events.clone(),
+                    repo,
+                    json,
+                    quiet,
                 })
             }
             Commands::Release { targets, force } => {
                 release::run(release::ReleaseOptions {
                     targets,
-                    actor: self.actor,
-                    events: self.events.clone(),
-                    repo: self.repo,
+                    actor,
+                    events: events.clone(),
+                    repo,
                     force,
-                    json: self.json,
-                    quiet: self.quiet,
+                    json,
+                    quiet,
                 })
             }
             Commands::Lease(cmd) => match cmd {
@@ -1368,72 +1480,72 @@ impl Cli {
                     lease::run_ls(lease::LsOptions {
                         selector,
                         actor,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
                 LeaseCommands::Who { path } => {
                     lease::run_who(lease::WhoOptions {
                         path,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
                 LeaseCommands::Renew { ids, ttl } => {
                     lease::run_renew(lease::RenewOptions {
                         ids,
                         ttl,
-                        actor: self.actor,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
                 LeaseCommands::Break { ids, reason } => {
                     lease::run_break(lease::BreakOptions {
                         ids,
                         reason,
-                        actor: self.actor,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
             }
             Commands::Protect(cmd) => match cmd {
                 ProtectCommands::Status => {
                     protect::run_status(protect::StatusOptions {
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
                 ProtectCommands::Add { patterns, mode } => {
                     protect::run_add(protect::AddOptions {
                         patterns,
                         mode,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
                 ProtectCommands::Off { patterns } => {
                     protect::run_off(protect::OffOptions {
                         patterns,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
                 ProtectCommands::Rm { patterns, force } => {
                     protect::run_rm(protect::RmOptions {
                         patterns,
                         force,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
             }
@@ -1446,10 +1558,10 @@ impl Cli {
                     no_edit,
                     allow_protected,
                     force_lease,
-                    actor: self.actor,
-                    repo: self.repo,
-                    json: self.json,
-                    quiet: self.quiet,
+                    actor,
+                    repo,
+                    json,
+                    quiet,
                 })
             }
             Commands::Risk { selector, base, simulate } => {
@@ -1457,9 +1569,9 @@ impl Cli {
                     selector,
                     base,
                     simulate,
-                    repo: self.repo,
-                    json: self.json,
-                    quiet: self.quiet,
+                    repo,
+                    json,
+                    quiet,
                 })
             }
             Commands::Op(cmd) => match cmd {
@@ -1470,14 +1582,14 @@ impl Cli {
                         operation,
                         since,
                         until,
-                        repo: self.repo,
-                        json: self.json,
-                        quiet: self.quiet,
+                        repo,
+                        json,
+                        quiet,
                     })
                 }
             },
             Commands::Undo { op } => {
-                if !self.quiet {
+                if !quiet {
                     println!("sv undo {:?} - not yet implemented", op);
                 }
                 Ok(())
@@ -1487,17 +1599,17 @@ impl Cli {
                     ActorCommands::Set { name } => {
                         actor::run_set(actor::SetOptions {
                             name,
-                            repo: self.repo,
-                            json: self.json,
-                            quiet: self.quiet,
+                            repo,
+                            json,
+                            quiet,
                         })
                     }
                     ActorCommands::Show => {
                         actor::run_show(actor::ShowOptions {
-                            repo: self.repo,
-                            actor: self.actor,
-                            json: self.json,
-                            quiet: self.quiet,
+                            repo,
+                            actor,
+                            json,
+                            quiet,
                         })
                     }
                 }
@@ -1512,9 +1624,9 @@ impl Cli {
                     continue_on_conflict,
                     no_propagate_conflicts,
                     no_apply,
-                    repo: self.repo,
-                    json: self.json,
-                    quiet: self.quiet,
+                    repo,
+                    json,
+                    quiet,
                 })
             }
         }
