@@ -32,6 +32,15 @@ struct StatusReport {
     protected_blocking: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     protected_files: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unresolved_conflicts: Vec<ConflictInfo>,
+}
+
+#[derive(serde::Serialize)]
+struct ConflictInfo {
+    commit_id: String,
+    files: Vec<String>,
+    detected_at: String,
 }
 
 #[derive(serde::Serialize)]
@@ -227,6 +236,25 @@ pub fn run(options: StatusOptions) -> Result<()> {
         ));
     }
 
+    // Load unresolved conflicts
+    let unresolved_conflicts: Vec<ConflictInfo> = storage
+        .unresolved_conflicts()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| ConflictInfo {
+            commit_id: c.commit_id,
+            files: c.files,
+            detected_at: c.detected_at.to_rfc3339(),
+        })
+        .collect();
+
+    if !unresolved_conflicts.is_empty() {
+        warnings.push(format!(
+            "unresolved conflicts: {} commit(s)",
+            unresolved_conflicts.len()
+        ));
+    }
+
     if actor_name != "unknown" {
         next_steps.push(format!("sv lease ls --actor {actor_name}"));
     }
@@ -268,6 +296,19 @@ pub fn run(options: StatusOptions) -> Result<()> {
             protected_files.len()
         ));
     }
+    if !unresolved_conflicts.is_empty() {
+        human.push_detail(format!(
+            "unresolved conflicts: {} commit(s)",
+            unresolved_conflicts.len()
+        ));
+        for conflict in &unresolved_conflicts {
+            human.push_detail(format!(
+                "  conflict {} - files: {}",
+                &conflict.commit_id[..8.min(conflict.commit_id.len())],
+                conflict.files.join(", ")
+            ));
+        }
+    }
 
     for warning in warnings {
         human.push_warning(warning);
@@ -288,6 +329,7 @@ pub fn run(options: StatusOptions) -> Result<()> {
         protect_overrides: override_count,
         protected_blocking: protected_files.len(),
         protected_files,
+        unresolved_conflicts,
     };
 
     emit_success(

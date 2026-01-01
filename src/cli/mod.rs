@@ -298,7 +298,7 @@ Examples:
     #[command(long_about = r#"Initialize a hoist run and integration branch.
 
 Examples:
-  sv hoist -s 'ws(active) & ahead("main")' -d main --strategy stack --order workspace
+  sv hoist -s 'ws(active) & ahead("main")' --strategy stack --order workspace
   sv hoist -s "agent*" -d main --dry-run
 "#)]
     Hoist {
@@ -306,9 +306,9 @@ Examples:
         #[arg(short, long, required = true)]
         selector: String,
 
-        /// Destination ref to integrate onto (e.g., "main")
-        #[arg(short, long, required = true)]
-        dest: String,
+        /// Destination ref to integrate onto (e.g., "main") (default: current branch)
+        #[arg(short, long)]
+        dest: Option<String>,
 
         /// Integration strategy: stack, rebase, or merge
         #[arg(long, default_value = "stack")]
@@ -322,9 +322,17 @@ Examples:
         #[arg(long)]
         dry_run: bool,
 
-        /// Continue past conflicts, recording them for later resolution
+        /// Continue past conflicts, recording them for later resolution (legacy, use with --no-propagate-conflicts)
         #[arg(long)]
         continue_on_conflict: bool,
+
+        /// Disable jj-style conflict propagation (stop on conflicts instead of committing markers)
+        #[arg(long)]
+        no_propagate_conflicts: bool,
+
+        /// Skip the final fast-forward merge to dest (only update integration branch)
+        #[arg(long)]
+        no_apply: bool,
     },
 }
 
@@ -372,7 +380,7 @@ Examples:
     },
 
     /// List workspaces
-    #[command(long_about = r#"List registered workspaces.
+    #[command(alias = "ls", long_about = r#"List registered workspaces.
 
 Examples:
   sv ws list
@@ -723,11 +731,13 @@ fn print_simulation_report(report: &crate::risk::SimulationReport) {
 /// Options for hoist command
 pub struct HoistOptions {
     pub selector: String,
-    pub dest: String,
+    pub dest: Option<String>,
     pub strategy: String,
     pub order: String,
     pub dry_run: bool,
     pub continue_on_conflict: bool,
+    pub no_propagate_conflicts: bool,
+    pub no_apply: bool,
     pub repo: Option<std::path::PathBuf>,
     pub json: bool,
     pub quiet: bool,
@@ -793,6 +803,7 @@ pub struct HoistOutput {
     pub order: HoistOrder,
     pub workspaces: Vec<String>,
     pub status: String,
+    pub applied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continue_on_conflict: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -800,7 +811,7 @@ pub struct HoistOutput {
 }
 
 /// Summary of a conflict during hoist
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct HoistConflictSummary {
     pub commit_id: String,
     pub workspace: String,
@@ -922,7 +933,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
     use chrono::Utc;
     use uuid::Uuid;
     use crate::git;
-    use crate::storage::{Storage, HoistState, HoistStatus};
+    use crate::storage::{Storage, HoistState, HoistStatus, HoistCommit};
 
     // Parse and validate strategy
     let strategy: HoistStrategy = opts.strategy.parse()?;
@@ -934,11 +945,19 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
     let git_dir = repo.path().to_path_buf();
     let storage = Storage::new(workdir.clone(), git_dir, workdir);
 
+    let dest = match opts.dest {
+        Some(dest) => dest,
+        None => git::head_info(&repo)
+            .ok()
+            .and_then(|info| info.shorthand)
+            .unwrap_or_else(|| "HEAD".to_string()),
+    };
+
     // Validate dest ref exists
-    repo.revparse_single(&opts.dest).map_err(|_| {
+    repo.revparse_single(&dest).map_err(|_| {
         crate::error::Error::InvalidArgument(format!(
             "destination ref '{}' does not exist",
-            opts.dest
+            dest
         ))
     })?;
 
@@ -972,23 +991,24 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         })
         .collect();
     let candidates =
-        crate::hoist::select_hoist_commits(&repo, &opts.dest, &workspace_refs, &order_mode)?;
+        crate::hoist::select_hoist_commits(&repo, &dest, &workspace_refs, &order_mode)?;
     let hoist_commits = crate::hoist::build_hoist_commits(&repo, &candidates)?;
 
     // Generate hoist ID and integration branch name
     let hoist_id = Uuid::new_v4().to_string();
-    let integration_ref = format!("sv/hoist/{}", opts.dest);
+    let integration_ref = format!("sv/hoist/{}", dest);
 
     if opts.dry_run {
         // Dry run output
         let output = HoistOutput {
             hoist_id: hoist_id.clone(),
-            dest_ref: opts.dest.clone(),
+            dest_ref: dest.clone(),
             integration_ref: integration_ref.clone(),
             strategy,
             order,
             workspaces: matching_workspaces.iter().map(|w| w.name.clone()).collect(),
             status: "dry_run".to_string(),
+            applied: false,
             continue_on_conflict: if opts.continue_on_conflict { Some(true) } else { None },
             conflicts: Vec::new(),
         };
@@ -998,7 +1018,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         } else if !opts.quiet {
             println!("Hoist (dry run)");
             println!("  ID: {}", hoist_id);
-            println!("  Dest: {} -> {}", opts.dest, integration_ref);
+            println!("  Dest: {} -> {}", dest, integration_ref);
             println!("  Strategy: {:?}", strategy);
             println!("  Order: {:?}", order);
             println!("  Workspaces: {}", matching_workspaces.len());
@@ -1011,7 +1031,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
     }
 
     // Create or reset integration branch to dest ref
-    let dest_commit = repo.revparse_single(&opts.dest)?.peel_to_commit()?;
+    let dest_commit = repo.revparse_single(&dest)?.peel_to_commit()?;
     
     // Check if integration branch exists
     let branch_exists = repo.find_branch(&integration_ref, git2::BranchType::Local).is_ok();
@@ -1019,45 +1039,171 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
     if branch_exists {
         // Reset existing branch to dest
         let mut branch = repo.find_branch(&integration_ref, git2::BranchType::Local)?;
-        branch.get_mut().set_target(dest_commit.id(), &format!("sv hoist: reset to {}", opts.dest))?;
+        branch.get_mut().set_target(dest_commit.id(), &format!("sv hoist: reset to {}", dest))?;
     } else {
         // Create new branch at dest
         repo.branch(&integration_ref, &dest_commit, false)?;
     }
 
-    // Initialize hoist state
+    // Extract commit OIDs for replay
+    let commit_oids: Vec<git2::Oid> = candidates.iter().map(|c| c.oid).collect();
+
+    // Replay commits onto the integration branch
+    // Default is jj-style propagation (commit conflicts with markers)
+    let propagate_conflicts = !opts.no_propagate_conflicts;
+    let replay_options = crate::hoist::ReplayOptions {
+        continue_on_conflict: opts.continue_on_conflict,
+        propagate_conflicts,
+    };
+    let replay_outcome = crate::hoist::replay_commits(
+        &repo,
+        &integration_ref,
+        &commit_oids,
+        &replay_options,
+    )?;
+
+    // Build final hoist commits from replay outcome
+    let final_commits: Vec<HoistCommit> = replay_outcome
+        .entries
+        .iter()
+        .map(|entry| HoistCommit {
+            commit_id: entry.commit_id.to_string(),
+            status: entry.status.clone(),
+            workspace: hoist_commits
+                .iter()
+                .find(|c| c.commit_id == entry.commit_id.to_string())
+                .and_then(|c| c.workspace.clone()),
+            change_id: entry.change_id.clone(),
+            summary: entry.summary.clone(),
+        })
+        .collect();
+
+    // Record conflicts to conflicts.jsonl when propagate_conflicts is enabled
+    if propagate_conflicts {
+        for entry in &replay_outcome.entries {
+            if entry.status == crate::storage::HoistCommitStatus::InConflict {
+                if let Some(applied_id) = entry.applied_id {
+                    // Find the conflict info for this commit
+                    let conflict_files: Vec<String> = replay_outcome
+                        .conflicts
+                        .iter()
+                        .find(|c| c.commit_id == entry.commit_id)
+                        .map(|c| c.files.clone())
+                        .unwrap_or_default();
+
+                    let record = crate::conflict::ConflictRecord::new(
+                        applied_id.to_string(),
+                        conflict_files,
+                    )
+                    .with_hoist_id(&hoist_id)
+                    .with_source_commit(entry.commit_id.to_string());
+
+                    storage.append_conflict(&record)?;
+                }
+            }
+        }
+    }
+
+    // Determine final status
+    let replay_summary = replay_outcome.summary();
+    let final_status = if replay_summary.conflicts > 0 {
+        // Hard conflicts (not propagated) = failed
+        HoistStatus::Failed
+    } else if replay_summary.in_conflict > 0 {
+        // Propagated conflicts = completed but with conflicts
+        HoistStatus::Completed
+    } else {
+        HoistStatus::Completed
+    };
+
+    // Save hoist state
     let now = Utc::now();
     let state = HoistState {
         hoist_id: hoist_id.clone(),
-        dest_ref: opts.dest.clone(),
+        dest_ref: dest.clone(),
         integration_ref: integration_ref.clone(),
-        status: HoistStatus::InProgress,
+        status: final_status.clone(),
         started_at: now,
         updated_at: now,
-        commits: hoist_commits,
+        commits: final_commits,
     };
     storage.write_hoist_state(&state)?;
 
+    // Apply: fast-forward dest ref to integration branch
+    // Allow apply when:
+    // - not --no-apply
+    // - no hard conflicts (Conflict status)
+    // - something was applied (including in_conflict commits, which were committed)
+    let total_applied = replay_summary.applied + replay_summary.in_conflict;
+    let applied = if !opts.no_apply && replay_summary.conflicts == 0 && total_applied > 0 {
+        // Get the current tip of the integration branch
+        let integration_commit = repo.revparse_single(&integration_ref)?.peel_to_commit()?;
+        
+        // Update the dest ref to point to the integration branch tip
+        let refname = if dest.starts_with("refs/") {
+            dest.clone()
+        } else {
+            format!("refs/heads/{}", dest)
+        };
+        
+        repo.reference(
+            &refname,
+            integration_commit.id(),
+            true,
+            &format!("sv hoist: fast-forward {} to {}", dest, integration_ref),
+        )?;
+        
+        true
+    } else {
+        false
+    };
+
+    // Build conflict output
+    let conflict_output: Vec<HoistConflictSummary> = replay_outcome
+        .conflicts
+        .iter()
+        .map(|c| {
+            // Find workspace for this commit
+            let workspace = hoist_commits
+                .iter()
+                .find(|hc| hc.commit_id == c.commit_id.to_string())
+                .and_then(|hc| hc.workspace.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+            HoistConflictSummary {
+                commit_id: c.commit_id.to_string(),
+                workspace,
+                files: c.files.clone(),
+            }
+        })
+        .collect();
+
     // Output result
+    let status_str = match final_status {
+        HoistStatus::Completed => "complete",
+        HoistStatus::Failed => "failed",
+        HoistStatus::InProgress => "in_progress",
+    };
+
     let output = HoistOutput {
         hoist_id: hoist_id.clone(),
-        dest_ref: opts.dest.clone(),
+        dest_ref: dest.clone(),
         integration_ref: integration_ref.clone(),
         strategy,
         order,
         workspaces: matching_workspaces.iter().map(|w| w.name.clone()).collect(),
-        status: "in_progress".to_string(),
+        status: status_str.to_string(),
+        applied,
         continue_on_conflict: if opts.continue_on_conflict { Some(true) } else { None },
-        conflicts: Vec::new(),
+        conflicts: conflict_output.clone(),
     };
 
     if opts.json {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else if !opts.quiet {
-        println!("Hoist initialized");
+        println!("Hoist complete");
         println!("  ID: {}", hoist_id);
         println!("  Integration branch: {}", integration_ref);
-        println!("  Base: {} ({})", opts.dest, &dest_commit.id().to_string()[..8]);
+        println!("  Base: {} ({})", dest, &dest_commit.id().to_string()[..8]);
         println!("  Strategy: {:?}", strategy);
         println!("  Order: {:?}", order);
         if opts.continue_on_conflict {
@@ -1068,7 +1214,27 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
             println!("    - {} ({})", ws.name, ws.branch);
         }
         println!();
-        println!("Next: commits will be selected and replayed (separate task)");
+        println!("Replay summary:");
+        println!("  Applied: {}", replay_summary.applied);
+        println!("  Conflicts: {}", replay_summary.conflicts);
+        println!("  Skipped: {}", replay_summary.skipped);
+        if !conflict_output.is_empty() {
+            println!();
+            println!("Conflicts:");
+            for conflict in &conflict_output {
+                println!("  {} - files: {}", &conflict.commit_id[..8], conflict.files.join(", "));
+            }
+        }
+        println!();
+        if applied {
+            println!("{} updated to include {} commit(s)", dest, replay_summary.applied);
+        } else if opts.no_apply {
+            println!("Skipped apply (--no-apply). To apply: git checkout {} && git merge --ff-only {}", dest, integration_ref);
+        } else if replay_summary.conflicts > 0 {
+            println!("Apply skipped due to conflicts. Resolve conflicts and retry.");
+        } else if replay_summary.applied == 0 {
+            println!("Nothing to apply (no commits replayed).");
+        }
     }
 
     Ok(())
@@ -1320,7 +1486,7 @@ impl Cli {
                     }
                 }
             }
-            Commands::Hoist { selector, dest, strategy, order, dry_run, continue_on_conflict } => {
+            Commands::Hoist { selector, dest, strategy, order, dry_run, continue_on_conflict, no_propagate_conflicts, no_apply } => {
                 run_hoist(HoistOptions {
                     selector,
                     dest,
@@ -1328,6 +1494,8 @@ impl Cli {
                     order,
                     dry_run,
                     continue_on_conflict,
+                    no_propagate_conflicts,
+                    no_apply,
                     repo: self.repo,
                     json: self.json,
                     quiet: self.quiet,
