@@ -37,6 +37,31 @@ cargo build --release
 - Git 2.20+
 - libgit2 (bundled via git2 crate)
 
+### System OpenSSL (build requirement)
+
+macOS arm64 (recommended):
+```bash
+rustup default stable-aarch64-apple-darwin
+brew install openssl@3 pkg-config
+export OPENSSL_DIR="$(brew --prefix openssl@3)"
+export PKG_CONFIG_PATH="$OPENSSL_DIR/lib/pkgconfig"
+```
+
+macOS x86_64 (only if targeting x86_64):
+```bash
+# Install x86_64 Homebrew under /usr/local, then:
+export OPENSSL_DIR="/usr/local/opt/openssl@3"
+export PKG_CONFIG_PATH="$OPENSSL_DIR/lib/pkgconfig"
+```
+
+Linux:
+```bash
+# Debian/Ubuntu
+sudo apt-get install -y libssl-dev pkg-config
+# Fedora/RHEL
+sudo dnf install -y openssl-devel pkgconfig
+```
+
 ## Quickstart (5 minutes)
 
 ### 1. Initialize sv in your repo
