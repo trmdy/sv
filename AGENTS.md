@@ -43,9 +43,6 @@ When in doubt: ask first.
 - No mass reformatting.
 - No “cleanup” outside the leased scope.
 
-### Beads hygiene
-
-- Close Beads tasks immediately when done; do not leave completed work in `in_progress`.
 
 ---
 
@@ -55,8 +52,6 @@ When in doubt: ask first.
 2) Check MCP Agent Mail:
    - read inbox / recent thread activity
    - see if leases already exist on your target paths
-3) Pick/confirm the task source (Beads is default):
-   - `bd ready --json`
 4) Announce intent (Agent Mail):
    - task id (if any), goal, target paths, expected outputs
 5) Reserve files BEFORE editing (Agent Mail leases):
@@ -85,19 +80,8 @@ If MCP Agent Mail tools are not available in your harness/runtime, tell the user
 
 ---
 
-## 4) Task System (Beads is default)
-
-Beads (`bd`) is the canonical task tracker.
-
-- Quickstart to get a full overview over bd functionality: `bd quickstart`.
-- Find ready work: `bd ready --json`
-- Claim work: `bd update <id> --status in_progress --json`
-- Create follow-ups: `bd create "Title" -t task -p 2 --json`
-- Close work: `bd close <id> --reason "…" --json` (must close beads immediately when done; do not leave completed work in `in_progress`)
 
 Project state:
-- `.beads/` is authoritative and should be committed alongside related code changes.
-- Do not hand-edit beads JSONL; use `bd`.
 
 ---
 
@@ -152,7 +136,6 @@ A PR description must include:
 - Why (goal/context)
 - How verified (exact commands + results)
 - Risk areas / follow-ups
-- Links/refs: Beads id(s) + Agent Mail thread (if available)
 
 ---
 
@@ -166,17 +149,9 @@ A PR description must include:
   - If the harness supports listing MCP tools, do that.
   - Otherwise ask the user for the local integration commands.
 
-### Beads — `bd` (tasks)
-- Start here: `bd quickstart`
-- Help: `bd --help`
-- Ready work: `bd ready --json`
 
-### Beads Viewer — `bv` (triage / planning)
 - IMPORTANT: avoid interactive TUI unless explicitly requested.
 - Prefer robot outputs (examples; adjust to your version):
-  - `bv --robot-triage`
-  - `bv --robot-next`
-- Help: `bv --help`
 
 ### CASS — `cass` (cross-agent history search)
 - IMPORTANT: never run bare `cass` (interactive).
@@ -209,45 +184,20 @@ If you learn something that will save future time, update `agent_docs/`:
 Keep `AGENTS.md` short and operational.
 Put repo-specific, evolving knowledge in `agent_docs/`.
 
-<!-- bv-agent-instructions-v1 -->
 
 ---
 
-## Beads Workflow Integration
 
-This project uses [beads_viewer](https://github.com/Dicklesworthstone/beads_viewer) for issue tracking. Issues are stored in `.beads/` and tracked in git.
-
-### Essential Commands
-
-```bash
-# View issues (launches TUI - avoid in automated sessions)
-bv
-
-# CLI commands for agents (use these instead)
-bd ready              # Show issues ready to work (no blockers)
-bd list --status=open # All open issues
-bd show <id>          # Full issue details with dependencies
-bd create --title="..." --type=task --priority=2
-bd update <id> --status=in_progress
-bd close <id> --reason="Completed"
-bd close <id1> <id2>  # Close multiple issues at once
-bd sync               # Commit and push changes
-```
+This project uses `tk` for issue tracking. Run `tk help` when you need it.
 
 ### Workflow Pattern
 
-1. **Start**: Run `bd ready` to find actionable work
-2. **Claim**: Use `bd update <id> --status=in_progress`
 3. **Work**: Implement the task
-4. **Complete**: Use `bd close <id>` immediately when done (no completed tasks should remain `in_progress`)
-5. **Sync**: Always run `bd sync` at session end
 
 ### Key Concepts
 
-- **Dependencies**: Issues can block other issues. `bd ready` shows only unblocked work.
 - **Priority**: P0=critical, P1=high, P2=medium, P3=low, P4=backlog (use numbers, not words)
 - **Types**: task, bug, feature, epic, question, docs
-- **Blocking**: `bd dep add <issue> <depends-on>` to add dependencies
 
 ### Session Protocol
 
@@ -256,19 +206,11 @@ bd sync               # Commit and push changes
 ```bash
 git status              # Check what changed
 git add <files>         # Stage code changes
-bd close <id> --reason="Completed"  # Close completed beads before syncing
-bd sync                 # Commit beads changes
 git commit -m "..."     # Commit code
-bd sync                 # Commit any new beads changes
 git push                # Push to remote
 ```
 
 ### Best Practices
 
-- Check `bd ready` at session start to find available work
 - Update status as you work (in_progress → closed immediately on completion)
-- Create new issues with `bd create` when you discover tasks
 - Use descriptive titles and set appropriate priority/type
-- Always `bd sync` before ending session
-
-<!-- end-bv-agent-instructions -->
