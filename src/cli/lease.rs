@@ -1,8 +1,9 @@
 //! sv lease subcommand implementations
 //!
-//! Provides lease management commands: ls, who, renew, break
+//! Provides lease management commands: ls, who, renew, break, wait
 
 use std::path::PathBuf;
+use std::time::{Duration as StdDuration, Instant};
 
 // chrono::Utc is used via Lease methods
 use uuid::Uuid;
@@ -715,6 +716,242 @@ pub fn run_break(options: BreakOptions) -> Result<()> {
     }
     
     Ok(())
+}
+
+// =============================================================================
+// sv lease wait
+// =============================================================================
+
+/// Options for the lease wait command
+pub struct WaitOptions {
+    pub targets: Vec<String>,
+    pub timeout: Option<String>,
+    pub poll: String,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+#[derive(serde::Serialize)]
+struct WaitReport {
+    targets: Vec<String>,
+    waited_ms: u64,
+    timeout_ms: Option<u64>,
+}
+
+enum WaitTarget {
+    Id { id: Uuid, raw: String },
+    Path { path: String },
+}
+
+struct WaitTargetState {
+    target: WaitTarget,
+    seen: bool,
+}
+
+/// Run the lease wait command
+pub fn run_wait(options: WaitOptions) -> Result<()> {
+    if options.targets.is_empty() {
+        return Err(Error::InvalidArgument(
+            "lease wait requires at least one target".to_string(),
+        ));
+    }
+
+    let poll_duration = parse_positive_duration("poll", &options.poll)?;
+    let timeout_duration = match options.timeout.as_deref() {
+        Some(timeout) => Some(parse_positive_duration("timeout", timeout)?),
+        None => None,
+    };
+
+    // Discover repository
+    let start = options.repo.clone().unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
+
+    let repository = git2::Repository::discover(&start)
+        .map_err(|_| Error::RepoNotFound(start.clone()))?;
+
+    let workdir = repository
+        .workdir()
+        .ok_or_else(|| Error::NotARepo(start.clone()))?
+        .to_path_buf();
+
+    let common_dir = resolve_common_dir(&repository)?;
+    let storage = Storage::new(workdir.clone(), common_dir.clone(), workdir.clone());
+
+    if !storage.is_initialized() {
+        return Err(Error::OperationFailed(
+            "sv not initialized. Run 'sv init' first.".to_string(),
+        ));
+    }
+
+    let mut targets = parse_wait_targets(options.targets.clone())?;
+    let start_time = Instant::now();
+
+    loop {
+        let existing_leases: Vec<Lease> = storage.read_jsonl(&storage.leases_file())?;
+        let mut store = LeaseStore::from_vec(existing_leases);
+        store.expire_stale();
+
+        let (active_targets, missing_ids) = wait_target_statuses(&store, &mut targets);
+
+        if !missing_ids.is_empty() {
+            return Err(Error::LeaseNotFound(missing_ids.join(", ")));
+        }
+
+        if active_targets.is_empty() {
+            let waited_ms = start_time.elapsed().as_millis() as u64;
+            if options.json {
+                let report = WaitReport {
+                    targets: options.targets.clone(),
+                    waited_ms,
+                    timeout_ms: timeout_duration.map(|d| d.as_millis() as u64),
+                };
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else if !options.quiet {
+                let waited = format_elapsed(start_time.elapsed());
+                if waited_ms == 0 {
+                    println!("No active leases for {}", options.targets.join(", "));
+                } else {
+                    println!(
+                        "Leases expired for {} (waited {})",
+                        options.targets.join(", "),
+                        waited
+                    );
+                }
+            }
+            return Ok(());
+        }
+
+        if let Some(timeout) = timeout_duration {
+            if start_time.elapsed() >= timeout {
+                return Err(Error::OperationFailed(format!(
+                    "timed out after {} waiting for leases: {}",
+                    format_elapsed(timeout),
+                    active_targets.join(", ")
+                )));
+            }
+        }
+
+        sleep_with_timeout(poll_duration, timeout_duration, start_time);
+    }
+}
+
+fn parse_wait_targets(targets: Vec<String>) -> Result<Vec<WaitTargetState>> {
+    let mut parsed = Vec::new();
+
+    for target in targets {
+        let trimmed = target.trim();
+        if trimmed.is_empty() {
+            return Err(Error::InvalidArgument(
+                "lease wait target cannot be empty".to_string(),
+            ));
+        }
+
+        if let Ok(uuid) = Uuid::parse_str(trimmed) {
+            parsed.push(WaitTargetState {
+                target: WaitTarget::Id {
+                    id: uuid,
+                    raw: trimmed.to_string(),
+                },
+                seen: false,
+            });
+        } else {
+            parsed.push(WaitTargetState {
+                target: WaitTarget::Path {
+                    path: trimmed.to_string(),
+                },
+                seen: true,
+            });
+        }
+    }
+
+    Ok(parsed)
+}
+
+fn wait_target_statuses(
+    store: &LeaseStore,
+    targets: &mut [WaitTargetState],
+) -> (Vec<String>, Vec<String>) {
+    let mut active_targets = Vec::new();
+    let mut missing_ids = Vec::new();
+
+    for target in targets {
+        match &target.target {
+            WaitTarget::Id { id, raw } => {
+                if let Some(lease) = store.find(id) {
+                    target.seen = true;
+                    if lease.is_active() {
+                        active_targets.push(raw.clone());
+                    }
+                } else if !target.seen {
+                    missing_ids.push(raw.clone());
+                }
+            }
+            WaitTarget::Path { path } => {
+                if store.overlapping_path(path).next().is_some() {
+                    active_targets.push(path.clone());
+                }
+            }
+        }
+    }
+
+    (active_targets, missing_ids)
+}
+
+fn parse_positive_duration(label: &str, value: &str) -> Result<StdDuration> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(Error::InvalidArgument(format!(
+            "{label} cannot be empty"
+        )));
+    }
+
+    let duration = parse_duration(trimmed)?;
+    if duration <= chrono::Duration::zero() {
+        return Err(Error::InvalidArgument(format!(
+            "{label} must be positive"
+        )));
+    }
+
+    duration.to_std().map_err(|_| {
+        Error::InvalidArgument(format!("{label} must be positive"))
+    })
+}
+
+fn format_elapsed(duration: StdDuration) -> String {
+    let total_seconds = duration.as_secs();
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    if hours > 0 {
+        format!("{}h {}m {}s", hours, minutes, seconds)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    }
+}
+
+fn sleep_with_timeout(
+    poll: StdDuration,
+    timeout: Option<StdDuration>,
+    start_time: Instant,
+) {
+    if let Some(limit) = timeout {
+        let elapsed = start_time.elapsed();
+        if elapsed >= limit {
+            return;
+        }
+        let remaining = limit - elapsed;
+        let sleep_for = if poll > remaining { remaining } else { poll };
+        if !sleep_for.is_zero() {
+            std::thread::sleep(sleep_for);
+        }
+    } else {
+        std::thread::sleep(poll);
+    }
 }
 
 /// Find a lease by full UUID or prefix

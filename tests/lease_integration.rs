@@ -92,6 +92,34 @@ fn release_clears_lease() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn wait_until_lease_expires() -> Result<(), Box<dyn std::error::Error>> {
+    let repo = TestRepo::init()?;
+    repo.init_sv_dirs()?;
+
+    Command::cargo_bin("sv")?
+        .current_dir(repo.path())
+        .args(["take", "src/wait.rs", "--ttl", "1s"])
+        .assert()
+        .success();
+
+    Command::cargo_bin("sv")?
+        .current_dir(repo.path())
+        .args([
+            "lease",
+            "wait",
+            "src/wait.rs",
+            "--timeout",
+            "5s",
+            "--poll",
+            "1s",
+        ])
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+#[test]
 fn ownerless_lease_does_not_block_commit() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;

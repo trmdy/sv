@@ -68,7 +68,7 @@ Commands (high level)
   sv switch                 Resolve workspace path for fast switching
   sv take                   Create leases on paths/globs
   sv release                Release leases
-  sv lease ls|who|renew|break Inspect/manage leases
+  sv lease ls|who|renew|break|wait Inspect/manage leases
   sv protect status|add|off|rm Protected paths
   sv commit                 Commit with sv checks + Change-Id
   sv task new|list|show|start|status|close|comment|sync|compact|prefix  Tasks
@@ -235,6 +235,7 @@ Examples:
   sv lease ls
   sv lease who src/auth/token.rs
   sv lease renew 01HZXJ6ZP9QK3A5T --ttl 4h
+  sv lease wait src/auth/** --timeout 10m
 "#)]
     Lease(LeaseCommands),
 
@@ -637,6 +638,27 @@ Examples:
         /// Reason for breaking (required)
         #[arg(long, required = true)]
         reason: String,
+    },
+
+    /// Wait for leases to expire
+    #[command(long_about = r#"Wait for leases to expire or be released.
+
+Examples:
+  sv lease wait 01HZXJ6ZP9QK3A5T
+  sv lease wait src/auth/** --timeout 10m
+"#)]
+    Wait {
+        /// Lease IDs or pathspecs to wait on
+        #[arg(required = true)]
+        targets: Vec<String>,
+
+        /// Max time to wait (e.g., "10m", "30s")
+        #[arg(long)]
+        timeout: Option<String>,
+
+        /// Poll interval while waiting
+        #[arg(long, default_value = "1s")]
+        poll: String,
     },
 }
 
@@ -1954,6 +1976,16 @@ impl Cli {
                         ids,
                         reason,
                         actor,
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                LeaseCommands::Wait { targets, timeout, poll } => {
+                    lease::run_wait(lease::WaitOptions {
+                        targets,
+                        timeout,
+                        poll,
                         repo,
                         json,
                         quiet,
