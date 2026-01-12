@@ -25,6 +25,7 @@
 //! - `actor`: Actor identity management
 //! - `storage`: File storage and directory management
 //! - `lock`: File locking and atomic operations for concurrency safety
+//! - `task`: Task management and storage
 
 pub mod actor;
 pub mod change_id;
@@ -45,6 +46,7 @@ pub mod refs;
 pub mod risk;
 pub mod selector;
 pub mod storage;
+pub mod task;
 pub mod undo;
 pub mod workspace;
 
