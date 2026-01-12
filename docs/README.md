@@ -10,6 +10,7 @@
 ## Docs map
 - Repo map: `repo_map.md`
 - Gotchas: `gotchas.md`
+- Task viewer spec: `task_viewer.md`
 - Runbooks:
   - `runbooks/dev.md`
   - `runbooks/test.md`
