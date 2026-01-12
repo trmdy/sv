@@ -9,5 +9,9 @@ Cargo.lock
 # sv local state (per-workspace)
 .sv/
 
+# sv tasks temp/lock files
+.tasks/*.lock
+.tasks/*.tmp
+
 # fmail
 .fmail

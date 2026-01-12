@@ -230,12 +230,11 @@ impl TaskStore {
 
     pub fn generate_task_id(&self) -> Result<String> {
         let prefix = self.config.id_prefix.trim();
-        let prefix_norm = normalize_id(prefix);
         let snapshot = self.snapshot_readonly()?;
         let mut existing_suffixes = HashSet::new();
         for task in snapshot.tasks {
             let id_norm = normalize_id(&task.id);
-            let suffix = extract_suffix_normalized(&id_norm, &prefix_norm);
+            let suffix = suffix_from_id(&id_norm);
             existing_suffixes.insert(suffix.to_string());
         }
 
@@ -257,12 +256,8 @@ impl TaskStore {
             return Err(Error::InvalidArgument("task id cannot be empty".to_string()));
         }
 
-        let prefix = self.config.id_prefix.trim();
-        let prefix_norm = normalize_id(prefix);
         let trimmed_norm = normalize_id(trimmed);
-        let candidate_norm = strip_prefix_normalized(&trimmed_norm, &prefix_norm)
-            .unwrap_or(trimmed_norm.as_str())
-            .to_string();
+        let candidate_norm = suffix_from_id(&trimmed_norm).to_string();
         if candidate_norm.is_empty() {
             return Err(Error::InvalidArgument("task id cannot be empty".to_string()));
         }
@@ -273,7 +268,7 @@ impl TaskStore {
 
         for task in snapshot.tasks {
             let id_norm = normalize_id(&task.id);
-            let suffix_norm = extract_suffix_normalized(&id_norm, &prefix_norm);
+            let suffix_norm = suffix_from_id(&id_norm);
             if id_norm == trimmed_norm || suffix_norm == trimmed_norm {
                 exact.push(task.id.clone());
                 continue;
@@ -920,18 +915,26 @@ fn normalize_id(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
-fn strip_prefix_normalized<'a>(value_norm: &'a str, prefix_norm: &str) -> Option<&'a str> {
+fn suffix_from_id<'a>(id_norm: &'a str) -> &'a str {
+    let mut earliest = None;
     for delim in TASK_ID_DELIMS {
-        let full = format!("{prefix_norm}{delim}");
-        if let Some(stripped) = value_norm.strip_prefix(&full) {
-            return Some(stripped);
+        if let Some(idx) = id_norm.find(delim) {
+            earliest = match earliest {
+                Some(current) => Some(std::cmp::min(current, idx)),
+                None => Some(idx),
+            };
         }
     }
-    None
-}
-
-fn extract_suffix_normalized<'a>(id_norm: &'a str, prefix_norm: &str) -> &'a str {
-    strip_prefix_normalized(id_norm, prefix_norm).unwrap_or(id_norm)
+    if let Some(idx) = earliest {
+        let start = idx + 1;
+        if start < id_norm.len() {
+            &id_norm[start..]
+        } else {
+            ""
+        }
+    } else {
+        id_norm
+    }
 }
 
 #[cfg(test)]
@@ -1015,7 +1018,7 @@ mod tests {
             generated_at: Utc::now(),
             tasks: vec![
                 TaskRecord {
-                    id: "prefix-ab1".to_string(),
+                    id: "old-ab1".to_string(),
                     title: "One".to_string(),
                     status: "open".to_string(),
                     created_at: Utc::now(),
@@ -1053,7 +1056,7 @@ mod tests {
                     last_comment_at: None,
                 },
                 TaskRecord {
-                    id: "prefix-a9b".to_string(),
+                    id: "legacy-a9b".to_string(),
                     title: "Three".to_string(),
                     status: "open".to_string(),
                     created_at: Utc::now(),
@@ -1080,11 +1083,11 @@ mod tests {
 
         assert_eq!(
             store.resolve_task_id("ab").expect("resolve"),
-            "prefix-ab1"
+            "old-ab1"
         );
         assert_eq!(
             store.resolve_task_id("AB").expect("resolve"),
-            "prefix-ab1"
+            "old-ab1"
         );
         assert_eq!(
             store.resolve_task_id("b").expect("resolve"),
@@ -1092,19 +1095,19 @@ mod tests {
         );
         assert_eq!(
             store.resolve_task_id("a9").expect("resolve"),
-            "prefix-a9b"
+            "legacy-a9b"
         );
         assert_eq!(
-            store.resolve_task_id("prefix-ab1").expect("resolve"),
-            "prefix-ab1"
+            store.resolve_task_id("old-ab1").expect("resolve"),
+            "old-ab1"
         );
         assert_eq!(
-            store.resolve_task_id("prefix/ab1").expect("resolve"),
-            "prefix-ab1"
+            store.resolve_task_id("old/ab1").expect("resolve"),
+            "old-ab1"
         );
         assert_eq!(
-            store.resolve_task_id("PREFIX/a9b").expect("resolve"),
-            "prefix-a9b"
+            store.resolve_task_id("LEGACY/a9b").expect("resolve"),
+            "legacy-a9b"
         );
 
         let err = store.resolve_task_id("a").expect_err("ambiguous");

@@ -180,7 +180,36 @@ fn ensure_gitignore(repo_root: &Path) -> Result<bool> {
         String::new()
     };
 
-    if has_sv_ignore(&existing) {
+    let mut additions = Vec::new();
+    let entries = parse_gitignore_entries(&existing);
+
+    if !contains_any(
+        &entries,
+        &[".sv", ".sv/", "/.sv", "/.sv/"],
+    ) {
+        additions.push("# sv workspace-local state".to_string());
+        additions.push(".sv/".to_string());
+    }
+
+    let mut task_patterns = Vec::new();
+    if !contains_any(
+        &entries,
+        &[".tasks/*.lock", "/.tasks/*.lock"],
+    ) {
+        task_patterns.push(".tasks/*.lock".to_string());
+    }
+    if !contains_any(
+        &entries,
+        &[".tasks/*.tmp", "/.tasks/*.tmp"],
+    ) {
+        task_patterns.push(".tasks/*.tmp".to_string());
+    }
+    if !task_patterns.is_empty() {
+        additions.push("# sv task temp files".to_string());
+        additions.extend(task_patterns);
+    }
+
+    if additions.is_empty() {
         return Ok(false);
     }
 
@@ -188,22 +217,28 @@ fn ensure_gitignore(repo_root: &Path) -> Result<bool> {
     if !updated.is_empty() && !updated.ends_with('\n') {
         updated.push('\n');
     }
-    updated.push_str(".sv/\n");
+    updated.push_str(&additions.join("\n"));
+    updated.push('\n');
     std::fs::write(&path, updated)?;
     Ok(true)
 }
 
-fn has_sv_ignore(contents: &str) -> bool {
-    contents.lines().any(|line| {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            return false;
-        }
-        trimmed == ".sv"
-            || trimmed == ".sv/"
-            || trimmed.starts_with(".sv/")
-            || trimmed.starts_with(".sv\\")
-    })
+fn parse_gitignore_entries(contents: &str) -> std::collections::HashSet<String> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .collect()
+}
+
+fn contains_any(entries: &std::collections::HashSet<String>, patterns: &[&str]) -> bool {
+    patterns.iter().any(|pattern| entries.contains(*pattern))
 }
 
 fn ensure_dir(path: &Path) -> Result<bool> {

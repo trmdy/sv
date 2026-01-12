@@ -48,6 +48,7 @@ Storage layout
   .sv/               Workspace-local state (ignored)
   .sv/worktrees/     Default root for new workspaces (unless --dir is used)
   .git/sv/           Shared local state (leases, registry, oplog, hoist state)
+  .tasks/            Task log + snapshot (tracked)
 
 Output contracts
   --json   Machine-readable output with envelope:
@@ -102,6 +103,7 @@ Tips for agent automation
   - Use --json for parsing; prefer --events for continuous monitoring.
   - Treat ownerless leases as advisory unless policy says otherwise.
   - Acquire leases before editing paths; release when done.
+  - Tasks: if tasks.id_prefix is missing or still "sv", run `sv task prefix <repo>`.
 "#;
 
 /// sv - Simultaneous Versioning

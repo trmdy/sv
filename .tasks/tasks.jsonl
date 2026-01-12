@@ -1,0 +1,4 @@
+{"event_id":"01KERH1G86GJMK0JB54PATPRGK","task_id":"01KERH1G85E4HJDTENYTW6EP6T","type":"task_created","timestamp":"2026-01-12T07:17:03.878Z","title":"Test task","status":"open"}
+{"event_id":"01KERHAHGYA310ZC7QP6X41VY0","task_id":"01KERHAHGYAXBTVD5Z0HT2DXF2","type":"task_created","timestamp":"2026-01-12T07:22:00.094296Z","title":"Do something","status":"open"}
+{"event_id":"01KERHB890NJSADP6WT3P5CQ1B","task_id":"01KERHAHGYAXBTVD5Z0HT2DXF2","type":"task_started","timestamp":"2026-01-12T07:22:23.392226Z","workspace_id":"d6b3a870-66bf-4110-b923-636275346fb5","workspace":"my-ws","branch":"sv/ws/my-ws"}
+{"event_id":"01KERHF0N74YB9FGA5GT23V3KV","task_id":"01KERHAHGYAXBTVD5Z0HT2DXF2","type":"task_closed","timestamp":"2026-01-12T07:24:26.663787Z","status":"closed","workspace_id":"d6b3a870-66bf-4110-b923-636275346fb5","workspace":"my-ws","branch":"sv/ws/my-ws"}

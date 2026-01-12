@@ -79,7 +79,7 @@ older_than = "180d"
 - Close task -> status in `closed_statuses`, optional note.
 - List/show prefers shared snapshot; falls back to fold log.
 - Sync between participants: `git pull` brings `.tasks/*`, then `sv task sync` rebuilds snapshot + refreshes shared cache.
-- Task IDs are case-insensitive; can be referenced by unique prefix of the suffix (e.g., `ab`, `a9`), or full ID (with or without `id_prefix-`).
+- Task IDs are case-insensitive; can be referenced by unique prefix of the suffix (e.g., `ab`, `a9`), or full ID (any prefix). Changing `id_prefix` does not affect existing tasks.
 
 ## Compaction
 - Manual by default: `sv task compact`.
