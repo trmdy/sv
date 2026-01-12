@@ -47,6 +47,7 @@ pub mod risk;
 pub mod selector;
 pub mod storage;
 pub mod task;
+pub mod ui;
 pub mod undo;
 pub mod workspace;
 
