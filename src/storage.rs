@@ -80,6 +80,11 @@ impl Storage {
         self.workspace_root.join(LOCAL_DIR)
     }
 
+    /// Path to the workspace root directory
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
     /// Path to the shared `.git/sv/` directory
     pub fn shared_dir(&self) -> PathBuf {
         self.git_dir.join(SHARED_DIR)
