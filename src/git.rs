@@ -782,6 +782,17 @@ pub fn commits_ahead(repo: &Repository, base_ref: &str, branch_ref: &str) -> Res
     Ok(commits)
 }
 
+/// Check whether `ancestor_ref` is an ancestor of `descendant_ref`.
+pub fn is_ancestor(repo: &Repository, ancestor_ref: &str, descendant_ref: &str) -> Result<bool> {
+    let ancestor = repo.revparse_single(ancestor_ref)?.peel_to_commit()?.id();
+    let descendant = repo.revparse_single(descendant_ref)?.peel_to_commit()?.id();
+    if ancestor == descendant {
+        return Ok(true);
+    }
+    repo.graph_descendant_of(descendant, ancestor)
+        .map_err(Error::Git)
+}
+
 /// Compute a stable patch-id for a commit.
 ///
 /// Uses `git patch-id --stable` to match Git's own dedup behavior.
@@ -1267,6 +1278,36 @@ mod tests {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].path, PathBuf::from("new_file.txt"));
         assert_eq!(changes[0].status, FileStatus::Added);
+    }
+
+    #[test]
+    fn test_is_ancestor() {
+        let (temp, repo) = init_test_repo();
+        let base_branch = repo
+            .head()
+            .ok()
+            .and_then(|head| head.shorthand().map(String::from))
+            .unwrap_or_else(|| "master".to_string());
+
+        Command::new("git")
+            .args(["checkout", "-b", "feature"])
+            .current_dir(temp.path())
+            .output()
+            .unwrap();
+        std::fs::write(temp.path().join("feature.txt"), "feature\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(temp.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "feature work"])
+            .current_dir(temp.path())
+            .output()
+            .unwrap();
+
+        assert!(is_ancestor(&repo, &base_branch, "feature").unwrap());
+        assert!(!is_ancestor(&repo, "feature", &base_branch).unwrap());
     }
 
     #[test]
