@@ -132,8 +132,10 @@ sv ws new agent1                    # Create workspace with branch sv/ws/agent1
 sv ws new agent2 --base develop     # Use different base branch
 sv ws list                          # List all workspaces
 sv ws info agent1                   # Detailed info (branch, ahead/behind, leases)
+sv switch agent1 --path             # Print path for quick switching
 sv ws here --name local             # Register current directory as workspace
 sv ws rm agent1                     # Remove workspace
+sv ws clean --dest main             # Remove merged workspaces
 ```
 
 ### Leases
@@ -223,6 +225,9 @@ sv hoist -s 'ws(active) & ahead("main")' -d main --strategy stack
 # Dry run to see what would happen
 sv hoist -s "agent*" -d main --dry-run
 
+# Remove merged workspaces after apply
+sv hoist -s 'ws(active)' -d main --rm
+
 # Continue past conflicts, recording them for later
 sv hoist -s 'ws(active)' -d main --continue-on-conflict
 ```
@@ -287,6 +292,7 @@ Event envelope:
 | `sv status` | Show current workspace summary |
 | `sv actor set\|show` | Manage actor identity |
 | `sv ws new\|list\|info\|rm\|here` | Workspace management |
+| `sv switch` | Resolve workspace path for fast switching |
 | `sv take` | Create lease reservations |
 | `sv release` | Release leases |
 | `sv lease ls\|who\|renew\|break` | Inspect and manage leases |

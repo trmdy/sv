@@ -43,6 +43,7 @@ sv commit --force-lease
 ```bash
 sv ws list
 sv ws info agent1
+sv switch agent1 --path
 sv risk
 ```
 

@@ -7,6 +7,7 @@
 - `src/`: CLI entry point and library modules (currently `main.rs` only).
 - `agent_docs/`: runbooks, workflows, gotchas, and decisions for agents.
 - `.beads/`: task tracker state (use `bd`; do not hand-edit).
+- `.tasks/`: sv task manager state (tracked).
 
 ## agent_docs/
 - `agent_docs/README.md`: index and required reading order.
