@@ -234,6 +234,8 @@ fn select_preferred(prefer: Option<Prefer>, commits: &[Oid]) -> Oid {
 mod tests {
     use super::*;
     use std::path::Path;
+    use std::sync::atomic::{AtomicI64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn init_repo() -> (tempfile::TempDir, Repository) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -244,6 +246,16 @@ mod tests {
             .set_str("user.email", "tester@example.com")
             .expect("user.email");
         (dir, repo)
+    }
+
+    fn unique_signature_time() -> git2::Time {
+        static COUNTER: AtomicI64 = AtomicI64::new(0);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let offset = 0;
+        git2::Time::new(now + COUNTER.fetch_add(1, Ordering::SeqCst), offset)
     }
 
     fn commit_on_ref(
@@ -265,7 +277,17 @@ mod tests {
         index.write().expect("write index");
         let tree_id = index.write_tree().expect("write tree");
         let tree = repo.find_tree(tree_id).expect("tree");
-        let signature = repo.signature().expect("signature");
+        let base_signature = repo.signature().expect("signature");
+        let signature = git2::Signature::new(
+            base_signature
+                .name()
+                .unwrap_or("Tester"),
+            base_signature
+                .email()
+                .unwrap_or("tester@example.com"),
+            &unique_signature_time(),
+        )
+        .expect("signature");
 
         let parents = parent
             .map(|oid| repo.find_commit(oid).expect("parent commit"))
