@@ -177,7 +177,7 @@ pub fn infer_command_name_from_args() -> String {
         None => return "sv".to_string(),
     };
 
-    if matches!(command.as_str(), "ws" | "lease" | "protect" | "op" | "actor") {
+    if matches!(command.as_str(), "ws" | "lease" | "protect" | "op" | "actor" | "task") {
         while let Some(arg) = args.next() {
             if arg.starts_with('-') {
                 continue;

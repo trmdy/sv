@@ -16,6 +16,8 @@ mod op;
 mod protect;
 mod release;
 mod status;
+mod switch;
+mod task;
 mod take;
 mod ws;
 
@@ -61,12 +63,14 @@ Exit codes
 Commands (high level)
   sv init                   Initialize repo state
   sv actor set|show          Configure actor identity
-  sv ws new|list|info|rm|here Workspace management
+  sv ws new|list|info|rm|clean|here Workspace management
+  sv switch                 Resolve workspace path for fast switching
   sv take                   Create leases on paths/globs
   sv release                Release leases
   sv lease ls|who|renew|break Inspect/manage leases
   sv protect status|add|off|rm Protected paths
   sv commit                 Commit with sv checks + Change-Id
+  sv task new|list|show|start|status|close|comment|sync|compact|prefix  Tasks
   sv risk                   Overlap/conflict analysis
   sv onto                   Rebase/merge current workspace onto another
   sv hoist                  Bulk integrate workspaces into an integration branch
@@ -282,6 +286,18 @@ Examples:
         force_lease: bool,
     },
 
+    /// Task management
+    #[command(subcommand)]
+    #[command(long_about = r#"Manage tasks in this repo.
+
+Examples:
+  sv task new "Ship CLI help"
+  sv task list --status open
+  sv task start 01HZ...
+  sv task close 01HZ...
+"#)]
+    Task(TaskCommands),
+
     /// Risk assessment and conflict prediction
     #[command(long_about = r#"Show overlap risk across workspaces.
 
@@ -354,6 +370,22 @@ Examples:
 "#)]
     Status,
 
+    /// Resolve workspace path for fast switching
+    #[command(long_about = r#"Resolve workspace path for fast switching.
+
+Examples:
+  sv switch agent1
+  sv switch agent1 --path
+"#)]
+    Switch {
+        /// Workspace name
+        name: String,
+
+        /// Print only the workspace path (for `cd $(sv switch <name> --path)`)
+        #[arg(long)]
+        path: bool,
+    },
+
     /// Reposition current workspace onto another workspace's branch
     #[command(long_about = r#"Rebase or merge current workspace onto target workspace.
 
@@ -419,6 +451,18 @@ Examples:
         /// Skip the final fast-forward merge to dest (only update integration branch)
         #[arg(long)]
         no_apply: bool,
+
+        /// Close active tasks for matching workspaces
+        #[arg(long)]
+        close_tasks: bool,
+
+        /// Remove matching workspaces after a successful apply
+        #[arg(long)]
+        rm: bool,
+
+        /// Force workspace removal even with uncommitted changes (implies --rm)
+        #[arg(long, requires = "rm")]
+        rm_force: bool,
     },
 }
 
@@ -502,6 +546,31 @@ Examples:
         /// Force removal even with uncommitted changes
         #[arg(long)]
         force: bool,
+    },
+
+    /// Remove merged workspaces
+    #[command(long_about = r#"Remove merged workspaces in bulk.
+
+Examples:
+  sv ws clean --dest main
+  sv ws clean -s "ws(active)" --dry-run
+"#)]
+    Clean {
+        /// Selector to filter workspaces (default: ws(active))
+        #[arg(short, long)]
+        selector: Option<String>,
+
+        /// Destination ref to check merge status against (default: workspace base)
+        #[arg(long)]
+        dest: Option<String>,
+
+        /// Force removal even with uncommitted changes
+        #[arg(long)]
+        force: bool,
+
+        /// Dry run: show what would be removed without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -622,6 +691,148 @@ Examples:
         /// Don't error if pattern not found
         #[arg(long)]
         force: bool,
+    },
+}
+
+/// Task subcommands
+#[derive(Subcommand, Debug)]
+pub enum TaskCommands {
+    /// Create a new task
+    #[command(long_about = r#"Create a task.
+
+Examples:
+  sv task new "Ship CLI help"
+"#)]
+    New {
+        /// Task title
+        title: String,
+
+        /// Initial status (defaults to tasks.default_status)
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Task body/description
+        #[arg(long)]
+        body: Option<String>,
+    },
+
+    /// List tasks
+    #[command(long_about = r#"List tasks.
+
+Examples:
+  sv task list
+  sv task list --status open
+"#)]
+    #[command(visible_alias = "ls")]
+    List {
+        /// Filter by status
+        #[arg(long)]
+        status: Option<String>,
+    },
+
+    /// Show task details
+    #[command(long_about = r#"Show a task by ID.
+
+Examples:
+  sv task show 01HZ...
+"#)]
+    Show {
+        /// Task ID
+        id: String,
+    },
+
+    /// Start a task in the current workspace
+    #[command(long_about = r#"Mark a task as in progress.
+
+Examples:
+  sv task start 01HZ...
+"#)]
+    Start {
+        /// Task ID
+        id: String,
+    },
+
+    /// Change task status
+    #[command(long_about = r#"Change a task status.
+
+Examples:
+  sv task status 01HZ... under_review
+"#)]
+    Status {
+        /// Task ID
+        id: String,
+
+        /// New status
+        status: String,
+    },
+
+    /// Close a task
+    #[command(long_about = r#"Close a task.
+
+Examples:
+  sv task close 01HZ...
+"#)]
+    Close {
+        /// Task ID
+        id: String,
+
+        /// Closed status override
+        #[arg(long)]
+        status: Option<String>,
+    },
+
+    /// Add a comment
+    #[command(long_about = r#"Add a comment to a task.
+
+Examples:
+  sv task comment 01HZ... "Follow up with QA"
+"#)]
+    Comment {
+        /// Task ID
+        id: String,
+
+        /// Comment text
+        text: String,
+    },
+
+    /// Sync tracked + shared task logs and snapshots
+    #[command(long_about = r#"Merge tracked and shared logs, rebuild snapshot.
+
+Examples:
+  sv task sync
+"#)]
+    Sync,
+
+    /// Compact task log
+    #[command(long_about = r#"Compact closed task history.
+
+Examples:
+  sv task compact --older-than 180d
+"#)]
+    Compact {
+        /// Only compact tasks older than this duration
+        #[arg(long)]
+        older_than: Option<String>,
+
+        /// Only compact when log exceeds this size (MB)
+        #[arg(long)]
+        max_log_mb: Option<u64>,
+
+        /// Dry run (no changes)
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Show or set task ID prefix
+    #[command(long_about = r#"Show or set task ID prefix.
+
+Examples:
+  sv task prefix
+  sv task prefix proj
+"#)]
+    Prefix {
+        /// New prefix (alphanumeric)
+        prefix: Option<String>,
     },
 }
 
@@ -824,6 +1035,10 @@ pub struct HoistOptions {
     pub continue_on_conflict: bool,
     pub no_propagate_conflicts: bool,
     pub no_apply: bool,
+    pub close_tasks: bool,
+    pub rm: bool,
+    pub rm_force: bool,
+    pub actor: Option<String>,
     pub repo: Option<std::path::PathBuf>,
     pub json: bool,
     pub quiet: bool,
@@ -893,6 +1108,8 @@ pub struct HoistOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continue_on_conflict: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub task_warnings: Vec<HoistTaskWarning>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub conflicts: Vec<HoistConflictSummary>,
 }
 
@@ -902,6 +1119,15 @@ pub struct HoistConflictSummary {
     pub commit_id: String,
     pub workspace: String,
     pub files: Vec<String>,
+}
+
+/// Summary of active tasks during hoist
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HoistTaskWarning {
+    pub task_id: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 fn resolve_hoist_workspaces(
@@ -1020,6 +1246,9 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
     use uuid::Uuid;
     use crate::git;
     use crate::storage::{Storage, HoistState, HoistStatus, HoistCommit};
+    use crate::config::Config;
+    use crate::task::{TaskEvent, TaskEventType, TaskStore};
+    use crate::actor;
 
     // Parse and validate strategy
     let strategy: HoistStrategy = opts.strategy.parse()?;
@@ -1028,8 +1257,11 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
     // Open repository
     let repo = git::open_repo(opts.repo.as_deref())?;
     let workdir = git::workdir(&repo)?;
-    let git_dir = repo.path().to_path_buf();
-    let storage = Storage::new(workdir.clone(), git_dir, workdir);
+    let git_dir = git::common_dir(&repo);
+    let storage = Storage::new(workdir.clone(), git_dir, workdir.clone());
+    let config = Config::load_from_repo(&workdir);
+    let task_store = TaskStore::new(storage.clone(), config.tasks.clone());
+    let actor = actor::resolve_actor_optional(Some(&workdir), opts.actor.as_deref())?;
 
     let dest = match opts.dest {
         Some(dest) => dest,
@@ -1057,6 +1289,99 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
             "no workspaces match selector '{}'",
             opts.selector
         )));
+    }
+
+    let workspace_ids: Vec<String> = matching_workspaces
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect();
+    let workspace_names: Vec<String> = matching_workspaces
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect();
+    let mut task_warnings: Vec<HoistTaskWarning> = Vec::new();
+
+    let has_task_logs = task_store.tracked_log_path().exists() || task_store.shared_log_path().exists();
+    if has_task_logs {
+        let active_tasks = if opts.dry_run {
+            let snapshot = task_store.snapshot_readonly()?;
+            let closed: std::collections::HashSet<String> = task_store
+                .config()
+                .closed_statuses
+                .iter()
+                .cloned()
+                .collect();
+            snapshot
+                .tasks
+                .into_iter()
+                .filter(|task| {
+                    if closed.contains(&task.status) {
+                        return false;
+                    }
+                    let id_match = task
+                        .workspace_id
+                        .as_ref()
+                        .map(|id| workspace_ids.contains(id))
+                        .unwrap_or(false);
+                    let name_match = task
+                        .workspace
+                        .as_ref()
+                        .map(|name| workspace_names.contains(name))
+                        .unwrap_or(false);
+                    id_match || name_match
+                })
+                .collect::<Vec<_>>()
+        } else {
+            let policy = task_store.auto_compaction_policy()?;
+            let _ = task_store.sync(policy)?;
+            task_store.active_tasks_for_workspaces(&workspace_ids, &workspace_names)?
+        };
+
+        if !active_tasks.is_empty() {
+            task_warnings = active_tasks
+                .iter()
+                .map(|task| HoistTaskWarning {
+                    task_id: task.id.clone(),
+                    status: task.status.clone(),
+                    workspace: task.workspace.clone(),
+                })
+                .collect();
+
+            if opts.close_tasks && !opts.dry_run {
+                let close_status = task_store
+                    .config()
+                    .closed_statuses
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "closed".to_string());
+                task_store.validate_status(&close_status)?;
+                for task in active_tasks {
+                    let mut event = TaskEvent::new(TaskEventType::TaskClosed, task.id.clone());
+                    event.actor = actor.clone();
+                    event.status = Some(close_status.clone());
+                    event.workspace_id = task.workspace_id.clone();
+                    event.workspace = task.workspace.clone();
+                    event.branch = task.branch.clone();
+                    task_store.append_event(event)?;
+                }
+            }
+        }
+    }
+
+    if !task_warnings.is_empty() && !opts.json && !opts.quiet {
+        if opts.close_tasks {
+            let verb = if opts.dry_run { "Would close" } else { "Closed" };
+            println!("{verb} {} task(s):", task_warnings.len());
+        } else {
+            println!("Active tasks for selected workspaces:");
+        }
+        for task in &task_warnings {
+            let workspace = task.workspace.as_deref().unwrap_or("unknown");
+            println!("  - {} ({}, ws: {})", task.task_id, task.status, workspace);
+        }
+        if !opts.close_tasks {
+            println!("  hint: sv task close <id> or sv hoist --close-tasks");
+        }
     }
 
     let explicit_order: Vec<String> = matching_workspaces
@@ -1096,6 +1421,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
             status: "dry_run".to_string(),
             applied: false,
             continue_on_conflict: if opts.continue_on_conflict { Some(true) } else { None },
+            task_warnings: task_warnings.clone(),
             conflicts: Vec::new(),
         };
 
@@ -1280,6 +1606,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         status: status_str.to_string(),
         applied,
         continue_on_conflict: if opts.continue_on_conflict { Some(true) } else { None },
+        task_warnings: task_warnings.clone(),
         conflicts: conflict_output.clone(),
     };
 
@@ -1388,6 +1715,15 @@ impl Cli {
                     quiet,
                 })
             }
+            Commands::Switch { name, path } => {
+                switch::run(switch::SwitchOptions {
+                    name,
+                    path_only: path,
+                    repo,
+                    json,
+                    quiet,
+                })
+            }
             Commands::Onto { target, strategy, base, preflight } => {
                 onto::run(onto::OntoOptions {
                     target_workspace: target,
@@ -1443,6 +1779,17 @@ impl Cli {
                     ws::run_rm(ws::RmOptions {
                         name,
                         force,
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                WsCommands::Clean { selector, dest, force, dry_run } => {
+                    ws::run_clean(ws::CleanOptions {
+                        selector,
+                        dest,
+                        force,
+                        dry_run,
                         repo,
                         json,
                         quiet,
@@ -1564,6 +1911,99 @@ impl Cli {
                     quiet,
                 })
             }
+            Commands::Task(cmd) => match cmd {
+                TaskCommands::New { title, status, body } => {
+                    task::run_new(task::NewOptions {
+                        title,
+                        status,
+                        body,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::List { status } => {
+                    task::run_list(task::ListOptions {
+                        status,
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Show { id } => {
+                    task::run_show(task::ShowOptions {
+                        id,
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Start { id } => {
+                    task::run_start(task::StartOptions {
+                        id,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Status { id, status } => {
+                    task::run_status(task::StatusOptions {
+                        id,
+                        status,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Close { id, status } => {
+                    task::run_close(task::CloseOptions {
+                        id,
+                        status,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Comment { id, text } => {
+                    task::run_comment(task::CommentOptions {
+                        id,
+                        text,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Sync => {
+                    task::run_sync(task::SyncOptions {
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Compact { older_than, max_log_mb, dry_run } => {
+                    task::run_compact(task::CompactOptions {
+                        older_than,
+                        max_log_mb,
+                        dry_run,
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Prefix { prefix } => {
+                    task::run_prefix(task::PrefixOptions {
+                        prefix,
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+            }
             Commands::Risk { selector, base, simulate } => {
                 run_risk(RiskOptions {
                     selector,
@@ -1614,7 +2054,7 @@ impl Cli {
                     }
                 }
             }
-            Commands::Hoist { selector, dest, strategy, order, dry_run, continue_on_conflict, no_propagate_conflicts, no_apply } => {
+            Commands::Hoist { selector, dest, strategy, order, dry_run, continue_on_conflict, no_propagate_conflicts, no_apply, close_tasks, rm, rm_force } => {
                 run_hoist(HoistOptions {
                     selector,
                     dest,
@@ -1624,6 +2064,10 @@ impl Cli {
                     continue_on_conflict,
                     no_propagate_conflicts,
                     no_apply,
+                    close_tasks,
+                    rm,
+                    rm_force,
+                    actor,
                     repo,
                     json,
                     quiet,
