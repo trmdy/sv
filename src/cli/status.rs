@@ -14,6 +14,7 @@ use crate::lease::{Lease, LeaseStatus, LeaseStore};
 use crate::output::{emit_success, HumanOutput, OutputOptions};
 use crate::protect::{compute_status, load_override};
 use crate::storage::Storage;
+use crate::task::TaskStore;
 
 /// Options for the status command
 pub struct StatusOptions {
@@ -28,6 +29,7 @@ struct StatusReport {
     actor: String,
     workspace: WorkspaceSummary,
     leases: LeaseSummary,
+    tasks: TaskSummary,
     protect_overrides: usize,
     protected_blocking: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -64,11 +66,30 @@ struct LeaseSummary {
 }
 
 #[derive(serde::Serialize)]
+struct TaskSummary {
+    active: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tasks: Vec<TaskInfo>,
+}
+
+#[derive(serde::Serialize)]
 struct LeaseInfo {
     id: String,
     pathspec: String,
     strength: String,
     expires_at: String,
+}
+
+#[derive(serde::Serialize)]
+struct TaskInfo {
+    id: String,
+    title: String,
+    status: String,
+    updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    branch: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -138,6 +159,21 @@ pub fn run(options: StatusOptions) -> Result<()> {
         branch: workspace_branch.clone(),
         repo_root: repo_root.clone(),
         ahead_behind: ahead_behind.clone(),
+    };
+
+    let task_store = TaskStore::new(storage.clone(), config.tasks.clone());
+    let workspace_ids = workspace_entry
+        .as_ref()
+        .map(|entry| vec![entry.id.clone()])
+        .unwrap_or_default();
+    let workspace_names = workspace_entry
+        .as_ref()
+        .map(|entry| vec![entry.name.clone()])
+        .unwrap_or_default();
+    let active_tasks = if workspace_ids.is_empty() && workspace_names.is_empty() {
+        Vec::new()
+    } else {
+        task_store.active_tasks_for_workspaces(&workspace_ids, &workspace_names)?
     };
 
     let leases: Vec<Lease> = storage.read_jsonl(&storage.leases_file())?;
@@ -282,6 +318,14 @@ pub fn run(options: StatusOptions) -> Result<()> {
             status.base, status.ahead, status.behind
         ));
     }
+    human.push_detail(format!("active tasks: {}", active_tasks.len()));
+    for task in &active_tasks {
+        let mut line = format!("task {} [{}] {}", task.id, task.status, task.title);
+        if let Some(branch) = task.branch.as_ref() {
+            line.push_str(&format!(" (branch: {branch})"));
+        }
+        human.push_detail(line);
+    }
     human.push_detail(format!("active leases: {}", active_leases.len()));
     for lease in &owned_leases {
         human.push_detail(format!(
@@ -325,6 +369,20 @@ pub fn run(options: StatusOptions) -> Result<()> {
             expired: expired_count,
             conflicts: conflict_ids.len(),
             owned: owned_leases,
+        },
+        tasks: TaskSummary {
+            active: active_tasks.len(),
+            tasks: active_tasks
+                .into_iter()
+                .map(|task| TaskInfo {
+                    id: task.id,
+                    title: task.title,
+                    status: task.status,
+                    updated_at: task.updated_at.to_rfc3339(),
+                    workspace: task.workspace,
+                    branch: task.branch,
+                })
+                .collect(),
         },
         protect_overrides: override_count,
         protected_blocking: protected_files.len(),
