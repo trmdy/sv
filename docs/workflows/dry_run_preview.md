@@ -140,6 +140,21 @@ Example event:
   - branch ref that would be removed (if applicable)
   - warnings if uncommitted changes would require `--force`
 
+### `sv ws clean --dry-run`
+
+- Preview removal of merged workspaces.
+- Output shows:
+  - selector and destination ref used for merge checks
+  - workspaces that would be removed
+  - workspaces skipped (not merged, missing refs, current workspace)
+
+### `sv hoist --rm --dry-run`
+
+- Preview hoist plus workspace removal.
+- Output shows:
+  - hoist summary (selector, destination, strategy)
+  - workspaces that would be removed after apply
+
 ## Notes
 
 - Preview should never mutate the oplog.
