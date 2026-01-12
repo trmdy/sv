@@ -168,6 +168,33 @@ sv release src/auth/**              # Release by pathspec
 sv release <id>                     # Release by ID
 ```
 
+### Tasks
+
+Tasks are repo-scoped work items tracked in `.tasks/` and synced across worktrees.
+Statuses are configurable in `.sv.toml` (default: `open`, `in_progress`, `closed`).
+
+```bash
+# Set a repo prefix for task IDs
+sv task prefix acme
+
+# Create + start a task in the current workspace
+sv task new "Ship CLI help"
+sv task start acme-abc
+
+# Update status + comment
+sv task status acme-abc under_review
+sv task comment acme-abc "Waiting on QA"
+
+# List tasks (filters)
+sv task list --status open
+sv task list --workspace agent1
+sv task list --actor alice --updated-since 2025-01-01T00:00:00Z
+
+# Close + sync history
+sv task close acme-abc
+sv task sync
+```
+
 ### Protected Paths
 
 Protected paths are global guardrails that prevent accidental changes to critical files.
@@ -259,6 +286,11 @@ sv release src/auth/** --events -               # Explicit stdout
 - `workspace_removed` - emitted by `sv ws rm`
 - `commit_blocked` - emitted when policy blocks a commit
 - `commit_created` - emitted by `sv commit`
+- `task_created` - emitted by `sv task new`
+- `task_started` - emitted by `sv task start`
+- `task_status_changed` - emitted by `sv task status`
+- `task_closed` - emitted by `sv task close`
+- `task_commented` - emitted by `sv task comment`
 
 Event envelope:
 ```json
@@ -298,6 +330,7 @@ Event envelope:
 | `sv lease ls\|who\|renew\|break` | Inspect and manage leases |
 | `sv protect status\|add\|off\|rm` | Protected path management |
 | `sv commit` | Commit with sv checks |
+| `sv task new\|list\|show\|start\|status\|close\|comment\|sync\|compact\|prefix` | Task management |
 | `sv risk` | Overlap and conflict analysis |
 | `sv onto` | Reposition workspace onto another |
 | `sv hoist` | Bulk integration of workspaces |
@@ -379,6 +412,18 @@ allow_overlap_cooperative = true
 # Require --allow-overlap for strong lease overlaps
 require_flag_for_strong_overlap = true
 
+[tasks]
+id_prefix = "sv"
+statuses = ["open", "in_progress", "closed"]
+default_status = "open"
+in_progress_status = "in_progress"
+closed_statuses = ["closed"]
+
+[tasks.compaction]
+auto = false
+max_log_mb = 200
+older_than = "180d"
+
 [protect]
 # Default protection mode
 mode = "guard"
@@ -405,6 +450,10 @@ mode = "warn"
   leases.jsonl                # Lease records
   oplog/                      # Operation log entries
   hoist/                      # Hoist state and conflict records
+
+.tasks/                       # Task log + snapshot (tracked)
+  tasks.jsonl
+  tasks.snapshot.json
 
 .sv.toml                      # Configuration (tracked)
 ```

@@ -285,6 +285,53 @@ Removes workspace (Git worktree) and unregisters it (does not delete commits).
 
 ---
 
+### 5.3 Task commands
+
+Tasks are repo-scoped work items tracked in `.tasks/`. Status values are
+configurable in `.sv.toml` (defaults: `open`, `in_progress`, `closed`).
+
+#### `sv task new <title> [--status <s>] [--body <text>]`
+
+Create a task.
+
+#### `sv task list [--status <s>] [--workspace <name|id>] [--actor <name>] [--updated-since <rfc3339>]`
+
+List tasks with optional filters.
+
+#### `sv task show <id>`
+
+Show task details (including comments).
+
+#### `sv task start <id>`
+
+Mark task as in progress and associate it with the current workspace/branch.
+
+#### `sv task status <id> <status>`
+
+Set a task status (must be one of configured statuses).
+
+#### `sv task close <id> [--status <s>]`
+
+Close a task (status defaults to first entry in `closed_statuses`).
+
+#### `sv task comment <id> <text>`
+
+Add a comment to a task.
+
+#### `sv task sync`
+
+Merge tracked/shared logs and rebuild snapshot after pulling from other machines.
+
+#### `sv task compact [--older-than <dur>] [--max-log-mb <mb>] [--dry-run]`
+
+Compact task history by collapsing intermediate status changes for closed tasks.
+
+#### `sv task prefix [<prefix>]`
+
+Show or set the repo task ID prefix (alphanumeric).
+
+---
+
 ## 6. Lease system
 
 ### 6.1 Commands
@@ -525,7 +572,7 @@ Selectors must be supported by:
 
 ## 13. State and storage layout
 
-### 13.1 Tracked file
+### 13.1 Tracked files
 
 * `.sv.toml` (tracked)
 
@@ -534,6 +581,10 @@ Selectors must be supported by:
   * lease policy defaults
   * selector defaults (optional)
   * hoist defaults (optional)
+
+* `.tasks/` (tracked)
+
+  * task log + snapshot (`tasks.jsonl`, `tasks.snapshot.json`)
 
 ### 13.2 Workspace-local (ignored)
 
