@@ -24,6 +24,12 @@ const ULID_TIME_LEN: usize = 10;
 const ULID_RANDOM_LEN: usize = 16;
 const ULID_CHARSET: &str = "0123456789abcdefghjkmnpqrstvwxyz";
 const ULID_CHARSET_LEN: u128 = 32;
+const DEFAULT_TASK_PRIORITY: &str = "P2";
+const TASK_PRIORITIES: [&str; 5] = ["P0", "P1", "P2", "P3", "P4"];
+
+fn default_task_priority() -> String {
+    DEFAULT_TASK_PRIORITY.to_string()
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +37,7 @@ pub enum TaskEventType {
     TaskCreated,
     TaskStarted,
     TaskStatusChanged,
+    TaskPriorityChanged,
     TaskClosed,
     TaskCommented,
 }
@@ -50,6 +57,8 @@ pub struct TaskEvent {
     pub body: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,6 +80,7 @@ impl TaskEvent {
             title: None,
             body: None,
             status: None,
+            priority: None,
             workspace_id: None,
             workspace: None,
             branch: None,
@@ -84,6 +94,8 @@ pub struct TaskRecord {
     pub id: String,
     pub title: String,
     pub status: String,
+    #[serde(default = "default_task_priority")]
+    pub priority: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -562,6 +574,14 @@ impl TaskStore {
             }) {
                 keep_ids.insert(last_status.event_id.clone());
             }
+
+            if let Some(last_priority) = task_events
+                .iter()
+                .rev()
+                .find(|event| event.event_type == TaskEventType::TaskPriorityChanged)
+            {
+                keep_ids.insert(last_priority.event_id.clone());
+            }
         }
 
         let mut compacted: Vec<TaskEvent> = events
@@ -738,6 +758,14 @@ impl TaskStore {
         }
     }
 
+    pub fn normalize_priority(&self, priority: &str) -> Result<String> {
+        normalize_priority(priority)
+    }
+
+    pub fn default_priority(&self) -> String {
+        default_task_priority()
+    }
+
     fn closed_statuses(&self) -> HashSet<String> {
         self.config
             .closed_statuses
@@ -764,6 +792,22 @@ fn sort_events(events: &mut Vec<TaskEvent>) {
             .cmp(&b.timestamp)
             .then_with(|| a.event_id.cmp(&b.event_id))
     });
+}
+
+fn normalize_priority(priority: &str) -> Result<String> {
+    let trimmed = priority.trim();
+    if trimmed.is_empty() {
+        return Err(Error::InvalidArgument("priority cannot be empty".to_string()));
+    }
+
+    let normalized = trimmed.to_ascii_uppercase();
+    if TASK_PRIORITIES.iter().any(|value| value == &normalized) {
+        Ok(normalized)
+    } else {
+        Err(Error::InvalidArgument(format!(
+            "unknown task priority '{trimmed}' (expected P0-P4)"
+        )))
+    }
 }
 
 fn final_status(events: &[TaskEvent], config: &TasksConfig) -> Result<String> {
@@ -804,7 +848,8 @@ fn event_status(event: &TaskEvent, config: &TasksConfig) -> Result<Option<String
                     .cloned()
                     .unwrap_or_else(|| "closed".to_string())
             }),
-        TaskEventType::TaskCommented => return Ok(None),
+        TaskEventType::TaskCommented
+        | TaskEventType::TaskPriorityChanged => return Ok(None),
     };
 
     if !config.statuses.iter().any(|value| value == &status) {
@@ -843,6 +888,10 @@ fn apply_event(
                     "unknown task status '{status}'"
                 )));
             }
+            let priority = match event.priority.as_deref() {
+                Some(value) => normalize_priority(value)?,
+                None => default_task_priority(),
+            };
 
             let now = event.timestamp;
             map.insert(
@@ -851,6 +900,7 @@ fn apply_event(
                     id: event.task_id.clone(),
                     title,
                     status,
+                    priority,
                     created_at: now,
                     updated_at: now,
                     created_by: event.actor.clone(),
@@ -911,6 +961,21 @@ fn apply_event(
                 record.closed_at = None;
                 record.closed_by = None;
             }
+            record.workspace_id = event.workspace_id.clone().or(record.workspace_id.clone());
+            record.workspace = event.workspace.clone().or(record.workspace.clone());
+            record.branch = event.branch.clone().or(record.branch.clone());
+            record.updated_at = event.timestamp;
+            record.updated_by = event.actor.clone();
+        }
+        TaskEventType::TaskPriorityChanged => {
+            let record = map.get_mut(&event.task_id).ok_or_else(|| {
+                Error::InvalidArgument(format!("task not found: {}", event.task_id))
+            })?;
+            let priority = event
+                .priority
+                .as_deref()
+                .ok_or_else(|| Error::InvalidArgument("missing priority".to_string()))?;
+            record.priority = normalize_priority(priority)?;
             record.workspace_id = event.workspace_id.clone().or(record.workspace_id.clone());
             record.workspace = event.workspace.clone().or(record.workspace.clone());
             record.branch = event.branch.clone().or(record.branch.clone());
@@ -1018,8 +1083,26 @@ mod tests {
 
         let task = map.get("task-1").expect("task");
         assert_eq!(task.status, "in_progress");
+        assert_eq!(task.priority, DEFAULT_TASK_PRIORITY);
         assert_eq!(task.comments_count, 1);
         assert_eq!(task.workspace.as_deref(), Some("ws1"));
+    }
+
+    #[test]
+    fn priority_changes_update_record() {
+        let config = default_config();
+        let mut map = HashMap::new();
+        let mut create = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
+        create.title = Some("Test".to_string());
+        create.priority = Some("P1".to_string());
+        apply_event(&mut map, &create, &config).expect("create");
+
+        let mut change = TaskEvent::new(TaskEventType::TaskPriorityChanged, "task-1");
+        change.priority = Some("p0".to_string());
+        apply_event(&mut map, &change, &config).expect("priority");
+
+        let task = map.get("task-1").expect("task");
+        assert_eq!(task.priority, "P0");
     }
 
     #[test]
@@ -1113,6 +1196,7 @@ mod tests {
                     id: "old-ab1".to_string(),
                     title: "One".to_string(),
                     status: "open".to_string(),
+                    priority: default_task_priority(),
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                     created_by: None,
@@ -1132,6 +1216,7 @@ mod tests {
                     id: "prefix-b1c".to_string(),
                     title: "Two".to_string(),
                     status: "open".to_string(),
+                    priority: default_task_priority(),
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                     created_by: None,
@@ -1151,6 +1236,7 @@ mod tests {
                     id: "legacy-a9b".to_string(),
                     title: "Three".to_string(),
                     status: "open".to_string(),
+                    priority: default_task_priority(),
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                     created_by: None,

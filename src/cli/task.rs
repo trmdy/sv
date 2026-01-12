@@ -17,6 +17,7 @@ use crate::task::{CompactionPolicy, TaskDetails, TaskEvent, TaskEventType, TaskR
 pub struct NewOptions {
     pub title: String,
     pub status: Option<String>,
+    pub priority: Option<String>,
     pub body: Option<String>,
     pub actor: Option<String>,
     pub events: Option<String>,
@@ -27,6 +28,7 @@ pub struct NewOptions {
 
 pub struct ListOptions {
     pub status: Option<String>,
+    pub priority: Option<String>,
     pub workspace: Option<String>,
     pub actor: Option<String>,
     pub updated_since: Option<String>,
@@ -87,6 +89,16 @@ pub struct SyncOptions {
     pub quiet: bool,
 }
 
+pub struct PriorityOptions {
+    pub id: String,
+    pub priority: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
 pub struct CompactOptions {
     pub older_than: Option<String>,
     pub max_log_mb: Option<u64>,
@@ -121,6 +133,10 @@ pub fn run_new(options: NewOptions) -> Result<()> {
         .status
         .unwrap_or_else(|| ctx.store.config().default_status.clone());
     ctx.store.validate_status(&status)?;
+    let priority = match options.priority.as_deref() {
+        Some(value) => ctx.store.normalize_priority(value)?,
+        None => ctx.store.default_priority(),
+    };
 
     let task_id = ctx.store.generate_task_id()?;
     let mut event = TaskEvent::new(TaskEventType::TaskCreated, task_id.clone());
@@ -128,6 +144,7 @@ pub fn run_new(options: NewOptions) -> Result<()> {
     event.title = Some(title.to_string());
     event.body = options.body;
     event.status = Some(status.clone());
+    event.priority = Some(priority.clone());
     ctx.store.append_event(event.clone())?;
 
     let event_warning = emit_task_event(&mut event_sink, EventKind::TaskCreated, &event);
@@ -135,6 +152,7 @@ pub fn run_new(options: NewOptions) -> Result<()> {
     let output = TaskCreatedOutput {
         id: task_id.clone(),
         status: status.clone(),
+        priority: priority.clone(),
     };
 
     let mut human = HumanOutput::new("Task created");
@@ -143,6 +161,7 @@ pub fn run_new(options: NewOptions) -> Result<()> {
     }
     human.push_summary("ID", task_id);
     human.push_summary("Status", status);
+    human.push_summary("Priority", priority);
 
     emit_success(
         OutputOptions {
@@ -159,6 +178,11 @@ pub fn run_list(options: ListOptions) -> Result<()> {
     let ctx = load_context(options.repo, None, false)?;
     let updated_since = parse_timestamp("updated-since", options.updated_since.as_deref())?;
     let mut tasks = ctx.store.list(options.status.as_deref())?;
+
+    if let Some(priority) = options.priority.as_ref() {
+        let normalized = ctx.store.normalize_priority(priority)?;
+        tasks.retain(|task| task.priority == normalized);
+    }
 
     if let Some(actor) = options.actor.as_ref() {
         let trimmed = actor.trim();
@@ -199,7 +223,10 @@ pub fn run_list(options: ListOptions) -> Result<()> {
     let mut human = HumanOutput::new("Tasks");
     human.push_summary("Total", tasks.len().to_string());
     for task in tasks {
-        let mut line = format!("[{}] {} {}", task.status, task.id, task.title);
+        let mut line = format!(
+            "[{}][{}] {} {}",
+            task.status, task.priority, task.id, task.title
+        );
         if let Some(workspace) = task.workspace.as_ref() {
             line.push_str(&format!(" (ws: {})", workspace));
         }
@@ -322,6 +349,46 @@ pub fn run_status(options: StatusOptions) -> Result<()> {
             quiet: options.quiet || events_to_stdout,
         },
         "task status",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_priority(options: PriorityOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let resolved = ctx.store.resolve_task_id(&options.id)?;
+    let priority = ctx.store.normalize_priority(&options.priority)?;
+
+    let mut event = TaskEvent::new(TaskEventType::TaskPriorityChanged, resolved.clone());
+    event.actor = ctx.actor.clone();
+    event.priority = Some(priority.clone());
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskPriorityChanged, &event);
+
+    let output = TaskPriorityOutput {
+        id: resolved.clone(),
+        priority: priority.clone(),
+    };
+
+    let mut human = HumanOutput::new("Task priority updated");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("ID", resolved);
+    human.push_summary("Priority", priority);
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task priority",
         &output,
         Some(&human),
     )
@@ -561,6 +628,7 @@ pub fn run_prefix(options: PrefixOptions) -> Result<()> {
 struct TaskCreatedOutput {
     id: String,
     status: String,
+    priority: String,
 }
 
 #[derive(serde::Serialize)]
@@ -573,6 +641,12 @@ struct TaskListOutput {
 struct TaskStatusOutput {
     id: String,
     status: String,
+}
+
+#[derive(serde::Serialize)]
+struct TaskPriorityOutput {
+    id: String,
+    priority: String,
 }
 
 #[derive(serde::Serialize)]
@@ -607,6 +681,8 @@ struct TaskEventData {
     body: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -701,6 +777,7 @@ fn task_event_data(event: &TaskEvent) -> TaskEventData {
         title: event.title.clone(),
         body: event.body.clone(),
         status: event.status.clone(),
+        priority: event.priority.clone(),
         workspace_id: event.workspace_id.clone(),
         workspace: event.workspace.clone(),
         branch: event.branch.clone(),
@@ -712,6 +789,7 @@ fn push_task_summary(human: &mut HumanOutput, details: &TaskDetails) {
     let task = &details.task;
     human.push_summary("Title", task.title.clone());
     human.push_summary("Status", task.status.clone());
+    human.push_summary("Priority", task.priority.clone());
     human.push_summary("Created", task.created_at.to_rfc3339());
     human.push_summary("Updated", task.updated_at.to_rfc3339());
     if let Some(workspace) = task.workspace.as_ref() {

@@ -52,6 +52,7 @@ Fields:
 - `task_created`: emitted after a task is created.
 - `task_started`: emitted after a task is started.
 - `task_status_changed`: emitted after a task status change.
+- `task_priority_changed`: emitted after a task priority change.
 - `task_closed`: emitted after a task is closed.
 - `task_commented`: emitted after a task comment is added.
 
@@ -122,6 +123,7 @@ Example payload for `task_created`:
     "actor": "alice",
     "title": "Ship CLI help",
     "status": "open",
+    "priority": "P2",
     "body": "Add task help for robots",
     "workspace": "agent1",
     "branch": "sv/ws/agent1"

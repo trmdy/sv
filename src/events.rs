@@ -53,6 +53,7 @@ pub enum EventKind {
     TaskCreated,
     TaskStarted,
     TaskStatusChanged,
+    TaskPriorityChanged,
     TaskClosed,
     TaskCommented,
 }

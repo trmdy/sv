@@ -98,7 +98,7 @@ Protected paths
 Events (JSONL)
   lease_created, lease_released, workspace_created, workspace_removed,
   commit_blocked, commit_created, task_created, task_started,
-  task_status_changed, task_closed, task_commented
+  task_status_changed, task_priority_changed, task_closed, task_commented
 
 Tips for agent automation
   - Use --json for parsing; prefer --events for continuous monitoring.
@@ -727,6 +727,7 @@ pub enum TaskCommands {
 
 Examples:
   sv task new "Ship CLI help"
+  sv task new "Ship CLI help" --priority P1
 "#)]
     New {
         /// Task title
@@ -735,6 +736,10 @@ Examples:
         /// Initial status (defaults to tasks.default_status)
         #[arg(long)]
         status: Option<String>,
+
+        /// Task priority (P0-P4)
+        #[arg(long)]
+        priority: Option<String>,
 
         /// Task body/description
         #[arg(long)]
@@ -747,6 +752,7 @@ Examples:
 Examples:
   sv task list
   sv task list --status open
+  sv task list --priority P2
   sv task list --workspace agent1
   sv task list --actor alice --updated-since 2025-01-01T00:00:00Z
 "#)]
@@ -755,6 +761,10 @@ Examples:
         /// Filter by status
         #[arg(long)]
         status: Option<String>,
+
+        /// Filter by priority (P0-P4)
+        #[arg(long)]
+        priority: Option<String>,
 
         /// Filter by workspace (name or id)
         #[arg(long)]
@@ -803,6 +813,20 @@ Examples:
 
         /// New status
         status: String,
+    },
+
+    /// Change task priority
+    #[command(long_about = r#"Change a task priority.
+
+Examples:
+  sv task priority 01HZ... P1
+"#)]
+    Priority {
+        /// Task ID
+        id: String,
+
+        /// New priority (P0-P4)
+        priority: String,
     },
 
     /// Close a task
@@ -2058,10 +2082,11 @@ impl Cli {
                 })
             }
             Commands::Task(cmd) => match cmd {
-                TaskCommands::New { title, status, body } => {
+                TaskCommands::New { title, status, priority, body } => {
                     task::run_new(task::NewOptions {
                         title,
                         status,
+                        priority,
                         body,
                         actor,
                         events: events.clone(),
@@ -2070,9 +2095,10 @@ impl Cli {
                         quiet,
                     })
                 }
-                TaskCommands::List { status, workspace, actor: list_actor, updated_since } => {
+                TaskCommands::List { status, priority, workspace, actor: list_actor, updated_since } => {
                     task::run_list(task::ListOptions {
                         status,
+                        priority,
                         workspace,
                         actor: list_actor,
                         updated_since,
@@ -2103,6 +2129,17 @@ impl Cli {
                     task::run_status(task::StatusOptions {
                         id,
                         status,
+                        actor,
+                        events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Priority { id, priority } => {
+                    task::run_priority(task::PriorityOptions {
+                        id,
+                        priority,
                         actor,
                         events: events.clone(),
                         repo,

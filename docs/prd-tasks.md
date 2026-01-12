@@ -29,7 +29,7 @@
 ## Data model (event log)
 - Task ID: `<id_prefix>-<suffix>`, where suffix starts at `id_min_len` alphanum chars and grows as needed.
 - Event ID: ULID per event (dedup, merge safety).
-- Event types: `task_created`, `task_started`, `task_status_changed`, `task_closed`, `task_commented`.
+- Event types: `task_created`, `task_started`, `task_status_changed`, `task_priority_changed`, `task_closed`, `task_commented`.
 - Task state derived by folding events in order.
 
 ### Event fields (JSONL)
@@ -37,6 +37,7 @@
 - `timestamp`, `actor`
 - `title`, `body` (create)
 - `status` (status change)
+- `priority` (create/priority change, P0-P4)
 - `workspace`, `branch` (start/close)
 - `comment` (comment)
 
@@ -82,6 +83,7 @@ older_than = "180d"
 
 ## Workflows
 - Create task -> status `default_status`.
+- Create task -> priority `P2` unless specified.
 - Start task -> status `in_progress_status`, attach workspace + branch (multiple tasks per workspace allowed).
 - Close task -> status in `closed_statuses`, optional note.
 - List/show prefers shared snapshot; falls back to fold log.
