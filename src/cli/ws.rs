@@ -1058,7 +1058,9 @@ mod tests {
             .unwrap_or("workspace");
 
         assert_eq!(entry.name, expected_name);
-        assert_eq!(entry.path, temp.path().to_path_buf());
+        let expected_path = std::fs::canonicalize(temp.path())?;
+        let actual_path = std::fs::canonicalize(&entry.path)?;
+        assert_eq!(actual_path, expected_path);
         assert_eq!(entry.actor.as_deref(), Some("agent1"));
         assert!(storage.local_dir().exists());
 

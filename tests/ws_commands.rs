@@ -36,7 +36,9 @@ fn ws_new_creates_worktree_and_registry() -> Result<(), Box<dyn std::error::Erro
     let storage = Storage::for_repo(repo.path().to_path_buf());
     let registry = storage.read_workspaces()?;
     let entry = registry.find("ws1").expect("workspace entry");
-    assert_eq!(entry.path, worktree_path);
+    let expected = std::fs::canonicalize(&worktree_path)?;
+    let actual = std::fs::canonicalize(&entry.path)?;
+    assert_eq!(actual, expected);
 
     Ok(())
 }
@@ -121,7 +123,9 @@ fn ws_here_registers_current_repo() -> Result<(), Box<dyn std::error::Error>> {
     let storage = Storage::for_repo(repo.path().to_path_buf());
     let registry = storage.read_workspaces()?;
     let entry = registry.find("current").expect("workspace entry");
-    assert_eq!(entry.path, repo.path().to_path_buf());
+    let expected = std::fs::canonicalize(repo.path())?;
+    let actual = std::fs::canonicalize(&entry.path)?;
+    assert_eq!(actual, expected);
 
     Ok(())
 }
