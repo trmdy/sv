@@ -23,6 +23,10 @@ pub struct Config {
     /// Protected paths configuration
     #[serde(default)]
     pub protect: ProtectConfig,
+
+    /// Tasks configuration
+    #[serde(default)]
+    pub tasks: TasksConfig,
 }
 
 impl Default for Config {
@@ -32,6 +36,7 @@ impl Default for Config {
             actor: ActorConfig::default(),
             leases: LeaseConfig::default(),
             protect: ProtectConfig::default(),
+            tasks: TasksConfig::default(),
         }
     }
 }
@@ -192,6 +197,100 @@ impl Default for ProtectConfig {
     }
 }
 
+/// Tasks configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TasksConfig {
+    /// Repo-wide task ID prefix
+    #[serde(default = "default_task_id_prefix")]
+    pub id_prefix: String,
+
+    /// Allowed task statuses
+    #[serde(default = "default_task_statuses")]
+    pub statuses: Vec<String>,
+
+    /// Default status for new tasks
+    #[serde(default = "default_task_status")]
+    pub default_status: String,
+
+    /// Status used by `sv task start`
+    #[serde(default = "default_task_in_progress_status")]
+    pub in_progress_status: String,
+
+    /// Statuses considered closed
+    #[serde(default = "default_task_closed_statuses")]
+    pub closed_statuses: Vec<String>,
+
+    /// Compaction policy
+    #[serde(default)]
+    pub compaction: TasksCompactionConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TasksCompactionConfig {
+    /// Enable auto-compaction during sync
+    #[serde(default)]
+    pub auto: bool,
+
+    /// Auto-compact when log exceeds this size in MB
+    #[serde(default = "default_task_compaction_max_log_mb")]
+    pub max_log_mb: u64,
+
+    /// Auto-compact tasks older than this duration (e.g., "180d")
+    #[serde(default = "default_task_compaction_older_than")]
+    pub older_than: String,
+}
+
+fn default_task_statuses() -> Vec<String> {
+    vec!["open".to_string(), "in_progress".to_string(), "closed".to_string()]
+}
+
+fn default_task_id_prefix() -> String {
+    "sv".to_string()
+}
+
+fn default_task_status() -> String {
+    "open".to_string()
+}
+
+fn default_task_in_progress_status() -> String {
+    "in_progress".to_string()
+}
+
+fn default_task_closed_statuses() -> Vec<String> {
+    vec!["closed".to_string()]
+}
+
+fn default_task_compaction_max_log_mb() -> u64 {
+    200
+}
+
+fn default_task_compaction_older_than() -> String {
+    "180d".to_string()
+}
+
+impl Default for TasksCompactionConfig {
+    fn default() -> Self {
+        Self {
+            auto: false,
+            max_log_mb: default_task_compaction_max_log_mb(),
+            older_than: default_task_compaction_older_than(),
+        }
+    }
+}
+
+impl Default for TasksConfig {
+    fn default() -> Self {
+        Self {
+            id_prefix: default_task_id_prefix(),
+            statuses: default_task_statuses(),
+            default_status: default_task_status(),
+            in_progress_status: default_task_in_progress_status(),
+            closed_statuses: default_task_closed_statuses(),
+            compaction: TasksCompactionConfig::default(),
+        }
+    }
+}
+
 impl ProtectConfig {
     pub fn rules(&self) -> crate::error::Result<Vec<ProtectRule>> {
         self.validate()?;
@@ -279,6 +378,95 @@ impl Config {
 
     fn validate(&self) -> crate::error::Result<()> {
         self.protect.validate()?;
+        self.tasks.validate()?;
+        Ok(())
+    }
+}
+
+impl TasksConfig {
+    fn validate(&self) -> crate::error::Result<()> {
+        let prefix = self.id_prefix.trim();
+        if prefix.is_empty() {
+            return Err(crate::error::Error::InvalidConfig(
+                "tasks.id_prefix cannot be empty".to_string(),
+            ));
+        }
+        if !prefix.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+            return Err(crate::error::Error::InvalidConfig(
+                "tasks.id_prefix must be alphanumeric".to_string(),
+            ));
+        }
+
+        if self.statuses.is_empty() {
+            return Err(crate::error::Error::InvalidConfig(
+                "tasks.statuses cannot be empty".to_string(),
+            ));
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        for status in &self.statuses {
+            let trimmed = status.trim();
+            if trimmed.is_empty() {
+                return Err(crate::error::Error::InvalidConfig(
+                    "tasks.statuses cannot include empty entries".to_string(),
+                ));
+            }
+            if !seen.insert(trimmed.to_string()) {
+                return Err(crate::error::Error::InvalidConfig(format!(
+                    "tasks.statuses has duplicate entry '{trimmed}'"
+                )));
+            }
+        }
+
+        if !seen.contains(self.default_status.trim()) {
+            return Err(crate::error::Error::InvalidConfig(format!(
+                "tasks.default_status '{}' not in tasks.statuses",
+                self.default_status
+            )));
+        }
+
+        if !seen.contains(self.in_progress_status.trim()) {
+            return Err(crate::error::Error::InvalidConfig(format!(
+                "tasks.in_progress_status '{}' not in tasks.statuses",
+                self.in_progress_status
+            )));
+        }
+
+        for status in &self.closed_statuses {
+            let trimmed = status.trim();
+            if trimmed.is_empty() {
+                return Err(crate::error::Error::InvalidConfig(
+                    "tasks.closed_statuses cannot include empty entries".to_string(),
+                ));
+            }
+            if !seen.contains(trimmed) {
+                return Err(crate::error::Error::InvalidConfig(format!(
+                    "tasks.closed_statuses '{}' not in tasks.statuses",
+                    trimmed
+                )));
+            }
+        }
+
+        if self.closed_statuses.is_empty() {
+            return Err(crate::error::Error::InvalidConfig(
+                "tasks.closed_statuses cannot be empty".to_string(),
+            ));
+        }
+
+        if self.compaction.max_log_mb == 0 {
+            return Err(crate::error::Error::InvalidConfig(
+                "tasks.compaction.max_log_mb must be > 0".to_string(),
+            ));
+        }
+
+        if self.compaction.older_than.trim().is_empty() {
+            return Err(crate::error::Error::InvalidConfig(
+                "tasks.compaction.older_than cannot be empty".to_string(),
+            ));
+        }
+
+        crate::lease::parse_duration(&self.compaction.older_than)?;
+
         Ok(())
     }
 }
@@ -301,6 +489,17 @@ mod tests {
         assert!(cfg.leases.compat.require_flag_for_strong_overlap);
         assert_eq!(cfg.protect.mode, "guard");
         assert!(cfg.protect.paths.is_empty());
+        assert_eq!(
+            cfg.tasks.statuses,
+            vec!["open".to_string(), "in_progress".to_string(), "closed".to_string()]
+        );
+        assert_eq!(cfg.tasks.id_prefix, "sv");
+        assert_eq!(cfg.tasks.default_status, "open");
+        assert_eq!(cfg.tasks.in_progress_status, "in_progress");
+        assert_eq!(cfg.tasks.closed_statuses, vec!["closed".to_string()]);
+        assert!(!cfg.tasks.compaction.auto);
+        assert_eq!(cfg.tasks.compaction.max_log_mb, 200);
+        assert_eq!(cfg.tasks.compaction.older_than, "180d");
     }
 
     #[test]
@@ -326,6 +525,18 @@ require_flag_for_strong_overlap = false
 [protect]
 mode = "warn"
 paths = [".beads/**", { pattern = "Cargo.lock", mode = "readonly" }]
+
+[tasks]
+id_prefix = "proj"
+statuses = ["open", "review", "closed"]
+default_status = "open"
+in_progress_status = "review"
+closed_statuses = ["closed"]
+
+[tasks.compaction]
+auto = true
+max_log_mb = 50
+older_than = "90d"
 "#;
         fs::write(&path, content.trim()).expect("write config");
 
@@ -352,6 +563,17 @@ paths = [".beads/**", { pattern = "Cargo.lock", mode = "readonly" }]
                 },
             ]
         );
+        assert_eq!(
+            cfg.tasks.statuses,
+            vec!["open".to_string(), "review".to_string(), "closed".to_string()]
+        );
+        assert_eq!(cfg.tasks.id_prefix, "proj");
+        assert_eq!(cfg.tasks.default_status, "open");
+        assert_eq!(cfg.tasks.in_progress_status, "review");
+        assert_eq!(cfg.tasks.closed_statuses, vec!["closed".to_string()]);
+        assert!(cfg.tasks.compaction.auto);
+        assert_eq!(cfg.tasks.compaction.max_log_mb, 50);
+        assert_eq!(cfg.tasks.compaction.older_than, "90d");
     }
 
     #[test]
@@ -362,6 +584,25 @@ paths = [".beads/**", { pattern = "Cargo.lock", mode = "readonly" }]
 [protect]
 mode = "nope"
 paths = [".beads/**"]
+"#;
+        fs::write(&path, content.trim()).expect("write config");
+
+        let err = Config::load(&path).expect_err("invalid config");
+        match err {
+            crate::error::Error::InvalidConfig(_) => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_task_config_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".sv.toml");
+        let content = r#"
+[tasks]
+id_prefix = ""
+statuses = ["open", "closed"]
+default_status = "missing"
 "#;
         fs::write(&path, content.trim()).expect("write config");
 
