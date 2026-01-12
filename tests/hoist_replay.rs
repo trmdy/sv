@@ -103,6 +103,7 @@ fn replay_commits_stops_on_conflict() {
         &commits,
         &ReplayOptions {
             continue_on_conflict: false,
+            propagate_conflicts: false,
         },
     )
     .expect("replay");
@@ -125,6 +126,7 @@ fn replay_commits_continues_on_conflict() {
         &commits,
         &ReplayOptions {
             continue_on_conflict: true,
+            propagate_conflicts: false,
         },
     )
     .expect("replay");
