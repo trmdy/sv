@@ -97,7 +97,8 @@ Protected paths
 
 Events (JSONL)
   lease_created, lease_released, workspace_created, workspace_removed,
-  commit_blocked, commit_created
+  commit_blocked, commit_created, task_created, task_started,
+  task_status_changed, task_closed, task_commented
 
 Tips for agent automation
   - Use --json for parsing; prefer --events for continuous monitoring.
@@ -746,12 +747,26 @@ Examples:
 Examples:
   sv task list
   sv task list --status open
+  sv task list --workspace agent1
+  sv task list --actor alice --updated-since 2025-01-01T00:00:00Z
 "#)]
     #[command(visible_alias = "ls")]
     List {
         /// Filter by status
         #[arg(long)]
         status: Option<String>,
+
+        /// Filter by workspace (name or id)
+        #[arg(long)]
+        workspace: Option<String>,
+
+        /// Filter by last updated actor
+        #[arg(long)]
+        actor: Option<String>,
+
+        /// Filter by updated timestamp (RFC3339)
+        #[arg(long, value_name = "timestamp")]
+        updated_since: Option<String>,
     },
 
     /// Show task details
@@ -2049,14 +2064,18 @@ impl Cli {
                         status,
                         body,
                         actor,
+                        events: events.clone(),
                         repo,
                         json,
                         quiet,
                     })
                 }
-                TaskCommands::List { status } => {
+                TaskCommands::List { status, workspace, actor: list_actor, updated_since } => {
                     task::run_list(task::ListOptions {
                         status,
+                        workspace,
+                        actor: list_actor,
+                        updated_since,
                         repo,
                         json,
                         quiet,
@@ -2074,6 +2093,7 @@ impl Cli {
                     task::run_start(task::StartOptions {
                         id,
                         actor,
+                        events: events.clone(),
                         repo,
                         json,
                         quiet,
@@ -2084,6 +2104,7 @@ impl Cli {
                         id,
                         status,
                         actor,
+                        events: events.clone(),
                         repo,
                         json,
                         quiet,
@@ -2094,6 +2115,7 @@ impl Cli {
                         id,
                         status,
                         actor,
+                        events: events.clone(),
                         repo,
                         json,
                         quiet,
@@ -2104,6 +2126,7 @@ impl Cli {
                         id,
                         text,
                         actor,
+                        events: events.clone(),
                         repo,
                         json,
                         quiet,

@@ -50,6 +50,11 @@ pub enum EventKind {
     WorkspaceRemoved,
     CommitBlocked,
     CommitCreated,
+    TaskCreated,
+    TaskStarted,
+    TaskStatusChanged,
+    TaskClosed,
+    TaskCommented,
 }
 
 /// A structured event with optional payload.

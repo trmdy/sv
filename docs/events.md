@@ -49,6 +49,11 @@ Fields:
 - `workspace_removed`: emitted after a workspace is removed.
 - `commit_blocked`: emitted when a commit is blocked by policy.
 - `commit_created`: emitted after a successful `sv commit`.
+- `task_created`: emitted after a task is created.
+- `task_started`: emitted after a task is started.
+- `task_status_changed`: emitted after a task status change.
+- `task_closed`: emitted after a task is closed.
+- `task_commented`: emitted after a task comment is added.
 
 As of v0.1, `sv take` emits `lease_created` and `sv release` emits
 `lease_released`. Other event kinds will be wired as their commands are
@@ -99,6 +104,27 @@ Payloads are event-specific and may be omitted. Example payload for
     "expires_at": "2025-01-01T14:00:00Z",
     "released_at": "2025-01-01T12:30:00Z",
     "note": "Work on auth flow"
+  }
+}
+```
+
+Example payload for `task_created`:
+
+```json
+{
+  "schema_version": "sv.event.v1",
+  "event": "task_created",
+  "timestamp": "2025-01-01T12:00:00Z",
+  "actor": "alice",
+  "data": {
+    "id": "sv-01k",
+    "event_id": "01HZXJ6ZP9QK3A5T",
+    "actor": "alice",
+    "title": "Ship CLI help",
+    "status": "open",
+    "body": "Add task help for robots",
+    "workspace": "agent1",
+    "branch": "sv/ws/agent1"
   }
 }
 ```
