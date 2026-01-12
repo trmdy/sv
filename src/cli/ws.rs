@@ -1,8 +1,8 @@
 //! Workspace (worktree) management commands
 //!
-//! Implements `sv ws new`, `sv ws list`, `sv ws info`, `sv ws rm`, `sv ws here`.
+//! Implements `sv ws new`, `sv ws list`, `sv ws info`, `sv ws rm`, `sv ws clean`, `sv ws here`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use git2::Repository;
@@ -504,6 +504,31 @@ pub struct RmOutput {
     pub removed: bool,
 }
 
+/// Workspace cleanup report (used by ws clean and hoist --rm)
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkspaceCleanupReport {
+    #[serde(skip_serializing_if = "is_false")]
+    pub dry_run: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<WorkspaceCleanupFailure>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<WorkspaceCleanupSkip>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkspaceCleanupFailure {
+    pub name: String,
+    pub error: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkspaceCleanupSkip {
+    pub name: String,
+    pub reason: String,
+}
+
 /// Run `sv ws rm` command
 pub fn run_rm(opts: RmOptions) -> Result<()> {
     let repo = git::open_repo(opts.repo.as_deref())?;
@@ -578,6 +603,184 @@ pub fn run_rm(opts: RmOptions) -> Result<()> {
             output.name,
             output.path.display()
         );
+    }
+
+    Ok(())
+}
+
+/// Options for `sv ws clean`
+pub struct CleanOptions {
+    pub selector: Option<String>,
+    pub dest: Option<String>,
+    pub force: bool,
+    pub dry_run: bool,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+/// Output for `sv ws clean`
+#[derive(Debug, Serialize)]
+pub struct CleanOutput {
+    pub selector: String,
+    pub dest: Option<String>,
+    pub matched: usize,
+    pub merged: usize,
+    pub cleanup: WorkspaceCleanupReport,
+}
+
+impl WorkspaceCleanupReport {
+    pub fn new(dry_run: bool) -> Self {
+        Self {
+            dry_run,
+            removed: Vec::new(),
+            failed: Vec::new(),
+            skipped: Vec::new(),
+        }
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Remove workspaces by name, recording success/failure.
+pub fn remove_workspaces(
+    repo_root: &Path,
+    workspaces: &[WorkspaceEntry],
+    force: bool,
+    dry_run: bool,
+    current_path: &Path,
+) -> WorkspaceCleanupReport {
+    let mut report = WorkspaceCleanupReport::new(dry_run);
+
+    for entry in workspaces {
+        if entry.path == current_path {
+            report.skipped.push(WorkspaceCleanupSkip {
+                name: entry.name.clone(),
+                reason: "current workspace".to_string(),
+            });
+            continue;
+        }
+
+        if dry_run {
+            report.removed.push(entry.name.clone());
+            continue;
+        }
+
+        match run_rm(RmOptions {
+            name: entry.name.clone(),
+            force,
+            repo: Some(repo_root.to_path_buf()),
+            json: false,
+            quiet: true,
+        }) {
+            Ok(()) => report.removed.push(entry.name.clone()),
+            Err(err) => report.failed.push(WorkspaceCleanupFailure {
+                name: entry.name.clone(),
+                error: err.to_string(),
+            }),
+        }
+    }
+
+    report
+}
+
+/// Run `sv ws clean` command
+pub fn run_clean(opts: CleanOptions) -> Result<()> {
+    let repo = git::open_repo(opts.repo.as_deref())?;
+    let workdir = git::workdir(&repo)?;
+    let common_dir = resolve_common_dir(&repo)?;
+    let storage = Storage::new(workdir.clone(), common_dir, workdir.clone());
+    let registry = storage.read_workspaces()?;
+
+    let selector = opts
+        .selector
+        .clone()
+        .unwrap_or_else(|| "ws(active)".to_string());
+    let matching = super::resolve_hoist_workspaces(&repo, &registry, &selector)?;
+    let matched = matching.len();
+
+    let mut candidates = Vec::new();
+    let mut skipped = Vec::new();
+
+    for entry in matching {
+        if entry.path == workdir {
+            skipped.push(WorkspaceCleanupSkip {
+                name: entry.name.clone(),
+                reason: "current workspace".to_string(),
+            });
+            continue;
+        }
+        let dest_ref = opts.dest.as_deref().unwrap_or(&entry.base);
+        match git::is_ancestor(&repo, &entry.branch, dest_ref) {
+            Ok(true) => candidates.push(entry),
+            Ok(false) => skipped.push(WorkspaceCleanupSkip {
+                name: entry.name.clone(),
+                reason: format!("not merged into {}", dest_ref),
+            }),
+            Err(err) => skipped.push(WorkspaceCleanupSkip {
+                name: entry.name.clone(),
+                reason: format!("merge check failed: {}", err),
+            }),
+        }
+    }
+
+    let mut cleanup = remove_workspaces(
+        &workdir,
+        &candidates,
+        opts.force,
+        opts.dry_run,
+        &workdir,
+    );
+    cleanup.skipped.extend(skipped);
+
+    let output = CleanOutput {
+        selector,
+        dest: opts.dest,
+        matched,
+        merged: candidates.len(),
+        cleanup,
+    };
+
+    if opts.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else if !opts.quiet {
+        let header = if opts.dry_run {
+            "Workspace cleanup (dry run)"
+        } else {
+            "Workspace cleanup"
+        };
+        println!("{header}");
+        println!("  Selector: {}", output.selector);
+        if let Some(dest) = &output.dest {
+            println!("  Dest: {}", dest);
+        } else {
+            println!("  Dest: workspace base");
+        }
+        println!("  Matched: {}", output.matched);
+        println!("  Merged: {}", output.merged);
+        println!("  Removed: {}", output.cleanup.removed.len());
+
+        if !output.cleanup.removed.is_empty() {
+            let label = if opts.dry_run { "Would remove" } else { "Removed" };
+            println!("{label}:");
+            for name in &output.cleanup.removed {
+                println!("  - {}", name);
+            }
+        }
+        if !output.cleanup.skipped.is_empty() {
+            println!("Skipped:");
+            for skip in &output.cleanup.skipped {
+                println!("  - {} ({})", skip.name, skip.reason);
+            }
+        }
+        if !output.cleanup.failed.is_empty() {
+            println!("Failed:");
+            for failure in &output.cleanup.failed {
+                println!("  - {} ({})", failure.name, failure.error);
+            }
+        }
     }
 
     Ok(())
