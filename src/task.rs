@@ -40,6 +40,12 @@ pub enum TaskEventType {
     TaskPriorityChanged,
     TaskClosed,
     TaskCommented,
+    TaskParentSet,
+    TaskParentCleared,
+    TaskBlocked,
+    TaskUnblocked,
+    TaskRelated,
+    TaskUnrelated,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +73,10 @@ pub struct TaskEvent {
     pub branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub related_task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relation_description: Option<String>,
 }
 
 impl TaskEvent {
@@ -85,6 +95,8 @@ impl TaskEvent {
             workspace: None,
             branch: None,
             comment: None,
+            related_task_id: None,
+            relation_description: None,
         }
     }
 }
@@ -148,11 +160,43 @@ pub struct TaskComment {
     pub comment: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TaskRelationLink {
+    pub id: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct TaskRelations {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocked_by: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub relates: Vec<TaskRelationLink>,
+}
+
+impl TaskRelations {
+    fn is_empty(relations: &TaskRelations) -> bool {
+        relations.parent.is_none()
+            && relations.children.is_empty()
+            && relations.blocks.is_empty()
+            && relations.blocked_by.is_empty()
+            && relations.relates.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskDetails {
     pub task: TaskRecord,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<TaskComment>,
+    #[serde(skip_serializing_if = "TaskRelations::is_empty")]
+    pub relations: TaskRelations,
     pub events: usize,
 }
 
@@ -389,8 +433,9 @@ impl TaskStore {
     pub fn details(&self, task_id: &str) -> Result<TaskDetails> {
         let events = self.load_merged_events()?;
         let mut filtered: Vec<TaskEvent> = events
-            .into_iter()
+            .iter()
             .filter(|event| event.task_id == task_id)
+            .cloned()
             .collect();
         if filtered.is_empty() {
             return Err(Error::InvalidArgument(format!(
@@ -398,7 +443,7 @@ impl TaskStore {
             )));
         }
         sort_events(&mut filtered);
-        let snapshot = self.build_snapshot(&filtered)?;
+        let snapshot = self.build_snapshot(&events)?;
         let task = snapshot
             .tasks
             .into_iter()
@@ -418,11 +463,24 @@ impl TaskStore {
                 }
             })
             .collect();
+        let relations = build_relations(task_id, &events)?;
+        let events_count = events
+            .iter()
+            .filter(|event| {
+                event.task_id == task_id || event.related_task_id.as_deref() == Some(task_id)
+            })
+            .count();
         Ok(TaskDetails {
             task,
             comments,
-            events: filtered.len(),
+            relations,
+            events: events_count,
         })
+    }
+
+    pub fn relations(&self, task_id: &str) -> Result<TaskRelations> {
+        let events = self.load_merged_events()?;
+        build_relations(task_id, &events)
     }
 
     pub fn sync(&self, policy: Option<CompactionPolicy>) -> Result<TaskSyncReport> {
@@ -529,6 +587,13 @@ impl TaskStore {
             sort_events(&mut task_events);
             if task_events.is_empty() {
                 continue;
+            }
+
+            for event in task_events
+                .iter()
+                .filter(|event| is_relation_event(event.event_type))
+            {
+                keep_ids.insert(event.event_id.clone());
             }
 
             let last_event_time = task_events
@@ -849,7 +914,13 @@ fn event_status(event: &TaskEvent, config: &TasksConfig) -> Result<Option<String
                     .unwrap_or_else(|| "closed".to_string())
             }),
         TaskEventType::TaskCommented
-        | TaskEventType::TaskPriorityChanged => return Ok(None),
+        | TaskEventType::TaskPriorityChanged
+        | TaskEventType::TaskParentSet
+        | TaskEventType::TaskParentCleared
+        | TaskEventType::TaskBlocked
+        | TaskEventType::TaskUnblocked
+        | TaskEventType::TaskRelated
+        | TaskEventType::TaskUnrelated => return Ok(None),
     };
 
     if !config.statuses.iter().any(|value| value == &status) {
@@ -1013,9 +1084,229 @@ fn apply_event(
             record.updated_at = event.timestamp;
             record.updated_by = event.actor.clone();
         }
+        TaskEventType::TaskParentSet
+        | TaskEventType::TaskParentCleared
+        | TaskEventType::TaskBlocked
+        | TaskEventType::TaskUnblocked
+        | TaskEventType::TaskRelated
+        | TaskEventType::TaskUnrelated => {
+            let related_task_id = relation_target(event)?;
+            if related_task_id == event.task_id {
+                return Err(Error::InvalidArgument(
+                    "task relation cannot target itself".to_string(),
+                ));
+            }
+            touch_task(map, &event.task_id, event)?;
+            touch_task(map, related_task_id, event)?;
+            if event.event_type == TaskEventType::TaskRelated {
+                let _ = relation_description(event)?;
+            }
+        }
     }
 
     Ok(())
+}
+
+fn touch_task(map: &mut HashMap<String, TaskRecord>, task_id: &str, event: &TaskEvent) -> Result<()> {
+    let record = map.get_mut(task_id).ok_or_else(|| {
+        Error::InvalidArgument(format!("task not found: {task_id}"))
+    })?;
+    record.updated_at = event.timestamp;
+    record.updated_by = event.actor.clone();
+    Ok(())
+}
+
+fn relation_target(event: &TaskEvent) -> Result<&str> {
+    let target = event.related_task_id.as_deref().ok_or_else(|| {
+        Error::InvalidArgument(format!(
+            "missing related task for {}",
+            event.event_id
+        ))
+    })?;
+    if target.trim().is_empty() {
+        return Err(Error::InvalidArgument(format!(
+            "missing related task for {}",
+            event.event_id
+        )));
+    }
+    Ok(target)
+}
+
+fn relation_description(event: &TaskEvent) -> Result<&str> {
+    let description = event
+        .relation_description
+        .as_deref()
+        .ok_or_else(|| {
+            Error::InvalidArgument(format!(
+                "missing relation description for {}",
+                event.event_id
+            ))
+        })?;
+    let trimmed = description.trim();
+    if trimmed.is_empty() {
+        return Err(Error::InvalidArgument(format!(
+            "missing relation description for {}",
+            event.event_id
+        )));
+    }
+    Ok(trimmed)
+}
+
+fn is_relation_event(event_type: TaskEventType) -> bool {
+    matches!(
+        event_type,
+        TaskEventType::TaskParentSet
+            | TaskEventType::TaskParentCleared
+            | TaskEventType::TaskBlocked
+            | TaskEventType::TaskUnblocked
+            | TaskEventType::TaskRelated
+            | TaskEventType::TaskUnrelated
+    )
+}
+
+#[derive(Default)]
+struct RelationState {
+    parent_by_child: HashMap<String, String>,
+    blocks: HashSet<(String, String)>,
+    relates: HashMap<(String, String), String>,
+}
+
+fn relation_key(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.to_string(), b.to_string())
+    } else {
+        (b.to_string(), a.to_string())
+    }
+}
+
+fn apply_relation_event(state: &mut RelationState, event: &TaskEvent) -> Result<()> {
+    if !is_relation_event(event.event_type) {
+        return Ok(());
+    }
+    let related_task_id = relation_target(event)?;
+    if related_task_id == event.task_id {
+        return Err(Error::InvalidArgument(
+            "task relation cannot target itself".to_string(),
+        ));
+    }
+
+    match event.event_type {
+        TaskEventType::TaskParentSet => {
+            state
+                .parent_by_child
+                .insert(event.task_id.clone(), related_task_id.to_string());
+        }
+        TaskEventType::TaskParentCleared => {
+            if let Some(current) = state.parent_by_child.get(&event.task_id) {
+                if current == related_task_id {
+                    state.parent_by_child.remove(&event.task_id);
+                }
+            }
+        }
+        TaskEventType::TaskBlocked => {
+            state
+                .blocks
+                .insert((event.task_id.clone(), related_task_id.to_string()));
+        }
+        TaskEventType::TaskUnblocked => {
+            state
+                .blocks
+                .remove(&(event.task_id.clone(), related_task_id.to_string()));
+        }
+        TaskEventType::TaskRelated => {
+            let description = relation_description(event)?;
+            let key = relation_key(&event.task_id, related_task_id);
+            state.relates.insert(key, description.to_string());
+        }
+        TaskEventType::TaskUnrelated => {
+            let key = relation_key(&event.task_id, related_task_id);
+            state.relates.remove(&key);
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations> {
+    if !events.iter().any(|event| event.task_id == task_id) {
+        return Err(Error::InvalidArgument(format!(
+            "task not found: {task_id}"
+        )));
+    }
+    let mut sorted = events.to_vec();
+    sort_events(&mut sorted);
+    let mut state = RelationState::default();
+    for event in &sorted {
+        apply_relation_event(&mut state, event)?;
+    }
+
+    let parent = state.parent_by_child.get(task_id).cloned();
+    let mut children: Vec<String> = state
+        .parent_by_child
+        .iter()
+        .filter_map(|(child, parent)| {
+            if parent == task_id {
+                Some(child.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let mut blocks: Vec<String> = state
+        .blocks
+        .iter()
+        .filter_map(|(blocker, blocked)| {
+            if blocker == task_id {
+                Some(blocked.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let mut blocked_by: Vec<String> = state
+        .blocks
+        .iter()
+        .filter_map(|(blocker, blocked)| {
+            if blocked == task_id {
+                Some(blocker.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let mut relates: Vec<TaskRelationLink> = state
+        .relates
+        .iter()
+        .filter_map(|((left, right), description)| {
+            if left == task_id {
+                Some(TaskRelationLink {
+                    id: right.clone(),
+                    description: description.clone(),
+                })
+            } else if right == task_id {
+                Some(TaskRelationLink {
+                    id: left.clone(),
+                    description: description.clone(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    children.sort();
+    blocks.sort();
+    blocked_by.sort();
+    relates.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.description.cmp(&b.description)));
+
+    Ok(TaskRelations {
+        parent,
+        children,
+        blocks,
+        blocked_by,
+        relates,
+    })
 }
 
 fn normalize_id(value: &str) -> String {
@@ -1135,6 +1426,78 @@ mod tests {
         let (compacted, report) = store.compact_events(&events, policy).expect("compact");
         assert!(compacted.len() < events.len());
         assert_eq!(report.compacted_tasks, 1);
+    }
+
+    #[test]
+    fn relations_include_parent_and_children() {
+        let now = Utc::now();
+        let mut events = Vec::new();
+        let mut parent = TaskEvent::new(TaskEventType::TaskCreated, "task-parent");
+        parent.title = Some("Parent".to_string());
+        parent.timestamp = now;
+        events.push(parent);
+
+        let mut child = TaskEvent::new(TaskEventType::TaskCreated, "task-child");
+        child.title = Some("Child".to_string());
+        child.timestamp = now + chrono::Duration::milliseconds(1);
+        events.push(child);
+
+        let mut set_parent = TaskEvent::new(TaskEventType::TaskParentSet, "task-child");
+        set_parent.related_task_id = Some("task-parent".to_string());
+        set_parent.timestamp = now + chrono::Duration::milliseconds(2);
+        events.push(set_parent);
+
+        let child_relations = build_relations("task-child", &events).expect("relations");
+        assert_eq!(child_relations.parent.as_deref(), Some("task-parent"));
+        assert!(child_relations.children.is_empty());
+
+        let parent_relations = build_relations("task-parent", &events).expect("relations");
+        assert_eq!(parent_relations.children, vec!["task-child".to_string()]);
+    }
+
+    #[test]
+    fn relations_include_blocks_and_relates() {
+        let now = Utc::now();
+        let mut events = Vec::new();
+        for id in ["task-a", "task-b", "task-c"] {
+            let mut create = TaskEvent::new(TaskEventType::TaskCreated, id);
+            create.title = Some(id.to_string());
+            create.timestamp = now;
+            events.push(create);
+        }
+
+        let mut block = TaskEvent::new(TaskEventType::TaskBlocked, "task-a");
+        block.related_task_id = Some("task-b".to_string());
+        block.timestamp = now + chrono::Duration::milliseconds(1);
+        events.push(block);
+
+        let mut relate = TaskEvent::new(TaskEventType::TaskRelated, "task-a");
+        relate.related_task_id = Some("task-c".to_string());
+        relate.relation_description = Some("shares context".to_string());
+        relate.timestamp = now + chrono::Duration::milliseconds(2);
+        events.push(relate);
+
+        let relations_a = build_relations("task-a", &events).expect("relations");
+        assert_eq!(relations_a.blocks, vec!["task-b".to_string()]);
+        assert_eq!(
+            relations_a.relates,
+            vec![TaskRelationLink {
+                id: "task-c".to_string(),
+                description: "shares context".to_string(),
+            }]
+        );
+
+        let relations_b = build_relations("task-b", &events).expect("relations");
+        assert_eq!(relations_b.blocked_by, vec!["task-a".to_string()]);
+
+        let relations_c = build_relations("task-c", &events).expect("relations");
+        assert_eq!(
+            relations_c.relates,
+            vec![TaskRelationLink {
+                id: "task-a".to_string(),
+                description: "shares context".to_string(),
+            }]
+        );
     }
 
     #[test]

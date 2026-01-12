@@ -71,7 +71,7 @@ Commands (high level)
   sv lease ls|who|renew|break|wait Inspect/manage leases
   sv protect status|add|off|rm Protected paths
   sv commit                 Commit with sv checks + Change-Id
-  sv task new|list|show|start|status|close|comment|sync|compact|prefix  Tasks
+  sv task new|list|show|start|status|priority|close|comment|parent|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
   sv risk                   Overlap/conflict analysis
   sv onto                   Rebase/merge current workspace onto another
   sv hoist                  Bulk integrate workspaces into an integration branch
@@ -98,7 +98,9 @@ Protected paths
 Events (JSONL)
   lease_created, lease_released, workspace_created, workspace_removed,
   commit_blocked, commit_created, task_created, task_started,
-  task_status_changed, task_priority_changed, task_closed, task_commented
+  task_status_changed, task_priority_changed, task_closed, task_commented, task_parent_set,
+  task_parent_cleared, task_blocked, task_unblocked, task_related,
+  task_unrelated
 
 Tips for agent automation
   - Use --json for parsing; prefer --events for continuous monitoring.
@@ -858,6 +860,90 @@ Examples:
         text: String,
     },
 
+    /// Manage task parent relationships
+    #[command(long_about = r#"Manage task parent relationships.
+
+Examples:
+  sv task parent set 01HZ... 01HZ...
+  sv task parent clear 01HZ...
+"#)]
+    Parent {
+        #[command(subcommand)]
+        command: ParentCommands,
+    },
+
+    /// Block a task with another task
+    #[command(long_about = r#"Record a blocking relationship.
+
+Examples:
+  sv task block 01HZ... 01HZ...
+"#)]
+    Block {
+        /// Blocking task ID
+        blocker: String,
+
+        /// Blocked task ID
+        blocked: String,
+    },
+
+    /// Remove a blocking relationship
+    #[command(long_about = r#"Remove a blocking relationship.
+
+Examples:
+  sv task unblock 01HZ... 01HZ...
+"#)]
+    Unblock {
+        /// Blocking task ID
+        blocker: String,
+
+        /// Blocked task ID
+        blocked: String,
+    },
+
+    /// Relate two tasks with a description
+    #[command(long_about = r#"Relate two tasks with a description.
+
+Examples:
+  sv task relate 01HZ... 01HZ... --desc "shares context"
+"#)]
+    Relate {
+        /// Left task ID
+        left: String,
+
+        /// Right task ID
+        right: String,
+
+        /// Relation description
+        #[arg(long, required = true)]
+        desc: String,
+    },
+
+    /// Remove a relation between two tasks
+    #[command(long_about = r#"Remove a relation between two tasks.
+
+Examples:
+  sv task unrelate 01HZ... 01HZ...
+"#)]
+    Unrelate {
+        /// Left task ID
+        left: String,
+
+        /// Right task ID
+        right: String,
+    },
+
+    /// Show task relationships
+    #[command(long_about = r#"Show task relationships.
+
+Examples:
+  sv task relations 01HZ...
+"#)]
+    #[command(visible_alias = "rels")]
+    Relations {
+        /// Task ID
+        id: String,
+    },
+
     /// Sync tracked + shared task logs and snapshots
     #[command(long_about = r#"Merge tracked and shared logs, rebuild snapshot.
 
@@ -896,6 +982,35 @@ Examples:
     Prefix {
         /// New prefix (alphanumeric)
         prefix: Option<String>,
+    },
+}
+
+/// Task parent subcommands
+#[derive(Subcommand, Debug)]
+pub enum ParentCommands {
+    /// Set a parent task
+    #[command(long_about = r#"Set a parent task.
+
+Examples:
+  sv task parent set 01HZ... 01HZ...
+"#)]
+    Set {
+        /// Child task ID
+        child: String,
+
+        /// Parent task ID
+        parent: String,
+    },
+
+    /// Clear a parent task
+    #[command(long_about = r#"Clear a parent task.
+
+Examples:
+  sv task parent clear 01HZ...
+"#)]
+    Clear {
+        /// Child task ID
+        child: String,
     },
 }
 
@@ -2164,6 +2279,82 @@ impl Cli {
                         text,
                         actor,
                         events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Parent { command } => match command {
+                    ParentCommands::Set { child, parent } => {
+                        task::run_parent_set(task::ParentSetOptions {
+                            child,
+                            parent,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    ParentCommands::Clear { child } => {
+                        task::run_parent_clear(task::ParentClearOptions {
+                            child,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                },
+                TaskCommands::Block { blocker, blocked } => {
+                    task::run_block(task::BlockOptions {
+                        blocker,
+                        blocked,
+                        actor,
+                        events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Unblock { blocker, blocked } => {
+                    task::run_unblock(task::UnblockOptions {
+                        blocker,
+                        blocked,
+                        actor,
+                        events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Relate { left, right, desc } => {
+                    task::run_relate(task::RelateOptions {
+                        left,
+                        right,
+                        description: desc,
+                        actor,
+                        events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Unrelate { left, right } => {
+                    task::run_unrelate(task::UnrelateOptions {
+                        left,
+                        right,
+                        actor,
+                        events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    })
+                }
+                TaskCommands::Relations { id } => {
+                    task::run_relations(task::RelationsOptions {
+                        id,
                         repo,
                         json,
                         quiet,

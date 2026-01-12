@@ -12,7 +12,9 @@ use crate::events::{Event, EventDestination, EventKind};
 use crate::git;
 use crate::output::{emit_success, HumanOutput, OutputOptions};
 use crate::storage::{Storage, WorkspaceEntry};
-use crate::task::{CompactionPolicy, TaskDetails, TaskEvent, TaskEventType, TaskRecord, TaskStore};
+use crate::task::{
+    CompactionPolicy, TaskDetails, TaskEvent, TaskEventType, TaskRecord, TaskRelations, TaskStore,
+};
 
 pub struct NewOptions {
     pub title: String,
@@ -78,6 +80,73 @@ pub struct CommentOptions {
     pub text: String,
     pub actor: Option<String>,
     pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct ParentSetOptions {
+    pub child: String,
+    pub parent: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct ParentClearOptions {
+    pub child: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct BlockOptions {
+    pub blocker: String,
+    pub blocked: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct UnblockOptions {
+    pub blocker: String,
+    pub blocked: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct RelateOptions {
+    pub left: String,
+    pub right: String,
+    pub description: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct UnrelateOptions {
+    pub left: String,
+    pub right: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct RelationsOptions {
+    pub id: String,
     pub repo: Option<PathBuf>,
     pub json: bool,
     pub quiet: bool,
@@ -481,6 +550,360 @@ pub fn run_comment(options: CommentOptions) -> Result<()> {
     )
 }
 
+pub fn run_parent_set(options: ParentSetOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let child = ctx.store.resolve_task_id(&options.child)?;
+    let parent = ctx.store.resolve_task_id(&options.parent)?;
+    if child == parent {
+        return Err(Error::InvalidArgument(
+            "parent cannot match child".to_string(),
+        ));
+    }
+
+    let relations = ctx.store.relations(&child)?;
+    if relations.parent.as_deref() == Some(parent.as_str()) {
+        return Err(Error::InvalidArgument(format!(
+            "parent already set to {parent}"
+        )));
+    }
+
+    let mut event = TaskEvent::new(TaskEventType::TaskParentSet, child.clone());
+    event.actor = ctx.actor.clone();
+    event.related_task_id = Some(parent.clone());
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskParentSet, &event);
+
+    let output = TaskParentOutput {
+        child: child.clone(),
+        parent: parent.clone(),
+    };
+
+    let mut human = HumanOutput::new("Parent set");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("Child", child);
+    human.push_summary("Parent", parent);
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task parent set",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_parent_clear(options: ParentClearOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let child = ctx.store.resolve_task_id(&options.child)?;
+    let relations = ctx.store.relations(&child)?;
+    let parent = relations.parent.ok_or_else(|| {
+        Error::InvalidArgument(format!("task has no parent: {child}"))
+    })?;
+
+    let mut event = TaskEvent::new(TaskEventType::TaskParentCleared, child.clone());
+    event.actor = ctx.actor.clone();
+    event.related_task_id = Some(parent.clone());
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskParentCleared, &event);
+
+    let output = TaskParentOutput {
+        child: child.clone(),
+        parent: parent.clone(),
+    };
+
+    let mut human = HumanOutput::new("Parent cleared");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("Child", child);
+    human.push_summary("Parent", parent);
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task parent clear",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_block(options: BlockOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let blocker = ctx.store.resolve_task_id(&options.blocker)?;
+    let blocked = ctx.store.resolve_task_id(&options.blocked)?;
+    if blocker == blocked {
+        return Err(Error::InvalidArgument(
+            "blocked task cannot match blocker".to_string(),
+        ));
+    }
+
+    let relations = ctx.store.relations(&blocker)?;
+    if relations.blocks.iter().any(|id| id == &blocked) {
+        return Err(Error::InvalidArgument(format!(
+            "task already blocks {blocked}"
+        )));
+    }
+
+    let mut event = TaskEvent::new(TaskEventType::TaskBlocked, blocker.clone());
+    event.actor = ctx.actor.clone();
+    event.related_task_id = Some(blocked.clone());
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskBlocked, &event);
+
+    let output = TaskBlockOutput {
+        blocker: blocker.clone(),
+        blocked: blocked.clone(),
+    };
+
+    let mut human = HumanOutput::new("Task blocked");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("Blocker", blocker);
+    human.push_summary("Blocked", blocked);
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task block",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_unblock(options: UnblockOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let blocker = ctx.store.resolve_task_id(&options.blocker)?;
+    let blocked = ctx.store.resolve_task_id(&options.blocked)?;
+    if blocker == blocked {
+        return Err(Error::InvalidArgument(
+            "blocked task cannot match blocker".to_string(),
+        ));
+    }
+
+    let relations = ctx.store.relations(&blocker)?;
+    if !relations.blocks.iter().any(|id| id == &blocked) {
+        return Err(Error::InvalidArgument(format!(
+            "task does not block {blocked}"
+        )));
+    }
+
+    let mut event = TaskEvent::new(TaskEventType::TaskUnblocked, blocker.clone());
+    event.actor = ctx.actor.clone();
+    event.related_task_id = Some(blocked.clone());
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskUnblocked, &event);
+
+    let output = TaskBlockOutput {
+        blocker: blocker.clone(),
+        blocked: blocked.clone(),
+    };
+
+    let mut human = HumanOutput::new("Task unblocked");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("Blocker", blocker);
+    human.push_summary("Blocked", blocked);
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task unblock",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_relate(options: RelateOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let left = ctx.store.resolve_task_id(&options.left)?;
+    let right = ctx.store.resolve_task_id(&options.right)?;
+    if left == right {
+        return Err(Error::InvalidArgument(
+            "related task cannot match source".to_string(),
+        ));
+    }
+    let description = options.description.trim();
+    if description.is_empty() {
+        return Err(Error::InvalidArgument(
+            "relation description cannot be empty".to_string(),
+        ));
+    }
+
+    let relations = ctx.store.relations(&left)?;
+    if let Some(existing) = relations.relates.iter().find(|rel| rel.id == right) {
+        if existing.description == description {
+            return Err(Error::InvalidArgument(format!(
+                "relation already exists for {right}"
+            )));
+        }
+    }
+
+    let mut event = TaskEvent::new(TaskEventType::TaskRelated, left.clone());
+    event.actor = ctx.actor.clone();
+    event.related_task_id = Some(right.clone());
+    event.relation_description = Some(description.to_string());
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskRelated, &event);
+
+    let output = TaskRelateOutput {
+        left: left.clone(),
+        right: right.clone(),
+        description: description.to_string(),
+    };
+
+    let mut human = HumanOutput::new("Tasks related");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("Left", left);
+    human.push_summary("Right", right);
+    human.push_summary("Description", description.to_string());
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task relate",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_unrelate(options: UnrelateOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let left = ctx.store.resolve_task_id(&options.left)?;
+    let right = ctx.store.resolve_task_id(&options.right)?;
+    if left == right {
+        return Err(Error::InvalidArgument(
+            "related task cannot match source".to_string(),
+        ));
+    }
+
+    let relations = ctx.store.relations(&left)?;
+    if !relations.relates.iter().any(|rel| rel.id == right) {
+        return Err(Error::InvalidArgument(format!(
+            "relation not found for {right}"
+        )));
+    }
+
+    let mut event = TaskEvent::new(TaskEventType::TaskUnrelated, left.clone());
+    event.actor = ctx.actor.clone();
+    event.related_task_id = Some(right.clone());
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskUnrelated, &event);
+
+    let output = TaskUnrelateOutput {
+        left: left.clone(),
+        right: right.clone(),
+    };
+
+    let mut human = HumanOutput::new("Tasks unrelated");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("Left", left);
+    human.push_summary("Right", right);
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task unrelate",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_relations(options: RelationsOptions) -> Result<()> {
+    let ctx = load_context(options.repo, None, false)?;
+    let resolved = ctx.store.resolve_task_id(&options.id)?;
+    let relations = ctx.store.relations(&resolved)?;
+
+    let output = TaskRelationsOutput {
+        id: resolved.clone(),
+        relations: relations.clone(),
+    };
+
+    let mut human = HumanOutput::new(format!("Relations for {resolved}"));
+    if let Some(parent) = relations.parent.as_ref() {
+        human.push_summary("Parent", parent.clone());
+    }
+    if !relations.children.is_empty() {
+        human.push_summary("Children", relations.children.join(", "));
+    }
+    if !relations.blocks.is_empty() {
+        human.push_summary("Blocks", relations.blocks.join(", "));
+    }
+    if !relations.blocked_by.is_empty() {
+        human.push_summary("Blocked by", relations.blocked_by.join(", "));
+    }
+    if !relations.relates.is_empty() {
+        for relation in relations.relates {
+            human.push_detail(format!("Relates: {} ({})", relation.id, relation.description));
+        }
+    }
+
+    emit_success(
+        OutputOptions {
+            json: options.json,
+            quiet: options.quiet,
+        },
+        "task relations",
+        &output,
+        Some(&human),
+    )
+}
+
 pub fn run_sync(options: SyncOptions) -> Result<()> {
     let ctx = load_context(options.repo, None, false)?;
     let policy = ctx.store.auto_compaction_policy()?;
@@ -656,6 +1079,37 @@ struct TaskCommentOutput {
 }
 
 #[derive(serde::Serialize)]
+struct TaskParentOutput {
+    child: String,
+    parent: String,
+}
+
+#[derive(serde::Serialize)]
+struct TaskBlockOutput {
+    blocker: String,
+    blocked: String,
+}
+
+#[derive(serde::Serialize)]
+struct TaskRelateOutput {
+    left: String,
+    right: String,
+    description: String,
+}
+
+#[derive(serde::Serialize)]
+struct TaskUnrelateOutput {
+    left: String,
+    right: String,
+}
+
+#[derive(serde::Serialize)]
+struct TaskRelationsOutput {
+    id: String,
+    relations: TaskRelations,
+}
+
+#[derive(serde::Serialize)]
 struct TaskCompactOutput {
     before_events: usize,
     after_events: usize,
@@ -691,6 +1145,10 @@ struct TaskEventData {
     branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    related_task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relation_description: Option<String>,
 }
 
 fn load_context(
@@ -782,6 +1240,8 @@ fn task_event_data(event: &TaskEvent) -> TaskEventData {
         workspace: event.workspace.clone(),
         branch: event.branch.clone(),
         comment: event.comment.clone(),
+        related_task_id: event.related_task_id.clone(),
+        relation_description: event.relation_description.clone(),
     }
 }
 
@@ -800,5 +1260,22 @@ fn push_task_summary(human: &mut HumanOutput, details: &TaskDetails) {
     }
     if let Some(body) = task.body.as_ref() {
         human.push_detail(body.clone());
+    }
+    if let Some(parent) = details.relations.parent.as_ref() {
+        human.push_summary("Parent", parent.clone());
+    }
+    if !details.relations.children.is_empty() {
+        human.push_summary("Children", details.relations.children.join(", "));
+    }
+    if !details.relations.blocks.is_empty() {
+        human.push_summary("Blocks", details.relations.blocks.join(", "));
+    }
+    if !details.relations.blocked_by.is_empty() {
+        human.push_summary("Blocked by", details.relations.blocked_by.join(", "));
+    }
+    if !details.relations.relates.is_empty() {
+        for relation in &details.relations.relates {
+            human.push_detail(format!("Relates: {} ({})", relation.id, relation.description));
+        }
     }
 }

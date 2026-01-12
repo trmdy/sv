@@ -56,6 +56,12 @@ pub enum EventKind {
     TaskPriorityChanged,
     TaskClosed,
     TaskCommented,
+    TaskParentSet,
+    TaskParentCleared,
+    TaskBlocked,
+    TaskUnblocked,
+    TaskRelated,
+    TaskUnrelated,
 }
 
 /// A structured event with optional payload.

@@ -289,6 +289,7 @@ Removes workspace (Git worktree) and unregisters it (does not delete commits).
 
 Tasks are repo-scoped work items tracked in `.tasks/`. Status values are
 configurable in `.sv.toml` (defaults: `open`, `in_progress`, `closed`).
+Tasks can also store lightweight relationships (parent, blocks, described relations).
 
 #### `sv task new <title> [--status <s>] [--body <text>]`
 
@@ -317,6 +318,34 @@ Close a task (status defaults to first entry in `closed_statuses`).
 #### `sv task comment <id> <text>`
 
 Add a comment to a task.
+
+#### `sv task parent set <child> <parent>`
+
+Set a parent task.
+
+#### `sv task parent clear <child>`
+
+Clear a parent task.
+
+#### `sv task block <blocker> <blocked>`
+
+Record a blocking relationship.
+
+#### `sv task unblock <blocker> <blocked>`
+
+Remove a blocking relationship.
+
+#### `sv task relate <left> <right> --desc <text>`
+
+Relate two tasks with a description (non-blocking).
+
+#### `sv task unrelate <left> <right>`
+
+Remove a non-blocking relation.
+
+#### `sv task relations <id>`
+
+Show task relationships (parent, children, blocks, relates).
 
 #### `sv task sync`
 

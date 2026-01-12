@@ -55,6 +55,14 @@ Fields:
 - `task_priority_changed`: emitted after a task priority change.
 - `task_closed`: emitted after a task is closed.
 - `task_commented`: emitted after a task comment is added.
+- `task_parent_set`: emitted after a task parent is set.
+- `task_parent_cleared`: emitted after a task parent is cleared.
+- `task_blocked`: emitted after a task is blocked.
+- `task_unblocked`: emitted after a task is unblocked.
+- `task_related`: emitted after tasks are related.
+- `task_unrelated`: emitted after tasks are unrelated.
+
+Relation events include `related_task_id`, and `relation_description` for `task_related`.
 
 As of v0.1, `sv take` emits `lease_created` and `sv release` emits
 `lease_released`. Other event kinds will be wired as their commands are

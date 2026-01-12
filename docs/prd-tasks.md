@@ -13,7 +13,7 @@
 - Simple CLI, scriptable JSON.
 
 ## Non-goals
-- Full issue tracker (epics, sprints, dashboards).
+- Full issue tracker (sprints, dashboards, advanced dependency graphs).
 - Realtime cross-machine sync (future).
 - Web UI or advanced visualizations (kanban, graph, insights).
 
@@ -29,11 +29,13 @@
 ## Data model (event log)
 - Task ID: `<id_prefix>-<suffix>`, where suffix starts at `id_min_len` alphanum chars and grows as needed.
 - Event ID: ULID per event (dedup, merge safety).
-- Event types: `task_created`, `task_started`, `task_status_changed`, `task_priority_changed`, `task_closed`, `task_commented`.
+- Event types: `task_created`, `task_started`, `task_status_changed`, `task_priority_changed`, `task_closed`, `task_commented`, `task_parent_set`, `task_parent_cleared`, `task_blocked`, `task_unblocked`, `task_related`, `task_unrelated`.
 - Task state derived by folding events in order.
 
 ### Event fields (JSONL)
 - `event_id`, `task_id`, `event_type`
+- `related_task_id` (relations)
+- `relation_description` (non-blocking relations)
 - `timestamp`, `actor`
 - `title`, `body` (create)
 - `status` (status change)
@@ -66,13 +68,21 @@ older_than = "180d"
 
 ## CLI (initial)
 - `sv task` (launch fullscreen TUI)
-- `sv task new <title> [--status <s>] [--body <txt>]`
-- `sv task list [--status <s>] [--workspace <name|id>] [--actor <name>] [--updated-since <rfc3339>] [--json]`
+- `sv task new <title> [--status <s>] [--priority <P0-P4>] [--body <txt>]`
+- `sv task list [--status <s>] [--priority <P0-P4>] [--workspace <name|id>] [--actor <name>] [--updated-since <rfc3339>] [--json]`
 - `sv task show <id> [--json]`
 - `sv task start <id>`
 - `sv task status <id> <status>`
+- `sv task priority <id> <P0-P4>`
 - `sv task close <id>`
 - `sv task comment <id> <text>`
+- `sv task parent set <child> <parent>`
+- `sv task parent clear <child>`
+- `sv task block <blocker> <blocked>`
+- `sv task unblock <blocker> <blocked>`
+- `sv task relate <a> <b> --desc <text>`
+- `sv task unrelate <a> <b>`
+- `sv task relations <id>`
 - `sv task sync`
 - `sv task prefix [<prefix>]`
 
@@ -86,6 +96,7 @@ older_than = "180d"
 - Create task -> priority `P2` unless specified.
 - Start task -> status `in_progress_status`, attach workspace + branch (multiple tasks per workspace allowed).
 - Close task -> status in `closed_statuses`, optional note.
+- Relations: parent, blocks, and described relations; use `sv task relations` to inspect.
 - List/show prefers shared snapshot; falls back to fold log.
 - Sync between participants: `git pull` brings `.tasks/*`, then `sv task sync` rebuilds snapshot + refreshes shared cache.
 - Task IDs are case-insensitive; can be referenced by unique prefix of the suffix (e.g., `ab`, `a9`), or full ID (any prefix). Changing `id_prefix` does not affect existing tasks.

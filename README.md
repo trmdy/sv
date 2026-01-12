@@ -185,6 +185,12 @@ sv task start acme-abc
 sv task status acme-abc under_review
 sv task comment acme-abc "Waiting on QA"
 
+# Parent + relations
+sv task parent set acme-abc acme-xyz
+sv task block acme-xyz acme-def
+sv task relate acme-abc acme-ghi --desc "shared refactor"
+sv task relations acme-abc
+
 # List tasks (filters)
 sv task list --status open
 sv task list --workspace agent1
@@ -291,6 +297,12 @@ sv release src/auth/** --events -               # Explicit stdout
 - `task_status_changed` - emitted by `sv task status`
 - `task_closed` - emitted by `sv task close`
 - `task_commented` - emitted by `sv task comment`
+- `task_parent_set` - emitted by `sv task parent set`
+- `task_parent_cleared` - emitted by `sv task parent clear`
+- `task_blocked` - emitted by `sv task block`
+- `task_unblocked` - emitted by `sv task unblock`
+- `task_related` - emitted by `sv task relate`
+- `task_unrelated` - emitted by `sv task unrelate`
 
 Event envelope:
 ```json
@@ -330,7 +342,7 @@ Event envelope:
 | `sv lease ls\|who\|renew\|break` | Inspect and manage leases |
 | `sv protect status\|add\|off\|rm` | Protected path management |
 | `sv commit` | Commit with sv checks |
-| `sv task new\|list\|show\|start\|status\|close\|comment\|sync\|compact\|prefix` | Task management |
+| `sv task new\|list\|show\|start\|status\|close\|comment\|parent\|block\|unblock\|relate\|unrelate\|relations\|sync\|compact\|prefix` | Task management |
 | `sv risk` | Overlap and conflict analysis |
 | `sv onto` | Reposition workspace onto another |
 | `sv hoist` | Bulk integration of workspaces |
