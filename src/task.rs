@@ -19,8 +19,11 @@ const TASKS_DIR: &str = ".tasks";
 const TASKS_LOG: &str = "tasks.jsonl";
 const TASKS_SNAPSHOT: &str = "tasks.snapshot.json";
 const TASKS_SCHEMA_VERSION: &str = "sv.tasks.v1";
-const TASK_ID_MIN_LEN: usize = 3;
 const TASK_ID_DELIMS: [&str; 2] = ["-", "/"];
+const ULID_TIME_LEN: usize = 10;
+const ULID_RANDOM_LEN: usize = 16;
+const ULID_CHARSET: &str = "0123456789abcdefghjkmnpqrstvwxyz";
+const ULID_CHARSET_LEN: u128 = 32;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -228,24 +231,63 @@ impl TaskStore {
         Ok(tasks)
     }
 
+    fn unique_task_suffix_from_base(
+        base: &str,
+        len: usize,
+        existing_suffixes: &HashSet<String>,
+    ) -> Option<String> {
+        let base = base.to_lowercase();
+        let random_end = ULID_TIME_LEN + ULID_RANDOM_LEN;
+        if base.len() < random_end || len == 0 || len > ULID_RANDOM_LEN {
+            return None;
+        }
+        let random_part = &base[ULID_TIME_LEN..random_end];
+        let candidate = &random_part[..len];
+        if existing_suffixes.contains(candidate) {
+            return None;
+        }
+        Some(candidate.to_string())
+    }
+
+    fn select_task_suffix_len(min_len: usize, ulid_suffix_counts: &HashMap<usize, usize>) -> usize {
+        let mut len = min_len;
+        loop {
+            let used = ulid_suffix_counts.get(&len).copied().unwrap_or(0) as u128;
+            let space = ulid_space_for_len(len);
+            if used >= space && len < ULID_RANDOM_LEN {
+                len += 1;
+                continue;
+            }
+            return len;
+        }
+    }
+
     pub fn generate_task_id(&self) -> Result<String> {
         let prefix = self.config.id_prefix.trim();
         let snapshot = self.snapshot_readonly()?;
         let mut existing_suffixes = HashSet::new();
+        let mut ulid_suffix_counts: HashMap<usize, usize> = HashMap::new();
         for task in snapshot.tasks {
             let id_norm = normalize_id(&task.id);
             let suffix = suffix_from_id(&id_norm);
+            if suffix.is_empty() {
+                continue;
+            }
             existing_suffixes.insert(suffix.to_string());
+            if is_ulid_suffix(suffix) {
+                *ulid_suffix_counts.entry(suffix.len()).or_insert(0) += 1;
+            }
         }
 
+        let min_len = self.config.id_min_len;
+        let target_len = Self::select_task_suffix_len(min_len, &ulid_suffix_counts);
+
         loop {
-            let base = Ulid::new().to_string().to_lowercase();
-            let max_len = base.len();
-            for len in TASK_ID_MIN_LEN..=max_len {
-                let candidate = &base[..len];
-                if !existing_suffixes.contains(candidate) {
-                    return Ok(format!("{}-{}", prefix, candidate));
-                }
+            let base = Ulid::new().to_string();
+            if let Some(suffix) =
+                Self::unique_task_suffix_from_base(&base, target_len, &existing_suffixes)
+            {
+                return Ok(format!("{}-{}", prefix, suffix));
             }
         }
     }
@@ -937,6 +979,18 @@ fn suffix_from_id<'a>(id_norm: &'a str) -> &'a str {
     }
 }
 
+fn is_ulid_suffix(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|ch| ULID_CHARSET.contains(ch))
+}
+
+fn ulid_space_for_len(len: usize) -> u128 {
+    let mut space = 1u128;
+    for _ in 0..len {
+        space *= ULID_CHARSET_LEN;
+    }
+    space
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -998,6 +1052,44 @@ mod tests {
         let (compacted, report) = store.compact_events(&events, policy).expect("compact");
         assert!(compacted.len() < events.len());
         assert_eq!(report.compacted_tasks, 1);
+    }
+
+    #[test]
+    fn task_id_suffix_uses_random_section() {
+        let existing = HashSet::new();
+        let suffix = TaskStore::unique_task_suffix_from_base(
+            "0123456789abcdefghijklmnop",
+            3,
+            &existing,
+        )
+        .expect("suffix");
+        assert_eq!(suffix, "abc");
+    }
+
+    #[test]
+    fn task_id_suffix_stays_same_length_when_taken() {
+        let mut existing = HashSet::new();
+        existing.insert("abc".to_string());
+        let suffix = TaskStore::unique_task_suffix_from_base(
+            "0123456789abcdefghijklmnop",
+            3,
+            &existing,
+        );
+        assert!(suffix.is_none());
+    }
+
+    #[test]
+    fn task_id_suffix_length_stays_min_until_exhausted() {
+        let mut counts = HashMap::new();
+        counts.insert(3, 1);
+        assert_eq!(TaskStore::select_task_suffix_len(3, &counts), 3);
+    }
+
+    #[test]
+    fn task_id_suffix_length_grows_after_exhausted() {
+        let mut counts = HashMap::new();
+        counts.insert(3, ulid_space_for_len(3) as usize);
+        assert_eq!(TaskStore::select_task_suffix_len(3, &counts), 4);
     }
 
     #[test]

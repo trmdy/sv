@@ -15,7 +15,7 @@
 ## Non-goals
 - Full issue tracker (epics, sprints, dashboards).
 - Realtime cross-machine sync (future).
-- Rich UI.
+- Web UI or advanced visualizations (kanban, graph, insights).
 
 ## Users
 - Multi-agent teams in one repo.
@@ -27,7 +27,7 @@
 - Minimal flags.
 
 ## Data model (event log)
-- Task ID: `<id_prefix>-<suffix>`, where suffix starts at 3 alphanum chars and grows as needed.
+- Task ID: `<id_prefix>-<suffix>`, where suffix starts at `id_min_len` alphanum chars and grows as needed.
 - Event ID: ULID per event (dedup, merge safety).
 - Event types: `task_created`, `task_started`, `task_status_changed`, `task_closed`, `task_commented`.
 - Task state derived by folding events in order.
@@ -51,6 +51,7 @@
 ```toml
 [tasks]
 id_prefix = "sv"
+id_min_len = 3
 statuses = ["open", "in_progress", "closed"]
 default_status = "open"
 in_progress_status = "in_progress"
@@ -63,8 +64,9 @@ older_than = "180d"
 ```
 
 ## CLI (initial)
+- `sv task` (launch fullscreen TUI)
 - `sv task new <title> [--status <s>] [--body <txt>]`
-- `sv task list [--status <s>] [--json]`
+- `sv task list [--status <s>] [--workspace <name|id>] [--actor <name>] [--updated-since <rfc3339>] [--json]`
 - `sv task show <id> [--json]`
 - `sv task start <id>`
 - `sv task status <id> <status>`
@@ -72,6 +74,11 @@ older_than = "180d"
 - `sv task comment <id> <text>`
 - `sv task sync`
 - `sv task prefix [<prefix>]`
+
+## Task viewer (TUI)
+- v1: read-only viewer for list + detail.
+- v2: start/close/comment actions.
+- Keymap + perf budgets in `docs/task_viewer.md`.
 
 ## Workflows
 - Create task -> status `default_status`.

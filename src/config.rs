@@ -204,6 +204,10 @@ pub struct TasksConfig {
     #[serde(default = "default_task_id_prefix")]
     pub id_prefix: String,
 
+    /// Minimum task ID suffix length
+    #[serde(default = "default_task_id_min_len")]
+    pub id_min_len: usize,
+
     /// Allowed task statuses
     #[serde(default = "default_task_statuses")]
     pub statuses: Vec<String>,
@@ -248,6 +252,10 @@ fn default_task_id_prefix() -> String {
     "sv".to_string()
 }
 
+fn default_task_id_min_len() -> usize {
+    3
+}
+
 fn default_task_status() -> String {
     "open".to_string()
 }
@@ -282,6 +290,7 @@ impl Default for TasksConfig {
     fn default() -> Self {
         Self {
             id_prefix: default_task_id_prefix(),
+            id_min_len: default_task_id_min_len(),
             statuses: default_task_statuses(),
             default_status: default_task_status(),
             in_progress_status: default_task_in_progress_status(),
@@ -396,6 +405,16 @@ impl TasksConfig {
                 "tasks.id_prefix must be alphanumeric".to_string(),
             ));
         }
+        if self.id_min_len < 3 {
+            return Err(crate::error::Error::InvalidConfig(
+                "tasks.id_min_len must be >= 3".to_string(),
+            ));
+        }
+        if self.id_min_len > 16 {
+            return Err(crate::error::Error::InvalidConfig(
+                "tasks.id_min_len must be <= 16".to_string(),
+            ));
+        }
 
         if self.statuses.is_empty() {
             return Err(crate::error::Error::InvalidConfig(
@@ -494,6 +513,7 @@ mod tests {
             vec!["open".to_string(), "in_progress".to_string(), "closed".to_string()]
         );
         assert_eq!(cfg.tasks.id_prefix, "sv");
+        assert_eq!(cfg.tasks.id_min_len, 3);
         assert_eq!(cfg.tasks.default_status, "open");
         assert_eq!(cfg.tasks.in_progress_status, "in_progress");
         assert_eq!(cfg.tasks.closed_statuses, vec!["closed".to_string()]);
@@ -528,6 +548,7 @@ paths = [".beads/**", { pattern = "Cargo.lock", mode = "readonly" }]
 
 [tasks]
 id_prefix = "proj"
+id_min_len = 4
 statuses = ["open", "review", "closed"]
 default_status = "open"
 in_progress_status = "review"
@@ -568,6 +589,7 @@ older_than = "90d"
             vec!["open".to_string(), "review".to_string(), "closed".to_string()]
         );
         assert_eq!(cfg.tasks.id_prefix, "proj");
+        assert_eq!(cfg.tasks.id_min_len, 4);
         assert_eq!(cfg.tasks.default_status, "open");
         assert_eq!(cfg.tasks.in_progress_status, "review");
         assert_eq!(cfg.tasks.closed_statuses, vec!["closed".to_string()]);
