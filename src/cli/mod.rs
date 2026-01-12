@@ -1616,6 +1616,47 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         })
         .collect();
 
+    let workspace_cleanup = if opts.rm {
+        if replay_summary.conflicts > 0 || replay_summary.in_conflict > 0 {
+            let mut report = ws::WorkspaceCleanupReport::new(false);
+            report.skipped = matching_workspaces
+                .iter()
+                .map(|ws| ws::WorkspaceCleanupSkip {
+                    name: ws.name.clone(),
+                    reason: "hoist has conflicts".to_string(),
+                })
+                .collect();
+            Some(report)
+        } else if !applied {
+            let reason = if opts.no_apply {
+                "hoist not applied (--no-apply)"
+            } else if total_applied == 0 {
+                "nothing applied"
+            } else {
+                "hoist not applied"
+            };
+            let mut report = ws::WorkspaceCleanupReport::new(false);
+            report.skipped = matching_workspaces
+                .iter()
+                .map(|ws| ws::WorkspaceCleanupSkip {
+                    name: ws.name.clone(),
+                    reason: reason.to_string(),
+                })
+                .collect();
+            Some(report)
+        } else {
+            Some(ws::remove_workspaces(
+                &workdir,
+                &matching_workspaces,
+                opts.rm_force,
+                false,
+                &workdir,
+            ))
+        }
+    } else {
+        None
+    };
+
     // Output result
     let status_str = match final_status {
         HoistStatus::Completed => "complete",
@@ -1635,6 +1676,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         continue_on_conflict: if opts.continue_on_conflict { Some(true) } else { None },
         task_warnings: task_warnings.clone(),
         conflicts: conflict_output.clone(),
+        workspace_cleanup: workspace_cleanup.clone(),
     };
 
     if opts.json {
@@ -1690,6 +1732,34 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
             println!("Apply skipped due to conflicts. Resolve conflicts and retry.");
         } else if total_applied == 0 {
             println!("Nothing to apply (no commits replayed).");
+        }
+        if let Some(cleanup) = &workspace_cleanup {
+            println!();
+            let header = if cleanup.dry_run {
+                "Workspace cleanup (dry run)"
+            } else {
+                "Workspace cleanup"
+            };
+            println!("{header}");
+            println!("  Removed: {}", cleanup.removed.len());
+            println!("  Skipped: {}", cleanup.skipped.len());
+            println!("  Failed: {}", cleanup.failed.len());
+            if !cleanup.removed.is_empty() {
+                let label = if cleanup.dry_run { "Would remove" } else { "Removed" };
+                println!("{label}: {}", cleanup.removed.join(", "));
+            }
+            if !cleanup.skipped.is_empty() {
+                println!("Skipped:");
+                for skip in &cleanup.skipped {
+                    println!("  - {} ({})", skip.name, skip.reason);
+                }
+            }
+            if !cleanup.failed.is_empty() {
+                println!("Failed:");
+                for failure in &cleanup.failed {
+                    println!("  - {} ({})", failure.name, failure.error);
+                }
+            }
         }
     }
 
