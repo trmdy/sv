@@ -1111,6 +1111,8 @@ pub struct HoistOutput {
     pub task_warnings: Vec<HoistTaskWarning>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub conflicts: Vec<HoistConflictSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_cleanup: Option<ws::WorkspaceCleanupReport>,
 }
 
 /// Summary of a conflict during hoist
@@ -1411,6 +1413,17 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
 
     if opts.dry_run {
         // Dry run output
+        let workspace_cleanup = if opts.rm {
+            Some(ws::remove_workspaces(
+                &workdir,
+                &matching_workspaces,
+                opts.rm_force,
+                true,
+                &workdir,
+            ))
+        } else {
+            None
+        };
         let output = HoistOutput {
             hoist_id: hoist_id.clone(),
             dest_ref: dest.clone(),
@@ -1423,6 +1436,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
             continue_on_conflict: if opts.continue_on_conflict { Some(true) } else { None },
             task_warnings: task_warnings.clone(),
             conflicts: Vec::new(),
+            workspace_cleanup,
         };
 
         if opts.json {
@@ -1436,6 +1450,19 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
             println!("  Workspaces: {}", matching_workspaces.len());
             for ws in &matching_workspaces {
                 println!("    - {} ({})", ws.name, ws.branch);
+            }
+            if let Some(cleanup) = &output.workspace_cleanup {
+                println!();
+                println!("Workspace cleanup (dry run)");
+                if !cleanup.removed.is_empty() {
+                    println!("  Would remove: {}", cleanup.removed.join(", "));
+                }
+                if !cleanup.skipped.is_empty() {
+                    println!("  Skipped: {}", cleanup.skipped.len());
+                }
+                if !cleanup.failed.is_empty() {
+                    println!("  Failed: {}", cleanup.failed.len());
+                }
             }
         }
 
