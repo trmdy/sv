@@ -125,3 +125,56 @@ fn ws_here_registers_current_repo() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[test]
+fn ws_clean_removes_merged_workspaces() -> Result<(), Box<dyn std::error::Error>> {
+    let repo = setup_repo()?;
+    let ws1_path = repo.path().join(".sv/worktrees/ws1");
+    let ws2_path = repo.path().join(".sv/worktrees/ws2");
+
+    sv_cmd(&repo)
+        .args(["ws", "new", "ws1", "--base", "HEAD"])
+        .assert()
+        .success();
+    sv_cmd(&repo)
+        .args(["ws", "new", "ws2", "--base", "HEAD"])
+        .assert()
+        .success();
+
+    std::fs::write(ws2_path.join("feature.txt"), "feature\n")?;
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(&ws2_path)
+        .output()?;
+    std::process::Command::new("git")
+        .args(["commit", "-m", "feature work"])
+        .current_dir(&ws2_path)
+        .output()?;
+
+    let output = sv_cmd(&repo)
+        .args(["ws", "clean", "--dest", "HEAD", "--json"])
+        .output()?;
+    assert!(output.status.success());
+
+    let value: Value = serde_json::from_slice(&output.stdout)?;
+    let removed = value["cleanup"]["removed"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let removed_names: Vec<_> = removed
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+    assert!(removed_names.contains(&"ws1".to_string()));
+    assert!(!removed_names.contains(&"ws2".to_string()));
+
+    assert!(!ws1_path.exists());
+    assert!(ws2_path.exists());
+
+    let storage = Storage::for_repo(repo.path().to_path_buf());
+    let registry = storage.read_workspaces()?;
+    assert!(registry.find("ws1").is_none());
+    assert!(registry.find("ws2").is_some());
+
+    Ok(())
+}
