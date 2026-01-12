@@ -11,6 +11,7 @@
 - Repo map: `repo_map.md`
 - Gotchas: `gotchas.md`
 - Task viewer spec: `task_viewer.md`
+- Task viewer tests: `task_viewer_tests.md`
 - Runbooks:
   - `runbooks/dev.md`
   - `runbooks/test.md`
