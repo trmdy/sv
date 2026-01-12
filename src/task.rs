@@ -972,16 +972,20 @@ mod tests {
         let store = TaskStore::new(storage, config.clone());
 
         let mut events = Vec::new();
+        let now = Utc::now();
         let mut create = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
         create.title = Some("Test".to_string());
+        create.timestamp = now;
         events.push(create);
 
         let mut status1 = TaskEvent::new(TaskEventType::TaskStatusChanged, "task-1");
         status1.status = Some("in_progress".to_string());
+        status1.timestamp = now + chrono::Duration::milliseconds(1);
         events.push(status1);
 
         let mut status2 = TaskEvent::new(TaskEventType::TaskClosed, "task-1");
         status2.status = Some("closed".to_string());
+        status2.timestamp = now + chrono::Duration::milliseconds(2);
         events.push(status2);
 
         let policy = CompactionPolicy {
