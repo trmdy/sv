@@ -184,6 +184,12 @@ pub struct PrefixOptions {
     pub quiet: bool,
 }
 
+pub struct TuiOptions {
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
 struct TaskContext {
     store: TaskStore,
     actor: Option<String>,
@@ -1045,6 +1051,21 @@ pub fn run_prefix(options: PrefixOptions) -> Result<()> {
         &output,
         Some(&human),
     )
+}
+
+pub fn run_tui(options: TuiOptions) -> Result<()> {
+    if options.json {
+        return Err(Error::InvalidArgument(
+            "task TUI does not support --json".to_string(),
+        ));
+    }
+    if options.quiet {
+        return Err(Error::InvalidArgument(
+            "task TUI does not support --quiet".to_string(),
+        ));
+    }
+    let ctx = load_context(options.repo, None, false)?;
+    crate::ui::task_viewer::run(ctx.store)
 }
 
 #[derive(serde::Serialize)]

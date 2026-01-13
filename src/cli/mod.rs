@@ -293,16 +293,19 @@ Examples:
     },
 
     /// Task management
-    #[command(subcommand)]
     #[command(long_about = r#"Manage tasks in this repo.
 
 Examples:
+  sv task
   sv task new "Ship CLI help"
   sv task list --status open
   sv task start 01HZ...
   sv task close 01HZ...
 "#)]
-    Task(TaskCommands),
+    Task {
+        #[command(subcommand)]
+        command: Option<TaskCommands>,
+    },
 
     /// Risk assessment and conflict prediction
     #[command(long_about = r#"Show overlap risk across workspaces.
@@ -2196,99 +2199,14 @@ impl Cli {
                     quiet,
                 })
             }
-            Commands::Task(cmd) => match cmd {
-                TaskCommands::New { title, status, priority, body } => {
-                    task::run_new(task::NewOptions {
-                        title,
-                        status,
-                        priority,
-                        body,
-                        actor,
-                        events: events.clone(),
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::List { status, priority, workspace, actor: list_actor, updated_since } => {
-                    task::run_list(task::ListOptions {
-                        status,
-                        priority,
-                        workspace,
-                        actor: list_actor,
-                        updated_since,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Show { id } => {
-                    task::run_show(task::ShowOptions {
-                        id,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Start { id } => {
-                    task::run_start(task::StartOptions {
-                        id,
-                        actor,
-                        events: events.clone(),
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Status { id, status } => {
-                    task::run_status(task::StatusOptions {
-                        id,
-                        status,
-                        actor,
-                        events: events.clone(),
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Priority { id, priority } => {
-                    task::run_priority(task::PriorityOptions {
-                        id,
-                        priority,
-                        actor,
-                        events: events.clone(),
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Close { id, status } => {
-                    task::run_close(task::CloseOptions {
-                        id,
-                        status,
-                        actor,
-                        events: events.clone(),
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Comment { id, text } => {
-                    task::run_comment(task::CommentOptions {
-                        id,
-                        text,
-                        actor,
-                        events: events.clone(),
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Parent { command } => match command {
-                    ParentCommands::Set { child, parent } => {
-                        task::run_parent_set(task::ParentSetOptions {
-                            child,
-                            parent,
+            Commands::Task { command } => match command {
+                Some(cmd) => match cmd {
+                    TaskCommands::New { title, status, priority, body } => {
+                        task::run_new(task::NewOptions {
+                            title,
+                            status,
+                            priority,
+                            body,
                             actor,
                             events: events.clone(),
                             repo,
@@ -2296,95 +2214,187 @@ impl Cli {
                             quiet,
                         })
                     }
-                    ParentCommands::Clear { child } => {
-                        task::run_parent_clear(task::ParentClearOptions {
-                            child,
+                    TaskCommands::List { status, priority, workspace, actor: list_actor, updated_since } => {
+                        task::run_list(task::ListOptions {
+                            status,
+                            priority,
+                            workspace,
+                            actor: list_actor,
+                            updated_since,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Show { id } => {
+                        task::run_show(task::ShowOptions {
+                            id,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Start { id } => {
+                        task::run_start(task::StartOptions {
+                            id,
                             actor,
                             events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Status { id, status } => {
+                        task::run_status(task::StatusOptions {
+                            id,
+                            status,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Priority { id, priority } => {
+                        task::run_priority(task::PriorityOptions {
+                            id,
+                            priority,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Close { id, status } => {
+                        task::run_close(task::CloseOptions {
+                            id,
+                            status,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Comment { id, text } => {
+                        task::run_comment(task::CommentOptions {
+                            id,
+                            text,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Parent { command } => match command {
+                        ParentCommands::Set { child, parent } => {
+                            task::run_parent_set(task::ParentSetOptions {
+                                child,
+                                parent,
+                                actor,
+                                events: events.clone(),
+                                repo,
+                                json,
+                                quiet,
+                            })
+                        }
+                        ParentCommands::Clear { child } => {
+                            task::run_parent_clear(task::ParentClearOptions {
+                                child,
+                                actor,
+                                events: events.clone(),
+                                repo,
+                                json,
+                                quiet,
+                            })
+                        }
+                    },
+                    TaskCommands::Block { blocker, blocked } => {
+                        task::run_block(task::BlockOptions {
+                            blocker,
+                            blocked,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Unblock { blocker, blocked } => {
+                        task::run_unblock(task::UnblockOptions {
+                            blocker,
+                            blocked,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Relate { left, right, desc } => {
+                        task::run_relate(task::RelateOptions {
+                            left,
+                            right,
+                            description: desc,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Unrelate { left, right } => {
+                        task::run_unrelate(task::UnrelateOptions {
+                            left,
+                            right,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Relations { id } => {
+                        task::run_relations(task::RelationsOptions {
+                            id,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Sync => {
+                        task::run_sync(task::SyncOptions {
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Compact { older_than, max_log_mb, dry_run } => {
+                        task::run_compact(task::CompactOptions {
+                            older_than,
+                            max_log_mb,
+                            dry_run,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Prefix { prefix } => {
+                        task::run_prefix(task::PrefixOptions {
+                            prefix,
                             repo,
                             json,
                             quiet,
                         })
                     }
                 },
-                TaskCommands::Block { blocker, blocked } => {
-                    task::run_block(task::BlockOptions {
-                        blocker,
-                        blocked,
-                        actor,
-                        events: events.clone(),
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Unblock { blocker, blocked } => {
-                    task::run_unblock(task::UnblockOptions {
-                        blocker,
-                        blocked,
-                        actor,
-                        events: events.clone(),
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Relate { left, right, desc } => {
-                    task::run_relate(task::RelateOptions {
-                        left,
-                        right,
-                        description: desc,
-                        actor,
-                        events: events.clone(),
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Unrelate { left, right } => {
-                    task::run_unrelate(task::UnrelateOptions {
-                        left,
-                        right,
-                        actor,
-                        events: events.clone(),
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Relations { id } => {
-                    task::run_relations(task::RelationsOptions {
-                        id,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Sync => {
-                    task::run_sync(task::SyncOptions {
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Compact { older_than, max_log_mb, dry_run } => {
-                    task::run_compact(task::CompactOptions {
-                        older_than,
-                        max_log_mb,
-                        dry_run,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                TaskCommands::Prefix { prefix } => {
-                    task::run_prefix(task::PrefixOptions {
-                        prefix,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
+                None => task::run_tui(task::TuiOptions {
+                    repo,
+                    json,
+                    quiet,
+                }),
             }
             Commands::Risk { selector, base, simulate } => {
                 run_risk(RiskOptions {
