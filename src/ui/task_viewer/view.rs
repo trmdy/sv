@@ -1,0 +1,268 @@
+use chrono::{DateTime, Utc};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::Frame;
+
+use crate::task::{TaskDetails, TaskRecord};
+
+use super::app::AppState;
+
+const STATUS_WIDTH: usize = 7;
+const ID_WIDTH: usize = 12;
+const PRIORITY_WIDTH: usize = 3;
+
+pub fn render(frame: &mut Frame, app: &mut AppState) {
+    let area = frame.size();
+    let footer_height = 2u16;
+    let main_height = area.height.saturating_sub(footer_height);
+    let main = Rect::new(area.x, area.y, area.width, main_height);
+    let footer = Rect::new(area.x, area.y + main_height, area.width, footer_height);
+
+    if app.is_narrow() && !app.show_detail {
+        render_list(frame, app, main);
+    } else if app.is_narrow() {
+        render_detail(frame, app, main);
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
+            .split(main);
+        render_list(frame, app, chunks[0]);
+        render_detail(frame, app, chunks[1]);
+    }
+
+    render_footer(frame, app, footer);
+}
+
+fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
+    let mut lines = Vec::new();
+    let content_width = area.width.saturating_sub(2) as usize;
+
+    if app.filter_active || !app.filter.is_empty() || app.status_filter.is_some() {
+        let filter_label = if app.filter_active && app.filter.is_empty() {
+            "filter: _".to_string()
+        } else if app.filter.is_empty() {
+            "filter:".to_string()
+        } else {
+            format!("filter: {}", app.filter)
+        };
+        let status_label = match app.status_filter.as_deref() {
+            Some(value) => format!("status: {value}"),
+            None => "status: all".to_string(),
+        };
+        lines.push(Line::from(format!("{filter_label}  {status_label}")));
+        lines.push(Line::from(""));
+    }
+
+    if app.filtered.is_empty() {
+        if !app.filter.is_empty() || app.status_filter.is_some() {
+            lines.push(Line::from("No matches"));
+        } else {
+            lines.push(Line::from("No tasks"));
+        }
+    } else {
+        let list_height = area
+            .height
+            .saturating_sub(2)
+            .saturating_sub(lines.len() as u16) as usize;
+        let selected_pos = app
+            .selected
+            .and_then(|idx| app.filtered.iter().position(|candidate| *candidate == idx));
+        let (start, end) = list_window(app.filtered.len(), selected_pos, list_height);
+        for pos in start..end {
+            let idx = app.filtered[pos];
+            if let Some(task) = app.tasks.get(idx) {
+                let selected = app.selected == Some(idx);
+                lines.push(render_list_row(task, selected, content_width));
+            }
+        }
+    }
+
+    let widget = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title("Tasks"))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(widget, area);
+}
+
+fn render_detail(frame: &mut Frame, app: &mut AppState, area: Rect) {
+    let content = build_detail_lines(app, area.width.saturating_sub(2) as usize);
+    let widget = Paragraph::new(content)
+        .block(Block::default().borders(Borders::ALL).title("Details"))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(widget, area);
+}
+
+fn render_footer(frame: &mut Frame, app: &AppState, area: Rect) {
+    let hint = if app.filter_active {
+        "esc clear  enter done  j/k move  q quit"
+    } else {
+        "j/k move  / filter  r reload  q quit"
+    };
+    let mut footer = hint.to_string();
+    if let Some(status) = app.status_line() {
+        footer.push_str("  |  ");
+        footer.push_str(&status);
+    }
+    let widget = Paragraph::new(footer)
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::TOP));
+    frame.render_widget(widget, area);
+}
+
+fn render_list_row(task: &TaskRecord, selected: bool, width: usize) -> Line<'static> {
+    let status_label = format_status_label(&task.status);
+    let status_text = pad_text(&status_label, STATUS_WIDTH);
+    let id_text = pad_text(&task.id, ID_WIDTH);
+    let priority_text = pad_text(&task.priority, PRIORITY_WIDTH);
+    let used = STATUS_WIDTH + ID_WIDTH + PRIORITY_WIDTH + 4;
+    let title_width = width.saturating_sub(used);
+    let title = truncate_text(&task.title, title_width);
+
+    let prefix = if selected { ">" } else { " " };
+    let status_span = Span::styled(
+        status_text,
+        Style::default().fg(status_color(&task.status)).add_modifier(Modifier::BOLD),
+    );
+    let mut spans = vec![
+        Span::raw(prefix),
+        Span::raw(" "),
+        status_span,
+        Span::raw(" "),
+        Span::raw(id_text),
+        Span::raw(" "),
+        Span::raw(priority_text),
+        Span::raw(" "),
+        Span::raw(title),
+    ];
+
+    if selected {
+        for span in &mut spans {
+            span.style = span.style.add_modifier(Modifier::REVERSED);
+        }
+    }
+
+    Line::from(spans)
+}
+
+fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
+    let Some(task) = app.selected_task() else {
+        return vec![Line::from("No task selected")];
+    };
+
+    let cache_key = (task.id.clone(), width as u16);
+    if let Some(lines) = app.cache.detail.get(&cache_key) {
+        return lines
+            .iter()
+            .map(|line| Line::from(line.clone()))
+            .collect::<Vec<Line>>();
+    }
+
+    let mut lines = Vec::new();
+    lines.push(format!("{} {}", task.id, task.title));
+    lines.push(format!("Status: {}  Priority: {}", task.status, task.priority));
+    lines.push(format!(
+        "Updated: {}  Created: {}",
+        format_timestamp(task.updated_at),
+        format_timestamp(task.created_at)
+    ));
+    if let Some(workspace) = task.workspace.as_deref() {
+        lines.push(format!("Workspace: {}", workspace));
+    }
+    if let Some(branch) = task.branch.as_deref() {
+        lines.push(format!("Branch: {}", branch));
+    }
+    lines.push(String::new());
+
+    let body = task.body.as_deref().unwrap_or("No description.");
+    lines.push(body.to_string());
+
+    if let Some(details) = app.selected_details() {
+        append_comments(&mut lines, details);
+    } else if task.comments_count > 0 {
+        lines.push(String::new());
+        lines.push(format!("Comments: {} (loading...)", task.comments_count));
+    }
+
+    app.cache.detail.insert(cache_key, lines.clone());
+    lines.into_iter().map(Line::from).collect()
+}
+
+fn append_comments(lines: &mut Vec<String>, details: &TaskDetails) {
+    if details.comments.is_empty() {
+        return;
+    }
+    lines.push(String::new());
+    lines.push(format!("Comments: {}", details.comments.len()));
+    for comment in &details.comments {
+        let actor = comment.actor.as_deref().unwrap_or("unknown");
+        let timestamp = format_timestamp(comment.timestamp);
+        lines.push(format!("- {timestamp} {actor}: {}", comment.comment));
+    }
+}
+
+fn list_window(total: usize, selected: Option<usize>, height: usize) -> (usize, usize) {
+    if total == 0 || height == 0 {
+        return (0, 0);
+    }
+    if total <= height {
+        return (0, total);
+    }
+    let selected = selected.unwrap_or(0);
+    let mut start = selected.saturating_sub(height / 2);
+    if start + height > total {
+        start = total - height;
+    }
+    (start, start + height)
+}
+
+fn format_status_label(status: &str) -> String {
+    match normalize_status(status).as_str() {
+        "open" => "open".to_string(),
+        "in_progress" => "prog".to_string(),
+        "closed" => "closed".to_string(),
+        value => truncate_text(value, 6),
+    }
+}
+
+fn status_color(status: &str) -> Color {
+    match normalize_status(status).as_str() {
+        "open" => Color::Green,
+        "in_progress" => Color::Yellow,
+        "closed" => Color::DarkGray,
+        _ => Color::LightBlue,
+    }
+}
+
+fn normalize_status(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace('-', "_")
+}
+
+fn pad_text(value: &str, width: usize) -> String {
+    let mut text = value.to_string();
+    if text.len() > width {
+        text = truncate_text(&text, width);
+    }
+    format!("{text:width$}")
+}
+
+fn truncate_text(value: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() <= max {
+        return value.to_string();
+    }
+    if max <= 3 {
+        return chars[..max].iter().collect();
+    }
+    let mut out: String = chars[..(max - 3)].iter().collect();
+    out.push_str("...");
+    out
+}
+
+fn format_timestamp(value: DateTime<Utc>) -> String {
+    value.format("%Y-%m-%d %H:%M").to_string()
+}
