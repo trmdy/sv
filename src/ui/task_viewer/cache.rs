@@ -24,6 +24,12 @@ impl RenderCache {
         self.detail.clear();
         self.markdown.clear();
     }
+
+    pub fn invalidate_task(&mut self, task_id: &str) {
+        self.list_rows.retain(|(id, _, _), _| id != task_id);
+        self.detail.retain(|(id, _), _| id != task_id);
+        self.markdown.retain(|(id, _), _| id != task_id);
+    }
 }
 
 #[cfg(test)]
