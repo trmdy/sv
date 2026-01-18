@@ -28,11 +28,17 @@ enum LoadRequest {
 }
 
 enum UiMsg {
-    DataLoaded(Vec<TaskRecord>),
+    DataLoaded(Vec<TaskRecord>, HashSet<String>, Option<String>),
     LoadError(String),
     DetailsLoaded(String, TaskDetails),
     DetailsError(String, String),
     WatchError(String),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum StatusKind {
+    Error,
+    Info,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -48,6 +54,7 @@ pub struct AppState {
     pub(crate) filter: String,
     pub(crate) filter_active: bool,
     pub(crate) status_filter: Option<String>,
+    pub(crate) blocked_ids: HashSet<String>,
     detail_cache: HashMap<String, TaskDetails>,
     pending_details: HashSet<String>,
     status_message: Option<String>,
@@ -67,6 +74,7 @@ impl AppState {
             filter: String::new(),
             filter_active: false,
             status_filter: None,
+            blocked_ids: HashSet::new(),
             detail_cache: HashMap::new(),
             pending_details: HashSet::new(),
             status_message: None,
@@ -102,17 +110,41 @@ impl AppState {
         self.detail_cache.get(&task.id)
     }
 
-    pub(crate) fn status_line(&self) -> Option<String> {
+    pub(crate) fn status_line(&self) -> Option<(String, StatusKind)> {
         if let Some(message) = self.status_message.as_ref() {
-            return Some(message.clone());
+            return Some((message.clone(), StatusKind::Error));
         }
         if let Some(error) = self.watch_error.as_ref() {
-            return Some(error.clone());
+            return Some((error.clone(), StatusKind::Error));
         }
         if !self.filter.is_empty() {
-            return Some(format!("filter: {}", self.filter));
+            return Some((format!("filter: {}", self.filter), StatusKind::Info));
         }
         None
+    }
+
+    pub(crate) fn task_count_summary(&self) -> String {
+        let open_status = self.config.default_status.as_str();
+        let closed_statuses = &self.config.closed_statuses;
+        let mut open = 0usize;
+        let mut ready = 0usize;
+        let mut closed = 0usize;
+        for task in &self.tasks {
+            if task.status == open_status {
+                open += 1;
+                if !self.blocked_ids.contains(&task.id) {
+                    ready += 1;
+                }
+            }
+            if closed_statuses.iter().any(|status| status == &task.status) {
+                closed += 1;
+            }
+        }
+        format!("open: {open}  ready: {ready}  closed: {closed}")
+    }
+
+    pub(crate) fn is_task_ready(&self, task: &TaskRecord) -> bool {
+        task.status == self.config.default_status && !self.blocked_ids.contains(&task.id)
     }
 
     fn apply_filter(&mut self, previous_id: Option<String>) {
@@ -157,6 +189,15 @@ impl AppState {
 
     fn set_status_filter(&mut self, status: Option<String>) {
         self.status_filter = status;
+    }
+
+    fn list_jump(&self) -> isize {
+        let mut height = self.viewport.height.saturating_sub(4);
+        if self.filter_active || !self.filter.is_empty() || self.status_filter.is_some() {
+            height = height.saturating_sub(2);
+        }
+        let jump = (height / 2).max(1);
+        jump as isize
     }
 }
 
@@ -237,14 +278,15 @@ fn run_loop(
 
 fn handle_ui_msg(app: &mut AppState, msg: UiMsg, req_tx: &Sender<LoadRequest>) {
     match msg {
-        UiMsg::DataLoaded(mut tasks) => {
-            model::sort_tasks(&mut tasks, &app.config);
+        UiMsg::DataLoaded(mut tasks, blocked_ids, blocked_error) => {
+            model::sort_tasks(&mut tasks, &app.config, &blocked_ids);
             let previous_id = app.selected_task().map(|task| task.id.clone());
             app.tasks = tasks;
+            app.blocked_ids = blocked_ids;
             app.detail_cache.clear();
             app.pending_details.clear();
             app.cache.invalidate_on_resize();
-            app.status_message = None;
+            app.status_message = blocked_error;
             app.apply_filter(previous_id);
             app.queue_detail_load(req_tx);
         }
@@ -282,6 +324,9 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                 app.filter.pop();
             }
             KeyCode::Char(ch) => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    return false;
+                }
                 if !ch.is_control() {
                     app.filter.push(ch);
                 }
@@ -296,6 +341,14 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
 
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => true,
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.move_selection(app.list_jump(), req_tx);
+            false
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.move_selection(-app.list_jump(), req_tx);
+            false
+        }
         KeyCode::Char('j') | KeyCode::Down => {
             app.move_selection(1, req_tx);
             false
@@ -356,7 +409,14 @@ fn spawn_loader(store: TaskStore, req_rx: Receiver<LoadRequest>, ui_tx: Sender<U
             match req {
                 LoadRequest::Reload => match store.list(None) {
                     Ok(tasks) => {
-                        let _ = ui_tx.send(UiMsg::DataLoaded(tasks));
+                        let (blocked_ids, blocked_error) = match store.blocked_task_ids() {
+                            Ok(blocked_ids) => (blocked_ids, None),
+                            Err(err) => (
+                                HashSet::new(),
+                                Some(format!("ready calc error: {err}")),
+                            ),
+                        };
+                        let _ = ui_tx.send(UiMsg::DataLoaded(tasks, blocked_ids, blocked_error));
                     }
                     Err(err) => {
                         let _ = ui_tx.send(UiMsg::LoadError(err.to_string()));
