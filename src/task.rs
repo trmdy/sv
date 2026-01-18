@@ -1567,6 +1567,104 @@ mod tests {
     }
 
     #[test]
+    fn blocked_task_ids_respects_unblocked_events() {
+        let now = Utc::now();
+        let mut events = Vec::new();
+        for id in ["task-a", "task-b", "task-c"] {
+            let mut create = TaskEvent::new(TaskEventType::TaskCreated, id);
+            create.title = Some(id.to_string());
+            create.timestamp = now;
+            events.push(create);
+        }
+
+        let mut block_ab = TaskEvent::new(TaskEventType::TaskBlocked, "task-a");
+        block_ab.related_task_id = Some("task-b".to_string());
+        block_ab.timestamp = now + chrono::Duration::milliseconds(1);
+        events.push(block_ab);
+
+        let mut block_ca = TaskEvent::new(TaskEventType::TaskBlocked, "task-c");
+        block_ca.related_task_id = Some("task-a".to_string());
+        block_ca.timestamp = now + chrono::Duration::milliseconds(2);
+        events.push(block_ca);
+
+        let mut unblock_ab = TaskEvent::new(TaskEventType::TaskUnblocked, "task-a");
+        unblock_ab.related_task_id = Some("task-b".to_string());
+        unblock_ab.timestamp = now + chrono::Duration::milliseconds(3);
+        events.push(unblock_ab);
+
+        let blocked = blocked_task_ids_from_events(&events).expect("blocked");
+        assert!(blocked.contains("task-a"));
+        assert!(!blocked.contains("task-b"));
+    }
+
+    #[test]
+    fn relation_events_missing_targets_are_ignored() {
+        let config = default_config();
+        let mut map = HashMap::new();
+        let mut create = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
+        create.title = Some("Test".to_string());
+        apply_event(&mut map, &create, &config).expect("create");
+
+        let mut relate = TaskEvent::new(TaskEventType::TaskRelated, "task-1");
+        relate.relation_description = Some("context".to_string());
+        apply_event(&mut map, &relate, &config).expect("relation");
+
+        let task = map.get("task-1").expect("task");
+        assert_eq!(task.title, "Test");
+    }
+
+    #[test]
+    fn relations_ignore_missing_related_task_id() {
+        let now = Utc::now();
+        let mut events = Vec::new();
+        let mut create = TaskEvent::new(TaskEventType::TaskCreated, "task-a");
+        create.title = Some("A".to_string());
+        create.timestamp = now;
+        events.push(create);
+
+        let mut relate = TaskEvent::new(TaskEventType::TaskRelated, "task-a");
+        relate.relation_description = Some("context".to_string());
+        relate.timestamp = now + chrono::Duration::milliseconds(1);
+        events.push(relate);
+
+        let relations = build_relations("task-a", &events).expect("relations");
+        assert!(relations.relates.is_empty());
+    }
+
+    #[test]
+    fn list_ready_excludes_blocked_tasks() {
+        let dir = tempdir().expect("tempdir");
+        let repo_root = dir.path().to_path_buf();
+        let storage = Storage::new(
+            repo_root.clone(),
+            repo_root.join(".git"),
+            repo_root.clone(),
+        );
+        let store = TaskStore::new(storage, TasksConfig::default());
+
+        let now = Utc::now();
+        let mut create_a = TaskEvent::new(TaskEventType::TaskCreated, "task-a");
+        create_a.title = Some("A".to_string());
+        create_a.timestamp = now;
+        store.append_event(create_a).expect("create a");
+
+        let mut create_b = TaskEvent::new(TaskEventType::TaskCreated, "task-b");
+        create_b.title = Some("B".to_string());
+        create_b.timestamp = now + chrono::Duration::milliseconds(1);
+        store.append_event(create_b).expect("create b");
+
+        let mut block = TaskEvent::new(TaskEventType::TaskBlocked, "task-a");
+        block.related_task_id = Some("task-b".to_string());
+        block.timestamp = now + chrono::Duration::milliseconds(2);
+        store.append_event(block).expect("block");
+
+        let ready = store.list_ready().expect("list ready");
+        let ids: HashSet<String> = ready.into_iter().map(|task| task.id).collect();
+        assert!(ids.contains("task-a"));
+        assert!(!ids.contains("task-b"));
+    }
+
+    #[test]
     fn task_id_suffix_uses_random_section() {
         let existing = HashSet::new();
         let suffix = TaskStore::unique_task_suffix_from_base(
