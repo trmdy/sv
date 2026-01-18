@@ -7,15 +7,16 @@ use ratatui::Frame;
 
 use crate::task::{TaskDetails, TaskRecord};
 
-use super::app::AppState;
+use super::app::{AppState, StatusKind};
 
 const STATUS_WIDTH: usize = 7;
+const READY_WIDTH: usize = 1;
 const ID_WIDTH: usize = 12;
 const PRIORITY_WIDTH: usize = 3;
 
 pub fn render(frame: &mut Frame, app: &mut AppState) {
     let area = frame.size();
-    let footer_height = 2u16;
+    let footer_height = 3u16;
     let main_height = area.height.saturating_sub(footer_height);
     let main = Rect::new(area.x, area.y, area.width, main_height);
     let footer = Rect::new(area.x, area.y + main_height, area.width, footer_height);
@@ -52,7 +53,11 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
             Some(value) => format!("status: {value}"),
             None => "status: all".to_string(),
         };
-        lines.push(Line::from(format!("{filter_label}  {status_label}")));
+        lines.push(Line::from(vec![
+            Span::styled(filter_label, Style::default().fg(Color::LightCyan)),
+            Span::raw("  "),
+            Span::styled(status_label, Style::default().fg(Color::Yellow)),
+        ]));
         lines.push(Line::from(""));
     }
 
@@ -75,13 +80,19 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
             let idx = app.filtered[pos];
             if let Some(task) = app.tasks.get(idx) {
                 let selected = app.selected == Some(idx);
-                lines.push(render_list_row(task, selected, content_width));
+                let ready = app.is_task_ready(task);
+                lines.push(render_list_row(task, selected, ready, content_width));
             }
         }
     }
 
     let widget = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title("Tasks"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Tasks")
+                .border_style(Style::default().fg(Color::LightBlue)),
+        )
         .wrap(Wrap { trim: true });
     frame.render_widget(widget, area);
 }
@@ -89,50 +100,83 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
 fn render_detail(frame: &mut Frame, app: &mut AppState, area: Rect) {
     let content = build_detail_lines(app, area.width.saturating_sub(2) as usize);
     let widget = Paragraph::new(content)
-        .block(Block::default().borders(Borders::ALL).title("Details"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Details")
+                .border_style(Style::default().fg(Color::LightYellow)),
+        )
         .wrap(Wrap { trim: false });
     frame.render_widget(widget, area);
 }
 
 fn render_footer(frame: &mut Frame, app: &AppState, area: Rect) {
     let hint = if app.filter_active {
-        "esc clear  enter done  j/k move  q quit"
+        "esc clear  enter done  j/k move  ctrl+d/u jump  q quit"
     } else {
-        "j/k move  / filter  r reload  q quit"
+        "j/k move  ctrl+d/u jump  / filter  r reload  q quit"
     };
-    let mut footer = hint.to_string();
-    if let Some(status) = app.status_line() {
-        footer.push_str("  |  ");
-        footer.push_str(&status);
-    }
-    let widget = Paragraph::new(footer)
+    let hint_span = Span::styled(hint, Style::default().fg(Color::LightCyan));
+    let line = if let Some((status, kind)) = app.status_line() {
+        let status_style = match kind {
+            StatusKind::Error => Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD),
+            StatusKind::Info => Style::default().fg(Color::Yellow),
+        };
+        Line::from(vec![
+            hint_span,
+            Span::raw("  |  "),
+            Span::styled(status, status_style),
+        ])
+    } else {
+        Line::from(hint_span)
+    };
+    let counts_line = Line::from(Span::styled(
+        app.task_count_summary(),
+        Style::default().fg(Color::LightBlue),
+    ));
+    let widget = Paragraph::new(vec![line, counts_line])
         .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::TOP));
+        .block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(Color::LightBlue)),
+        );
     frame.render_widget(widget, area);
 }
 
-fn render_list_row(task: &TaskRecord, selected: bool, width: usize) -> Line<'static> {
+fn render_list_row(task: &TaskRecord, selected: bool, ready: bool, width: usize) -> Line<'static> {
     let status_label = format_status_label(&task.status);
     let status_text = pad_text(&status_label, STATUS_WIDTH);
     let id_text = pad_text(&task.id, ID_WIDTH);
     let priority_text = pad_text(&task.priority, PRIORITY_WIDTH);
-    let used = STATUS_WIDTH + ID_WIDTH + PRIORITY_WIDTH + 4;
+    let used = STATUS_WIDTH + READY_WIDTH + ID_WIDTH + PRIORITY_WIDTH + 5;
     let title_width = width.saturating_sub(used);
     let title = truncate_text(&task.title, title_width);
 
     let prefix = if selected { ">" } else { " " };
+    let ready_marker = if ready { "." } else { " " };
     let status_span = Span::styled(
         status_text,
         Style::default().fg(status_color(&task.status)).add_modifier(Modifier::BOLD),
+    );
+    let ready_span = Span::styled(ready_marker, Style::default().fg(Color::DarkGray));
+    let id_span = Span::styled(id_text, Style::default().fg(Color::LightBlue));
+    let priority_span = Span::styled(
+        priority_text,
+        Style::default()
+            .fg(priority_color(&task.priority))
+            .add_modifier(Modifier::BOLD),
     );
     let mut spans = vec![
         Span::raw(prefix),
         Span::raw(" "),
         status_span,
         Span::raw(" "),
-        Span::raw(id_text),
+        ready_span,
         Span::raw(" "),
-        Span::raw(priority_text),
+        id_span,
+        Span::raw(" "),
+        priority_span,
         Span::raw(" "),
         Span::raw(title),
     ];
@@ -232,6 +276,17 @@ fn status_color(status: &str) -> Color {
         "in_progress" => Color::Yellow,
         "closed" => Color::DarkGray,
         _ => Color::LightBlue,
+    }
+}
+
+fn priority_color(priority: &str) -> Color {
+    match priority.trim().to_ascii_uppercase().as_str() {
+        "P0" => Color::Red,
+        "P1" => Color::LightRed,
+        "P2" => Color::Yellow,
+        "P3" => Color::LightBlue,
+        "P4" => Color::DarkGray,
+        _ => Color::LightCyan,
     }
 }
 
