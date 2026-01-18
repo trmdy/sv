@@ -287,6 +287,30 @@ impl TaskStore {
         Ok(tasks)
     }
 
+    pub fn list_with_ready(&self) -> Result<(Vec<TaskRecord>, HashSet<String>)> {
+        let snapshot = self.load_snapshot_prefer_shared()?;
+        let tasks = snapshot.tasks;
+        let blocked_by = self.blocked_task_ids()?;
+        let ready_status = self.config.default_status.as_str();
+        let ready_ids = tasks
+            .iter()
+            .filter(|task| task.status == ready_status && !blocked_by.contains(&task.id))
+            .map(|task| task.id.clone())
+            .collect();
+        Ok((tasks, ready_ids))
+    }
+
+    pub fn list_ready(&self) -> Result<Vec<TaskRecord>> {
+        let (mut tasks, ready_ids) = self.list_with_ready()?;
+        tasks.retain(|task| ready_ids.contains(&task.id));
+        Ok(tasks)
+    }
+
+    pub fn blocked_task_ids(&self) -> Result<HashSet<String>> {
+        let events = self.load_merged_events()?;
+        blocked_task_ids_from_events(&events)
+    }
+
     fn unique_task_suffix_from_base(
         base: &str,
         len: usize,
@@ -1297,6 +1321,11 @@ fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations>
         blocked_by,
         relates,
     })
+}
+
+fn blocked_task_ids_from_events(events: &[TaskEvent]) -> Result<HashSet<String>> {
+    let state = build_relation_state(events)?;
+    Ok(state.blocks.into_iter().map(|(_, blocked)| blocked).collect())
 }
 
 fn normalize_id(value: &str) -> String {
