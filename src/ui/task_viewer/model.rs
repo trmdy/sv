@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 
 use crate::config::TasksConfig;
@@ -11,24 +13,12 @@ fn normalize_status(value: &str) -> String {
     normalize_text(value)
 }
 
-pub fn status_rank(status: &str, config: &TasksConfig) -> usize {
-    let normalized = normalize_status(status);
-    config
-        .statuses
-        .iter()
-        .position(|entry| normalize_status(entry) == normalized)
-        .unwrap_or(config.statuses.len())
-}
-
-pub fn sort_tasks(tasks: &mut [TaskRecord], config: &TasksConfig) {
-    tasks.sort_by(|left, right| {
-        let left_rank = status_rank(&left.status, config);
-        let right_rank = status_rank(&right.status, config);
-        left_rank
-            .cmp(&right_rank)
-            .then_with(|| right.updated_at.cmp(&left.updated_at))
-            .then_with(|| left.id.cmp(&right.id))
-    });
+pub fn sort_tasks(
+    tasks: &mut [TaskRecord],
+    config: &TasksConfig,
+    blocked_ids: &HashSet<String>,
+) {
+    crate::task::sort_tasks(tasks, config, blocked_ids);
 }
 
 fn fuzzy_match(value: &str, query: &str) -> bool {
@@ -108,12 +98,18 @@ pub fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
 mod tests {
     use super::*;
 
-    fn task(id: &str, title: &str, status: &str, updated_at: DateTime<Utc>) -> TaskRecord {
+    fn task(
+        id: &str,
+        title: &str,
+        status: &str,
+        priority: &str,
+        updated_at: DateTime<Utc>,
+    ) -> TaskRecord {
         TaskRecord {
             id: id.to_string(),
             title: title.to_string(),
             status: status.to_string(),
-            priority: "P2".to_string(),
+            priority: priority.to_string(),
             created_at: updated_at,
             updated_at,
             created_by: None,
@@ -135,8 +131,8 @@ mod tests {
     fn filter_matches_id_and_title_case_insensitive() {
         let now = Utc::now();
         let tasks = vec![
-            task("sv-aaa", "Fix Sync", "open", now),
-            task("sv-bbb", "Add watcher", "open", now),
+            task("sv-aaa", "Fix Sync", "open", "P2", now),
+            task("sv-bbb", "Add watcher", "open", "P2", now),
         ];
         let indices = filter_task_indices(&tasks, "SYNC", None);
         assert_eq!(indices, vec![0]);
@@ -149,35 +145,39 @@ mod tests {
     fn filter_combines_status_and_text() {
         let now = Utc::now();
         let tasks = vec![
-            task("sv-aaa", "Fix Sync", "open", now),
-            task("sv-bbb", "Fix Sync", "closed", now),
+            task("sv-aaa", "Fix Sync", "open", "P2", now),
+            task("sv-bbb", "Fix Sync", "closed", "P2", now),
         ];
         let indices = filter_task_indices(&tasks, "sync", Some("open"));
         assert_eq!(indices, vec![0]);
     }
 
     #[test]
-    fn sort_orders_by_status_then_updated() {
+    fn sort_orders_by_status_priority_readiness() {
         let config = TasksConfig::default();
         let now = Utc::now();
         let earlier = now - chrono::Duration::seconds(60);
+        let mut blocked_ids = HashSet::new();
+        blocked_ids.insert("sv-3".to_string());
         let mut tasks = vec![
-            task("sv-3", "Third", "closed", now),
-            task("sv-1", "First", "open", earlier),
-            task("sv-2", "Second", "open", now),
+            task("sv-4", "Fourth", "closed", "P0", now),
+            task("sv-1", "First", "open", "P1", earlier),
+            task("sv-3", "Third", "open", "P0", now + chrono::Duration::seconds(10)),
+            task("sv-2", "Second", "open", "P0", now),
         ];
-        sort_tasks(&mut tasks, &config);
+        sort_tasks(&mut tasks, &config, &blocked_ids);
         assert_eq!(tasks[0].id, "sv-2");
-        assert_eq!(tasks[1].id, "sv-1");
-        assert_eq!(tasks[2].id, "sv-3");
+        assert_eq!(tasks[1].id, "sv-3");
+        assert_eq!(tasks[2].id, "sv-1");
+        assert_eq!(tasks[3].id, "sv-4");
     }
 
     #[test]
     fn selection_persists_by_id_or_falls_back() {
         let now = Utc::now();
         let tasks = vec![
-            task("sv-1", "One", "open", now),
-            task("sv-2", "Two", "open", now),
+            task("sv-1", "One", "open", "P2", now),
+            task("sv-2", "Two", "open", "P2", now),
         ];
         let filtered = vec![0, 1];
         assert_eq!(select_by_id(&tasks, &filtered, Some("sv-2")), Some(1));
