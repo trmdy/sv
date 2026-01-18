@@ -1090,66 +1090,49 @@ fn apply_event(
         | TaskEventType::TaskUnblocked
         | TaskEventType::TaskRelated
         | TaskEventType::TaskUnrelated => {
-            let related_task_id = relation_target(event)?;
+            let Some(related_task_id) = relation_target(event) else {
+                return Ok(());
+            };
             if related_task_id == event.task_id {
-                return Err(Error::InvalidArgument(
-                    "task relation cannot target itself".to_string(),
-                ));
+                return Ok(());
             }
-            touch_task(map, &event.task_id, event)?;
-            touch_task(map, related_task_id, event)?;
-            if event.event_type == TaskEventType::TaskRelated {
-                let _ = relation_description(event)?;
+            if event.event_type == TaskEventType::TaskRelated && relation_description(event).is_none()
+            {
+                return Ok(());
             }
+            touch_task_if_present(map, &event.task_id, event);
+            touch_task_if_present(map, related_task_id, event);
         }
     }
 
     Ok(())
 }
 
-fn touch_task(map: &mut HashMap<String, TaskRecord>, task_id: &str, event: &TaskEvent) -> Result<()> {
-    let record = map.get_mut(task_id).ok_or_else(|| {
-        Error::InvalidArgument(format!("task not found: {task_id}"))
-    })?;
-    record.updated_at = event.timestamp;
-    record.updated_by = event.actor.clone();
-    Ok(())
-}
-
-fn relation_target(event: &TaskEvent) -> Result<&str> {
-    let target = event.related_task_id.as_deref().ok_or_else(|| {
-        Error::InvalidArgument(format!(
-            "missing related task for {}",
-            event.event_id
-        ))
-    })?;
-    if target.trim().is_empty() {
-        return Err(Error::InvalidArgument(format!(
-            "missing related task for {}",
-            event.event_id
-        )));
+fn touch_task_if_present(map: &mut HashMap<String, TaskRecord>, task_id: &str, event: &TaskEvent) {
+    if let Some(record) = map.get_mut(task_id) {
+        record.updated_at = event.timestamp;
+        record.updated_by = event.actor.clone();
     }
-    Ok(target)
 }
 
-fn relation_description(event: &TaskEvent) -> Result<&str> {
-    let description = event
-        .relation_description
-        .as_deref()
-        .ok_or_else(|| {
-            Error::InvalidArgument(format!(
-                "missing relation description for {}",
-                event.event_id
-            ))
-        })?;
+fn relation_target(event: &TaskEvent) -> Option<&str> {
+    let target = event.related_task_id.as_deref()?;
+    let trimmed = target.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn relation_description(event: &TaskEvent) -> Option<&str> {
+    let description = event.relation_description.as_deref()?;
     let trimmed = description.trim();
     if trimmed.is_empty() {
-        return Err(Error::InvalidArgument(format!(
-            "missing relation description for {}",
-            event.event_id
-        )));
+        None
+    } else {
+        Some(trimmed)
     }
-    Ok(trimmed)
 }
 
 fn is_relation_event(event_type: TaskEventType) -> bool {
@@ -1183,11 +1166,11 @@ fn apply_relation_event(state: &mut RelationState, event: &TaskEvent) -> Result<
     if !is_relation_event(event.event_type) {
         return Ok(());
     }
-    let related_task_id = relation_target(event)?;
+    let Some(related_task_id) = relation_target(event) else {
+        return Ok(());
+    };
     if related_task_id == event.task_id {
-        return Err(Error::InvalidArgument(
-            "task relation cannot target itself".to_string(),
-        ));
+        return Ok(());
     }
 
     match event.event_type {
@@ -1214,7 +1197,9 @@ fn apply_relation_event(state: &mut RelationState, event: &TaskEvent) -> Result<
                 .remove(&(event.task_id.clone(), related_task_id.to_string()));
         }
         TaskEventType::TaskRelated => {
-            let description = relation_description(event)?;
+            let Some(description) = relation_description(event) else {
+                return Ok(());
+            };
             let key = relation_key(&event.task_id, related_task_id);
             state.relates.insert(key, description.to_string());
         }
@@ -1228,18 +1213,23 @@ fn apply_relation_event(state: &mut RelationState, event: &TaskEvent) -> Result<
     Ok(())
 }
 
-fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations> {
-    if !events.iter().any(|event| event.task_id == task_id) {
-        return Err(Error::InvalidArgument(format!(
-            "task not found: {task_id}"
-        )));
-    }
+fn build_relation_state(events: &[TaskEvent]) -> Result<RelationState> {
     let mut sorted = events.to_vec();
     sort_events(&mut sorted);
     let mut state = RelationState::default();
     for event in &sorted {
         apply_relation_event(&mut state, event)?;
     }
+    Ok(state)
+}
+
+fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations> {
+    if !events.iter().any(|event| event.task_id == task_id) {
+        return Err(Error::InvalidArgument(format!(
+            "task not found: {task_id}"
+        )));
+    }
+    let state = build_relation_state(events)?;
 
     let parent = state.parent_by_child.get(task_id).cloned();
     let mut children: Vec<String> = state
