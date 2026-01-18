@@ -17,6 +17,7 @@ Unit tests for pure logic and cache behavior. No heavy end-to-end UI tests.
 - Readiness within status + priority (default status + unblocked first).
 - Updated_at desc within readiness.
 - Tiebreaker by id for stable ordering.
+- Parent nesting keeps children directly under parents.
 
 ### Selection persistence
 - Selection preserved by task id across reload.
@@ -36,6 +37,7 @@ Unit tests for pure logic and cache behavior. No heavy end-to-end UI tests.
 ## Initial tests to implement first
 - Filter by id + title (case-insensitive).
 - Status + priority + readiness ordering with tie by updated_at desc.
+- Parent nesting places children immediately after parent.
 - Selection persistence by task id on reload.
 - Cache invalidation on width change.
 

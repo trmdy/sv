@@ -56,6 +56,7 @@ Narrow view:
 - Status pill, ID, title, workspace (if present), updated-at (optional).
 - Sort: status rank -> priority rank -> readiness -> updated_at desc -> id.
 - Readiness: default status and not blocked.
+- Parent nesting: children render directly under parent with indentation.
 - Highlight selected row.
 - Subtle ready marker for open + unblocked tasks.
 
