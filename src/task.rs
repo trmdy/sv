@@ -355,7 +355,23 @@ impl TaskStore {
 
     pub fn blocked_task_ids(&self) -> Result<HashSet<String>> {
         let events = self.load_merged_events()?;
-        blocked_task_ids_from_events(&events)
+        let state = build_relation_state(&events)?;
+        Ok(state
+            .blocks
+            .into_iter()
+            .map(|(_, blocked)| blocked)
+            .collect())
+    }
+
+    pub fn blocked_and_parents(&self) -> Result<(HashSet<String>, HashMap<String, String>)> {
+        let events = self.load_merged_events()?;
+        let state = build_relation_state(&events)?;
+        let blocked = state
+            .blocks
+            .into_iter()
+            .map(|(_, blocked)| blocked)
+            .collect();
+        Ok((blocked, state.parent_by_child))
     }
 
     fn unique_task_suffix_from_base(
@@ -1370,6 +1386,7 @@ fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations>
     })
 }
 
+#[cfg(test)]
 fn blocked_task_ids_from_events(events: &[TaskEvent]) -> Result<HashSet<String>> {
     let state = build_relation_state(events)?;
     Ok(state.blocks.into_iter().map(|(_, blocked)| blocked).collect())
