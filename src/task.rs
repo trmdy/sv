@@ -135,6 +135,53 @@ pub struct TaskRecord {
     pub last_comment_at: Option<DateTime<Utc>>,
 }
 
+pub fn sort_tasks(
+    tasks: &mut [TaskRecord],
+    config: &TasksConfig,
+    blocked_ids: &HashSet<String>,
+) {
+    let ready_status = config.default_status.as_str();
+    tasks.sort_by(|left, right| {
+        let left_status = status_rank(&left.status, config);
+        let right_status = status_rank(&right.status, config);
+        let left_priority = priority_rank(&left.priority);
+        let right_priority = priority_rank(&right.priority);
+        let left_ready = readiness_rank(left, ready_status, blocked_ids);
+        let right_ready = readiness_rank(right, ready_status, blocked_ids);
+        left_status
+            .cmp(&right_status)
+            .then_with(|| left_priority.cmp(&right_priority))
+            .then_with(|| left_ready.cmp(&right_ready))
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
+fn status_rank(status: &str, config: &TasksConfig) -> usize {
+    let trimmed = status.trim();
+    config
+        .statuses
+        .iter()
+        .position(|entry| entry.eq_ignore_ascii_case(trimmed))
+        .unwrap_or(config.statuses.len())
+}
+
+fn priority_rank(priority: &str) -> usize {
+    let trimmed = priority.trim();
+    TASK_PRIORITIES
+        .iter()
+        .position(|entry| entry.eq_ignore_ascii_case(trimmed))
+        .unwrap_or(TASK_PRIORITIES.len())
+}
+
+fn readiness_rank(task: &TaskRecord, ready_status: &str, blocked_ids: &HashSet<String>) -> usize {
+    if task.status == ready_status && !blocked_ids.contains(&task.id) {
+        0
+    } else {
+        1
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSnapshot {
     pub schema_version: String,
