@@ -382,6 +382,9 @@ pub fn run_ready(options: ReadyOptions) -> Result<()> {
         tasks.retain(|task| task.updated_at >= updated_since);
     }
 
+    let blocked_ids = std::collections::HashSet::new();
+    crate::task::sort_tasks(&mut tasks, ctx.store.config(), &blocked_ids);
+
     let output = TaskListOutput {
         total: tasks.len(),
         tasks: tasks.clone(),
