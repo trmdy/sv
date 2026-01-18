@@ -28,7 +28,12 @@ enum LoadRequest {
 }
 
 enum UiMsg {
-    DataLoaded(Vec<TaskRecord>, HashSet<String>, Option<String>),
+    DataLoaded(
+        Vec<TaskRecord>,
+        HashSet<String>,
+        Option<String>,
+        HashMap<String, String>,
+    ),
     LoadError(String),
     DetailsLoaded(String, TaskDetails),
     DetailsError(String, String),
@@ -49,6 +54,7 @@ struct Viewport {
 
 pub struct AppState {
     pub(crate) tasks: Vec<TaskRecord>,
+    pub(crate) task_depths: Vec<usize>,
     pub(crate) filtered: Vec<usize>,
     pub(crate) selected: Option<usize>,
     pub(crate) filter: String,
@@ -69,6 +75,7 @@ impl AppState {
     fn new(store: &TaskStore) -> Self {
         Self {
             tasks: Vec::new(),
+            task_depths: Vec::new(),
             filtered: Vec::new(),
             selected: None,
             filter: String::new(),
@@ -278,10 +285,12 @@ fn run_loop(
 
 fn handle_ui_msg(app: &mut AppState, msg: UiMsg, req_tx: &Sender<LoadRequest>) {
     match msg {
-        UiMsg::DataLoaded(mut tasks, blocked_ids, blocked_error) => {
+        UiMsg::DataLoaded(mut tasks, blocked_ids, blocked_error, parent_by_child) => {
             model::sort_tasks(&mut tasks, &app.config, &blocked_ids);
+            let (tasks, depths) = model::nest_tasks(tasks, &parent_by_child);
             let previous_id = app.selected_task().map(|task| task.id.clone());
             app.tasks = tasks;
+            app.task_depths = depths;
             app.blocked_ids = blocked_ids;
             app.detail_cache.clear();
             app.pending_details.clear();
@@ -409,14 +418,23 @@ fn spawn_loader(store: TaskStore, req_rx: Receiver<LoadRequest>, ui_tx: Sender<U
             match req {
                 LoadRequest::Reload => match store.list(None) {
                     Ok(tasks) => {
-                        let (blocked_ids, blocked_error) = match store.blocked_task_ids() {
-                            Ok(blocked_ids) => (blocked_ids, None),
-                            Err(err) => (
-                                HashSet::new(),
-                                Some(format!("ready calc error: {err}")),
-                            ),
-                        };
-                        let _ = ui_tx.send(UiMsg::DataLoaded(tasks, blocked_ids, blocked_error));
+                        let (blocked_ids, blocked_error, parent_by_child) =
+                            match store.blocked_and_parents() {
+                                Ok((blocked_ids, parent_by_child)) => {
+                                    (blocked_ids, None, parent_by_child)
+                                }
+                                Err(err) => (
+                                    HashSet::new(),
+                                    Some(format!("ready calc error: {err}")),
+                                    HashMap::new(),
+                                ),
+                            };
+                        let _ = ui_tx.send(UiMsg::DataLoaded(
+                            tasks,
+                            blocked_ids,
+                            blocked_error,
+                            parent_by_child,
+                        ));
                     }
                     Err(err) => {
                         let _ = ui_tx.send(UiMsg::LoadError(err.to_string()));
