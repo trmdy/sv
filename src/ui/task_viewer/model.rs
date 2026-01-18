@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 
@@ -19,6 +19,88 @@ pub fn sort_tasks(
     blocked_ids: &HashSet<String>,
 ) {
     crate::task::sort_tasks(tasks, config, blocked_ids);
+}
+
+pub fn nest_tasks(
+    tasks: Vec<TaskRecord>,
+    parent_by_child: &HashMap<String, String>,
+) -> (Vec<TaskRecord>, Vec<usize>) {
+    if tasks.is_empty() {
+        return (tasks, Vec::new());
+    }
+
+    let base_order: Vec<String> = tasks.iter().map(|task| task.id.clone()).collect();
+    let mut order_index = HashMap::new();
+    for (pos, id) in base_order.iter().enumerate() {
+        order_index.insert(id.clone(), pos);
+    }
+
+    let mut children_by_parent: HashMap<String, Vec<String>> = HashMap::new();
+    for (child, parent) in parent_by_child {
+        if order_index.contains_key(child) && order_index.contains_key(parent) {
+            children_by_parent
+                .entry(parent.clone())
+                .or_default()
+                .push(child.clone());
+        }
+    }
+
+    for children in children_by_parent.values_mut() {
+        children.sort_by_key(|id| order_index.get(id).copied().unwrap_or(usize::MAX));
+    }
+
+    let mut ordered: Vec<(String, usize)> = Vec::with_capacity(base_order.len());
+    let mut visited: HashSet<String> = HashSet::new();
+
+    fn push_subtree(
+        id: &str,
+        depth: usize,
+        children_by_parent: &HashMap<String, Vec<String>>,
+        visited: &mut HashSet<String>,
+        ordered: &mut Vec<(String, usize)>,
+    ) {
+        if !visited.insert(id.to_string()) {
+            return;
+        }
+        ordered.push((id.to_string(), depth));
+        if let Some(children) = children_by_parent.get(id) {
+            for child in children {
+                push_subtree(child, depth + 1, children_by_parent, visited, ordered);
+            }
+        }
+    }
+
+    for id in &base_order {
+        let is_root = parent_by_child
+            .get(id)
+            .map(|parent| !order_index.contains_key(parent))
+            .unwrap_or(true);
+        if is_root {
+            push_subtree(id, 0, &children_by_parent, &mut visited, &mut ordered);
+        }
+    }
+
+    for id in &base_order {
+        if !visited.contains(id) {
+            push_subtree(id, 0, &children_by_parent, &mut visited, &mut ordered);
+        }
+    }
+
+    let mut by_id: HashMap<String, TaskRecord> = HashMap::new();
+    for task in tasks {
+        by_id.insert(task.id.clone(), task);
+    }
+
+    let mut nested = Vec::with_capacity(ordered.len());
+    let mut depths = Vec::with_capacity(ordered.len());
+    for (id, depth) in ordered {
+        if let Some(task) = by_id.remove(&id) {
+            nested.push(task);
+            depths.push(depth);
+        }
+    }
+
+    (nested, depths)
 }
 
 fn fuzzy_match(value: &str, query: &str) -> bool {
@@ -170,6 +252,28 @@ mod tests {
         assert_eq!(tasks[1].id, "sv-3");
         assert_eq!(tasks[2].id, "sv-1");
         assert_eq!(tasks[3].id, "sv-4");
+    }
+
+    #[test]
+    fn nest_tasks_groups_children_under_parents() {
+        let now = Utc::now();
+        let tasks = vec![
+            task("sv-parent", "Parent", "open", "P1", now),
+            task("sv-root", "Root", "open", "P1", now),
+            task("sv-child", "Child", "open", "P1", now),
+            task("sv-grand", "Grand", "open", "P1", now),
+        ];
+        let mut parent_by_child = HashMap::new();
+        parent_by_child.insert("sv-child".to_string(), "sv-parent".to_string());
+        parent_by_child.insert("sv-grand".to_string(), "sv-child".to_string());
+
+        let (nested, depths) = nest_tasks(tasks, &parent_by_child);
+        let ids: Vec<&str> = nested.iter().map(|task| task.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["sv-parent", "sv-child", "sv-grand", "sv-root"]
+        );
+        assert_eq!(depths, vec![0, 1, 2, 0]);
     }
 
     #[test]
