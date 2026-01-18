@@ -13,7 +13,9 @@ Unit tests for pure logic and cache behavior. No heavy end-to-end UI tests.
 
 ### Sorting
 - Status rank order (open < in_progress < closed < unknown).
-- Updated_at desc within status.
+- Priority rank within status (P0..P4).
+- Readiness within status + priority (default status + unblocked first).
+- Updated_at desc within readiness.
 - Tiebreaker by id for stable ordering.
 
 ### Selection persistence
@@ -33,7 +35,7 @@ Unit tests for pure logic and cache behavior. No heavy end-to-end UI tests.
 
 ## Initial tests to implement first
 - Filter by id + title (case-insensitive).
-- Status rank ordering with tie by updated_at desc.
+- Status + priority + readiness ordering with tie by updated_at desc.
 - Selection persistence by task id on reload.
 - Cache invalidation on width change.
 

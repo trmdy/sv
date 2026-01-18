@@ -70,6 +70,7 @@ older_than = "180d"
 - `sv task` (launch fullscreen TUI)
 - `sv task new <title> [--status <s>] [--priority <P0-P4>] [--body <txt>]`
 - `sv task list [--status <s>] [--priority <P0-P4>] [--workspace <name|id>] [--actor <name>] [--updated-since <rfc3339>] [--json]`
+- `sv task ready [--priority <P0-P4>] [--workspace <name|id>] [--actor <name>] [--updated-since <rfc3339>] [--json]`
 - `sv task show <id> [--json]`
 - `sv task start <id>`
 - `sv task status <id> <status>`
@@ -96,6 +97,7 @@ older_than = "180d"
 - Create task -> priority `P2` unless specified.
 - Start task -> status `in_progress_status`, attach workspace + branch (multiple tasks per workspace allowed).
 - Close task -> status in `closed_statuses`, optional note.
+- Ready task -> status `default_status` and no blockers.
 - Relations: parent, blocks, and described relations; use `sv task relations` to inspect.
 - List/show prefers shared snapshot; falls back to fold log.
 - Sync between participants: `git pull` brings `.tasks/*`, then `sv task sync` rebuilds snapshot + refreshes shared cache.

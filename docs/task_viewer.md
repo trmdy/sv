@@ -24,7 +24,7 @@
   - Left: task list.
   - Right: detail panel.
 - Narrow terminals: single pane list, detail opens in place.
-- Footer: key hints + status line (filter, errors, watch state).
+- Footer: key hints + status line (filter, errors, watch state) + task counts (open/ready/closed; ready = open + not blocked).
 
 ## Wireframes
 Split view (default):
@@ -54,8 +54,10 @@ Narrow view:
 
 ## List row format
 - Status pill, ID, title, workspace (if present), updated-at (optional).
-- Sort: status rank -> updated_at desc -> id.
+- Sort: status rank -> priority rank -> readiness -> updated_at desc -> id.
+- Readiness: default status and not blocked.
 - Highlight selected row.
+- Subtle ready marker for open + unblocked tasks.
 
 ## Detail panel
 - Title, status, timestamps, workspace/branch, actor if available.
@@ -100,7 +102,7 @@ Narrow view:
 - Fallback to `.tasks/tasks.snapshot.json`.
 - If no snapshot: fold log (warn in status line).
 - Keep selection by task id on reload.
-- Sort: status rank -> updated_at desc -> id.
+- Sort: status rank -> priority rank -> readiness -> updated_at desc -> id.
 
 ### Load order (pseudocode)
 ```
