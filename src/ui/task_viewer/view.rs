@@ -81,7 +81,8 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
             if let Some(task) = app.tasks.get(idx) {
                 let selected = app.selected == Some(idx);
                 let ready = app.is_task_ready(task);
-                lines.push(render_list_row(task, selected, ready, content_width));
+                let depth = app.task_depths.get(idx).copied().unwrap_or(0);
+                lines.push(render_list_row(task, selected, ready, depth, content_width));
             }
         }
     }
@@ -144,22 +145,34 @@ fn render_footer(frame: &mut Frame, app: &AppState, area: Rect) {
     frame.render_widget(widget, area);
 }
 
-fn render_list_row(task: &TaskRecord, selected: bool, ready: bool, width: usize) -> Line<'static> {
+fn render_list_row(
+    task: &TaskRecord,
+    selected: bool,
+    ready: bool,
+    depth: usize,
+    width: usize,
+) -> Line<'static> {
     let status_label = format_status_label(&task.status);
     let status_text = pad_text(&status_label, STATUS_WIDTH);
     let id_text = pad_text(&task.id, ID_WIDTH);
     let priority_text = pad_text(&task.priority, PRIORITY_WIDTH);
-    let used = STATUS_WIDTH + READY_WIDTH + ID_WIDTH + PRIORITY_WIDTH + 5;
+    let indent_prefix = if depth > 0 {
+        format!("{}- ", "  ".repeat(depth))
+    } else {
+        String::new()
+    };
+    let indent_width = indent_prefix.len();
+    let used = STATUS_WIDTH + READY_WIDTH + ID_WIDTH + PRIORITY_WIDTH + 5 + indent_width;
     let title_width = width.saturating_sub(used);
     let title = truncate_text(&task.title, title_width);
 
-    let prefix = if selected { ">" } else { " " };
+    let prefix = " ";
     let ready_marker = if ready { "." } else { " " };
     let status_span = Span::styled(
         status_text,
         Style::default().fg(status_color(&task.status)).add_modifier(Modifier::BOLD),
     );
-    let ready_span = Span::styled(ready_marker, Style::default().fg(Color::DarkGray));
+    let ready_span = Span::styled(ready_marker, Style::default().fg(Color::LightGreen));
     let id_span = Span::styled(id_text, Style::default().fg(Color::LightBlue));
     let priority_span = Span::styled(
         priority_text,
@@ -178,6 +191,7 @@ fn render_list_row(task: &TaskRecord, selected: bool, ready: bool, width: usize)
         Span::raw(" "),
         priority_span,
         Span::raw(" "),
+        Span::styled(indent_prefix, Style::default().fg(Color::DarkGray)),
         Span::raw(title),
     ];
 
