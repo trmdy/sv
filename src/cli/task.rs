@@ -39,6 +39,16 @@ pub struct ListOptions {
     pub quiet: bool,
 }
 
+pub struct ReadyOptions {
+    pub priority: Option<String>,
+    pub workspace: Option<String>,
+    pub actor: Option<String>,
+    pub updated_since: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
 pub struct ShowOptions {
     pub id: String,
     pub repo: Option<PathBuf>,
@@ -290,6 +300,15 @@ pub fn run_list(options: ListOptions) -> Result<()> {
         tasks.retain(|task| task.updated_at >= updated_since);
     }
 
+    let (blocked_ids, blocked_error) = match ctx.store.blocked_task_ids() {
+        Ok(blocked_ids) => (blocked_ids, None),
+        Err(err) => (
+            std::collections::HashSet::new(),
+            Some(format!("ready calc error: {err}")),
+        ),
+    };
+    crate::task::sort_tasks(&mut tasks, ctx.store.config(), &blocked_ids);
+
     let output = TaskListOutput {
         total: tasks.len(),
         tasks: tasks.clone(),
@@ -297,6 +316,9 @@ pub fn run_list(options: ListOptions) -> Result<()> {
 
     let mut human = HumanOutput::new("Tasks");
     human.push_summary("Total", tasks.len().to_string());
+    if let Some(error) = blocked_error {
+        human.push_warning(error);
+    }
     for task in tasks {
         let mut line = format!(
             "[{}][{}] {} {}",
@@ -314,6 +336,76 @@ pub fn run_list(options: ListOptions) -> Result<()> {
             quiet: options.quiet,
         },
         "task list",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_ready(options: ReadyOptions) -> Result<()> {
+    let ctx = load_context(options.repo, None, false)?;
+    let updated_since = parse_timestamp("updated-since", options.updated_since.as_deref())?;
+    let mut tasks = ctx.store.list_ready()?;
+
+    if let Some(priority) = options.priority.as_ref() {
+        let normalized = ctx.store.normalize_priority(priority)?;
+        tasks.retain(|task| task.priority == normalized);
+    }
+
+    if let Some(actor) = options.actor.as_ref() {
+        let trimmed = actor.trim();
+        if trimmed.is_empty() {
+            return Err(Error::InvalidArgument("actor cannot be empty".to_string()));
+        }
+        tasks.retain(|task| task.updated_by.as_deref() == Some(trimmed));
+    }
+
+    if let Some(workspace) = options.workspace.as_ref() {
+        let trimmed = workspace.trim();
+        if trimmed.is_empty() {
+            return Err(Error::InvalidArgument("workspace cannot be empty".to_string()));
+        }
+        let needle = trimmed.to_ascii_lowercase();
+        tasks.retain(|task| {
+            task.workspace_id
+                .as_ref()
+                .map(|value| value.eq_ignore_ascii_case(&needle))
+                .unwrap_or(false)
+                || task
+                    .workspace
+                    .as_ref()
+                    .map(|value| value.eq_ignore_ascii_case(&needle))
+                    .unwrap_or(false)
+        });
+    }
+
+    if let Some(updated_since) = updated_since {
+        tasks.retain(|task| task.updated_at >= updated_since);
+    }
+
+    let output = TaskListOutput {
+        total: tasks.len(),
+        tasks: tasks.clone(),
+    };
+
+    let mut human = HumanOutput::new("Ready tasks");
+    human.push_summary("Total", tasks.len().to_string());
+    for task in tasks {
+        let mut line = format!(
+            "[{}][{}] {} {}",
+            task.status, task.priority, task.id, task.title
+        );
+        if let Some(workspace) = task.workspace.as_ref() {
+            line.push_str(&format!(" (ws: {})", workspace));
+        }
+        human.push_detail(line);
+    }
+
+    emit_success(
+        OutputOptions {
+            json: options.json,
+            quiet: options.quiet,
+        },
+        "task ready",
         &output,
         Some(&human),
     )

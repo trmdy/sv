@@ -71,7 +71,7 @@ Commands (high level)
   sv lease ls|who|renew|break|wait Inspect/manage leases
   sv protect status|add|off|rm Protected paths
   sv commit                 Commit with sv checks + Change-Id
-  sv task new|list|show|start|status|priority|close|comment|parent|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
+  sv task new|list|ready|show|start|status|priority|close|comment|parent|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
   sv risk                   Overlap/conflict analysis
   sv onto                   Rebase/merge current workspace onto another
   sv hoist                  Bulk integrate workspaces into an integration branch
@@ -767,6 +767,33 @@ Examples:
         #[arg(long)]
         status: Option<String>,
 
+        /// Filter by priority (P0-P4)
+        #[arg(long)]
+        priority: Option<String>,
+
+        /// Filter by workspace (name or id)
+        #[arg(long)]
+        workspace: Option<String>,
+
+        /// Filter by last updated actor
+        #[arg(long)]
+        actor: Option<String>,
+
+        /// Filter by updated timestamp (RFC3339)
+        #[arg(long, value_name = "timestamp")]
+        updated_since: Option<String>,
+    },
+
+    /// List ready tasks (open and unblocked)
+    #[command(long_about = r#"List ready tasks (open and unblocked).
+
+Examples:
+  sv task ready
+  sv task ready --priority P2
+  sv task ready --workspace agent1
+  sv task ready --actor alice --updated-since 2025-01-01T00:00:00Z
+"#)]
+    Ready {
         /// Filter by priority (P0-P4)
         #[arg(long)]
         priority: Option<String>,
@@ -2217,6 +2244,17 @@ impl Cli {
                     TaskCommands::List { status, priority, workspace, actor: list_actor, updated_since } => {
                         task::run_list(task::ListOptions {
                             status,
+                            priority,
+                            workspace,
+                            actor: list_actor,
+                            updated_since,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Ready { priority, workspace, actor: list_actor, updated_since } => {
+                        task::run_ready(task::ReadyOptions {
                             priority,
                             workspace,
                             actor: list_actor,
