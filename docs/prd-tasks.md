@@ -29,7 +29,7 @@
 ## Data model (event log)
 - Task ID: `<id_prefix>-<suffix>`, where suffix starts at `id_min_len` alphanum chars and grows as needed.
 - Event ID: ULID per event (dedup, merge safety).
-- Event types: `task_created`, `task_started`, `task_status_changed`, `task_priority_changed`, `task_closed`, `task_commented`, `task_parent_set`, `task_parent_cleared`, `task_blocked`, `task_unblocked`, `task_related`, `task_unrelated`.
+- Event types: `task_created`, `task_started`, `task_status_changed`, `task_priority_changed`, `task_edited`, `task_closed`, `task_deleted`, `task_commented`, `task_parent_set`, `task_parent_cleared`, `task_blocked`, `task_unblocked`, `task_related`, `task_unrelated`.
 - Task state derived by folding events in order.
 
 ### Event fields (JSONL)
@@ -37,7 +37,7 @@
 - `related_task_id` (relations)
 - `relation_description` (non-blocking relations)
 - `timestamp`, `actor`
-- `title`, `body` (create)
+- `title`, `body` (create/edit)
 - `status` (status change)
 - `priority` (create/priority change, P0-P4)
 - `workspace`, `branch` (start/close)
@@ -69,13 +69,15 @@ older_than = "180d"
 ## CLI (initial)
 - `sv task` (launch fullscreen TUI)
 - `sv task new <title> [--status <s>] [--priority <P0-P4>] [--body <txt>]`
-- `sv task list [--status <s>] [--priority <P0-P4>] [--workspace <name|id>] [--actor <name>] [--updated-since <rfc3339>] [--json]`
-- `sv task ready [--priority <P0-P4>] [--workspace <name|id>] [--actor <name>] [--updated-since <rfc3339>] [--json]`
+- `sv task list [--status <s>] [--priority <P0-P4>] [--workspace <name|id>] [--actor <name>] [--updated-since <rfc3339>] [--limit <n>] [--json]`
+- `sv task ready [--priority <P0-P4>] [--workspace <name|id>] [--actor <name>] [--updated-since <rfc3339>] [--limit <n>] [--json]`
 - `sv task show <id> [--json]`
 - `sv task start <id>`
 - `sv task status <id> <status>`
 - `sv task priority <id> <P0-P4>`
+- `sv task edit <id> [--title <text>] [--body <text>]`
 - `sv task close <id>`
+- `sv task delete <id>`
 - `sv task comment <id> <text>`
 - `sv task parent set <child> <parent>`
 - `sv task parent clear <child>`
@@ -106,7 +108,7 @@ older_than = "180d"
 ## Compaction
 - Manual by default: `sv task compact`.
 - Optional auto: if `[tasks.compaction] auto = true`, run during `sv task sync`.
-- Policy: drop intermediate status events for closed tasks; keep create + latest status + comments.
+- Policy: drop intermediate status events for closed tasks; keep create + latest status + latest edit + comments.
 
 ## Hoist / commit integration
 - `sv hoist` runs `sv task sync` pre-flight.

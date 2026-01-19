@@ -78,6 +78,11 @@ Commands (high level)
   sv op log                 Operation history
   sv undo                   Undo recent ops (limited)
 
+Tasks (notes)
+  list/ready sorted: status -> priority -> readiness -> updated_at -> id
+  readiness: default_status and not blocked
+  TUI list nests children directly under parents
+
 Selectors (for hoist -s)
   ws(active)                Active workspaces
   ahead("main")             Workspaces ahead of main
@@ -98,8 +103,8 @@ Protected paths
 Events (JSONL)
   lease_created, lease_released, workspace_created, workspace_removed,
   commit_blocked, commit_created, task_created, task_started,
-  task_status_changed, task_priority_changed, task_closed, task_commented, task_parent_set,
-  task_parent_cleared, task_blocked, task_unblocked, task_related,
+  task_status_changed, task_priority_changed, task_edited, task_closed, task_deleted,
+  task_commented, task_parent_set, task_parent_cleared, task_blocked, task_unblocked, task_related,
   task_unrelated
 
 Tips for agent automation

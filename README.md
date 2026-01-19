@@ -184,6 +184,7 @@ sv task start acme-abc
 # Update status + comment
 sv task status acme-abc under_review
 sv task comment acme-abc "Waiting on QA"
+sv task edit acme-abc --title "Ship CLI help v2"
 
 # Parent + relations
 sv task parent set acme-abc acme-xyz
@@ -198,6 +199,7 @@ sv task list --actor alice --updated-since 2025-01-01T00:00:00Z
 
 # Close + sync history
 sv task close acme-abc
+sv task delete acme-abc
 sv task sync
 ```
 
@@ -296,6 +298,8 @@ sv release src/auth/** --events -               # Explicit stdout
 - `task_started` - emitted by `sv task start`
 - `task_status_changed` - emitted by `sv task status`
 - `task_closed` - emitted by `sv task close`
+- `task_edited` - emitted by `sv task edit`
+- `task_deleted` - emitted by `sv task delete`
 - `task_commented` - emitted by `sv task comment`
 - `task_parent_set` - emitted by `sv task parent set`
 - `task_parent_cleared` - emitted by `sv task parent clear`
@@ -342,7 +346,7 @@ Event envelope:
 | `sv lease ls\|who\|renew\|break` | Inspect and manage leases |
 | `sv protect status\|add\|off\|rm` | Protected path management |
 | `sv commit` | Commit with sv checks |
-| `sv task new\|list\|show\|start\|status\|close\|comment\|parent\|block\|unblock\|relate\|unrelate\|relations\|sync\|compact\|prefix` | Task management |
+| `sv task new\|list\|show\|start\|status\|priority\|edit\|close\|delete\|comment\|parent\|block\|unblock\|relate\|unrelate\|relations\|sync\|compact\|prefix` | Task management |
 | `sv risk` | Overlap and conflict analysis |
 | `sv onto` | Reposition workspace onto another |
 | `sv hoist` | Bulk integration of workspaces |

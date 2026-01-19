@@ -53,7 +53,9 @@ Fields:
 - `task_started`: emitted after a task is started.
 - `task_status_changed`: emitted after a task status change.
 - `task_priority_changed`: emitted after a task priority change.
+- `task_edited`: emitted after a task edit.
 - `task_closed`: emitted after a task is closed.
+- `task_deleted`: emitted after a task is deleted.
 - `task_commented`: emitted after a task comment is added.
 - `task_parent_set`: emitted after a task parent is set.
 - `task_parent_cleared`: emitted after a task parent is cleared.
