@@ -34,6 +34,7 @@ pub struct ListOptions {
     pub workspace: Option<String>,
     pub actor: Option<String>,
     pub updated_since: Option<String>,
+    pub limit: Option<usize>,
     pub repo: Option<PathBuf>,
     pub json: bool,
     pub quiet: bool,
@@ -44,6 +45,7 @@ pub struct ReadyOptions {
     pub workspace: Option<String>,
     pub actor: Option<String>,
     pub updated_since: Option<String>,
+    pub limit: Option<usize>,
     pub repo: Option<PathBuf>,
     pub json: bool,
     pub quiet: bool,
@@ -328,6 +330,7 @@ pub fn run_list(options: ListOptions) -> Result<()> {
         ),
     };
     crate::task::sort_tasks(&mut tasks, ctx.store.config(), &blocked_ids);
+    apply_limit(&mut tasks, options.limit)?;
 
     let output = TaskListOutput {
         total: tasks.len(),
@@ -404,6 +407,7 @@ pub fn run_ready(options: ReadyOptions) -> Result<()> {
 
     let blocked_ids = std::collections::HashSet::new();
     crate::task::sort_tasks(&mut tasks, ctx.store.config(), &blocked_ids);
+    apply_limit(&mut tasks, options.limit)?;
 
     let output = TaskListOutput {
         total: tasks.len(),
@@ -432,6 +436,18 @@ pub fn run_ready(options: ReadyOptions) -> Result<()> {
         &output,
         Some(&human),
     )
+}
+
+fn apply_limit(tasks: &mut Vec<TaskRecord>, limit: Option<usize>) -> Result<()> {
+    if let Some(limit) = limit {
+        if limit == 0 {
+            return Err(Error::InvalidArgument("limit must be >= 1".to_string()));
+        }
+        if tasks.len() > limit {
+            tasks.truncate(limit);
+        }
+    }
+    Ok(())
 }
 
 pub fn run_show(options: ShowOptions) -> Result<()> {
@@ -1401,6 +1417,11 @@ struct TaskRelateOutput {
 struct TaskUnrelateOutput {
     left: String,
     right: String,
+}
+
+#[derive(serde::Serialize)]
+struct TaskDeleteOutput {
+    id: String,
 }
 
 #[derive(serde::Serialize)]

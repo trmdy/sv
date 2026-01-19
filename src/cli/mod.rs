@@ -760,6 +760,7 @@ Examples:
   sv task list --priority P2
   sv task list --workspace agent1
   sv task list --actor alice --updated-since 2025-01-01T00:00:00Z
+  sv task list --limit 20
 "#)]
     #[command(visible_alias = "ls")]
     List {
@@ -782,6 +783,10 @@ Examples:
         /// Filter by updated timestamp (RFC3339)
         #[arg(long, value_name = "timestamp")]
         updated_since: Option<String>,
+
+        /// Limit number of tasks returned
+        #[arg(long)]
+        limit: Option<usize>,
     },
 
     /// List ready tasks (open and unblocked)
@@ -792,6 +797,7 @@ Examples:
   sv task ready --priority P2
   sv task ready --workspace agent1
   sv task ready --actor alice --updated-since 2025-01-01T00:00:00Z
+  sv task ready --limit 20
 "#)]
     Ready {
         /// Filter by priority (P0-P4)
@@ -809,6 +815,10 @@ Examples:
         /// Filter by updated timestamp (RFC3339)
         #[arg(long, value_name = "timestamp")]
         updated_since: Option<String>,
+
+        /// Limit number of tasks returned
+        #[arg(long)]
+        limit: Option<usize>,
     },
 
     /// Show task details
@@ -2272,24 +2282,26 @@ impl Cli {
                             quiet,
                         })
                     }
-                    TaskCommands::List { status, priority, workspace, actor: list_actor, updated_since } => {
+                    TaskCommands::List { status, priority, workspace, actor: list_actor, updated_since, limit } => {
                         task::run_list(task::ListOptions {
                             status,
                             priority,
                             workspace,
                             actor: list_actor,
                             updated_since,
+                            limit,
                             repo,
                             json,
                             quiet,
                         })
                     }
-                    TaskCommands::Ready { priority, workspace, actor: list_actor, updated_since } => {
+                    TaskCommands::Ready { priority, workspace, actor: list_actor, updated_since, limit } => {
                         task::run_ready(task::ReadyOptions {
                             priority,
                             workspace,
                             actor: list_actor,
                             updated_since,
+                            limit,
                             repo,
                             json,
                             quiet,
@@ -2328,6 +2340,18 @@ impl Cli {
                         task::run_priority(task::PriorityOptions {
                             id,
                             priority,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Edit { id, title, body } => {
+                        task::run_edit(task::EditOptions {
+                            id,
+                            title,
+                            body,
                             actor,
                             events: events.clone(),
                             repo,
