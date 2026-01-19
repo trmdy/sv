@@ -184,6 +184,14 @@ fn readiness_rank(task: &TaskRecord, ready_status: &str, blocked_ids: &HashSet<S
     }
 }
 
+fn status_is_closed(status: &str, config: &TasksConfig) -> bool {
+    let trimmed = status.trim();
+    config
+        .closed_statuses
+        .iter()
+        .any(|closed| closed.eq_ignore_ascii_case(trimmed))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSnapshot {
     pub schema_version: String,
@@ -339,7 +347,8 @@ impl TaskStore {
     pub fn list_with_ready(&self) -> Result<(Vec<TaskRecord>, HashSet<String>)> {
         let snapshot = self.load_snapshot_prefer_shared()?;
         let tasks = snapshot.tasks;
-        let blocked_by = self.blocked_task_ids()?;
+        let status_by_id = status_map_from_tasks(&tasks);
+        let blocked_by = self.blocked_task_ids_with_statuses(&status_by_id)?;
         let ready_status = self.config.default_status.as_str();
         let ready_ids = tasks
             .iter()
@@ -356,24 +365,27 @@ impl TaskStore {
     }
 
     pub fn blocked_task_ids(&self) -> Result<HashSet<String>> {
-        let events = self.load_merged_events()?;
-        let state = build_relation_state(&events)?;
-        Ok(state
-            .blocks
-            .into_iter()
-            .map(|(_, blocked)| blocked)
-            .collect())
+        let snapshot = self.load_snapshot_prefer_shared()?;
+        let status_by_id = status_map_from_tasks(&snapshot.tasks);
+        self.blocked_task_ids_with_statuses(&status_by_id)
     }
 
     pub fn blocked_and_parents(&self) -> Result<(HashSet<String>, HashMap<String, String>)> {
         let events = self.load_merged_events()?;
         let state = build_relation_state(&events)?;
-        let blocked = state
-            .blocks
-            .into_iter()
-            .map(|(_, blocked)| blocked)
-            .collect();
+        let snapshot = self.load_snapshot_prefer_shared()?;
+        let status_by_id = status_map_from_tasks(&snapshot.tasks);
+        let blocked = blocked_ids_from_state(&state, &status_by_id, &self.config);
         Ok((blocked, state.parent_by_child))
+    }
+
+    fn blocked_task_ids_with_statuses(
+        &self,
+        status_by_id: &HashMap<String, String>,
+    ) -> Result<HashSet<String>> {
+        let events = self.load_merged_events()?;
+        let state = build_relation_state(&events)?;
+        Ok(blocked_ids_from_state(&state, status_by_id, &self.config))
     }
 
     fn unique_task_suffix_from_base(
@@ -1373,6 +1385,32 @@ fn build_relation_state(events: &[TaskEvent]) -> Result<RelationState> {
     Ok(state)
 }
 
+fn status_map_from_tasks(tasks: &[TaskRecord]) -> HashMap<String, String> {
+    tasks
+        .iter()
+        .map(|task| (task.id.clone(), task.status.clone()))
+        .collect()
+}
+
+fn blocked_ids_from_state(
+    state: &RelationState,
+    status_by_id: &HashMap<String, String>,
+    config: &TasksConfig,
+) -> HashSet<String> {
+    state
+        .blocks
+        .iter()
+        .filter_map(|(blocker, blocked)| {
+            let status = status_by_id.get(blocker)?;
+            if status_is_closed(status, config) {
+                None
+            } else {
+                Some(blocked.clone())
+            }
+        })
+        .collect()
+}
+
 fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations> {
     if !events.iter().any(|event| event.task_id == task_id) {
         return Err(Error::InvalidArgument(format!(
@@ -1450,9 +1488,13 @@ fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations>
 }
 
 #[cfg(test)]
-fn blocked_task_ids_from_events(events: &[TaskEvent]) -> Result<HashSet<String>> {
+fn blocked_task_ids_from_events(
+    events: &[TaskEvent],
+    status_by_id: &HashMap<String, String>,
+    config: &TasksConfig,
+) -> Result<HashSet<String>> {
     let state = build_relation_state(events)?;
-    Ok(state.blocks.into_iter().map(|(_, blocked)| blocked).collect())
+    Ok(blocked_ids_from_state(&state, status_by_id, config))
 }
 
 fn normalize_id(value: &str) -> String {
@@ -1717,6 +1759,7 @@ mod tests {
 
     #[test]
     fn blocked_task_ids_respects_unblocked_events() {
+        let config = default_config();
         let now = Utc::now();
         let mut events = Vec::new();
         for id in ["task-a", "task-b", "task-c"] {
@@ -1741,7 +1784,11 @@ mod tests {
         unblock_ab.timestamp = now + chrono::Duration::milliseconds(3);
         events.push(unblock_ab);
 
-        let blocked = blocked_task_ids_from_events(&events).expect("blocked");
+        let mut status_by_id = HashMap::new();
+        for id in ["task-a", "task-b", "task-c"] {
+            status_by_id.insert(id.to_string(), config.default_status.clone());
+        }
+        let blocked = blocked_task_ids_from_events(&events, &status_by_id, &config).expect("blocked");
         assert!(blocked.contains("task-a"));
         assert!(!blocked.contains("task-b"));
     }
@@ -1811,6 +1858,42 @@ mod tests {
         let ids: HashSet<String> = ready.into_iter().map(|task| task.id).collect();
         assert!(ids.contains("task-a"));
         assert!(!ids.contains("task-b"));
+    }
+
+    #[test]
+    fn list_ready_ignores_closed_blockers() {
+        let dir = tempdir().expect("tempdir");
+        let repo_root = dir.path().to_path_buf();
+        let storage = Storage::new(
+            repo_root.clone(),
+            repo_root.join(".git"),
+            repo_root.clone(),
+        );
+        let store = TaskStore::new(storage, TasksConfig::default());
+
+        let now = Utc::now();
+        let mut create_a = TaskEvent::new(TaskEventType::TaskCreated, "task-a");
+        create_a.title = Some("A".to_string());
+        create_a.timestamp = now;
+        store.append_event(create_a).expect("create a");
+
+        let mut create_b = TaskEvent::new(TaskEventType::TaskCreated, "task-b");
+        create_b.title = Some("B".to_string());
+        create_b.timestamp = now + chrono::Duration::milliseconds(1);
+        store.append_event(create_b).expect("create b");
+
+        let mut block = TaskEvent::new(TaskEventType::TaskBlocked, "task-b");
+        block.related_task_id = Some("task-a".to_string());
+        block.timestamp = now + chrono::Duration::milliseconds(2);
+        store.append_event(block).expect("block");
+
+        let mut close_b = TaskEvent::new(TaskEventType::TaskClosed, "task-b");
+        close_b.timestamp = now + chrono::Duration::milliseconds(3);
+        store.append_event(close_b).expect("close b");
+
+        let ready = store.list_ready().expect("list ready");
+        let ids: HashSet<String> = ready.into_iter().map(|task| task.id).collect();
+        assert!(ids.contains("task-a"));
     }
 
     #[test]
