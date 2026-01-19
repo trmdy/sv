@@ -71,7 +71,7 @@ Commands (high level)
   sv lease ls|who|renew|break|wait Inspect/manage leases
   sv protect status|add|off|rm Protected paths
   sv commit                 Commit with sv checks + Change-Id
-  sv task new|list|ready|show|start|status|priority|close|comment|parent|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
+  sv task new|list|ready|show|start|status|priority|edit|close|delete|comment|parent|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
   sv risk                   Overlap/conflict analysis
   sv onto                   Rebase/merge current workspace onto another
   sv hoist                  Bulk integrate workspaces into an integration branch
@@ -861,6 +861,26 @@ Examples:
         priority: String,
     },
 
+    /// Edit task fields
+    #[command(long_about = r#"Edit task title or body.
+
+Examples:
+  sv task edit 01HZ... --title "New title"
+  sv task edit 01HZ... --body "New description"
+"#)]
+    Edit {
+        /// Task ID
+        id: String,
+
+        /// New title
+        #[arg(long)]
+        title: Option<String>,
+
+        /// New body/description (use empty string to clear)
+        #[arg(long)]
+        body: Option<String>,
+    },
+
     /// Close a task
     #[command(long_about = r#"Close a task.
 
@@ -874,6 +894,17 @@ Examples:
         /// Closed status override
         #[arg(long)]
         status: Option<String>,
+    },
+
+    /// Delete a task
+    #[command(long_about = r#"Delete a task.
+
+Examples:
+  sv task delete 01HZ...
+"#)]
+    Delete {
+        /// Task ID
+        id: String,
     },
 
     /// Add a comment
@@ -2308,6 +2339,16 @@ impl Cli {
                         task::run_close(task::CloseOptions {
                             id,
                             status,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    TaskCommands::Delete { id } => {
+                        task::run_delete(task::DeleteOptions {
+                            id,
                             actor,
                             events: events.clone(),
                             repo,

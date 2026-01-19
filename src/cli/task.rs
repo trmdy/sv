@@ -178,6 +178,17 @@ pub struct PriorityOptions {
     pub quiet: bool,
 }
 
+pub struct EditOptions {
+    pub id: String,
+    pub title: Option<String>,
+    pub body: Option<String>,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
 pub struct CompactOptions {
     pub older_than: Option<String>,
     pub max_log_mb: Option<u64>,
@@ -195,6 +206,15 @@ pub struct PrefixOptions {
 }
 
 pub struct TuiOptions {
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct DeleteOptions {
+    pub id: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
     pub repo: Option<PathBuf>,
     pub json: bool,
     pub quiet: bool,
@@ -564,6 +584,71 @@ pub fn run_priority(options: PriorityOptions) -> Result<()> {
     )
 }
 
+pub fn run_edit(options: EditOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let resolved = ctx.store.resolve_task_id(&options.id)?;
+
+    if options.title.is_none() && options.body.is_none() {
+        return Err(Error::InvalidArgument(
+            "task edit requires --title or --body".to_string(),
+        ));
+    }
+
+    let mut event = TaskEvent::new(TaskEventType::TaskEdited, resolved.clone());
+    event.actor = ctx.actor.clone();
+    if let Some(title) = options.title.as_ref() {
+        let trimmed = title.trim();
+        if trimmed.is_empty() {
+            return Err(Error::InvalidArgument("title cannot be empty".to_string()));
+        }
+        event.title = Some(trimmed.to_string());
+    }
+    if let Some(body) = options.body.as_ref() {
+        event.body = Some(body.clone());
+    }
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskEdited, &event);
+
+    let output = TaskEditOutput {
+        id: resolved.clone(),
+        title: event.title.clone(),
+        body: event.body.clone(),
+    };
+
+    let mut human = HumanOutput::new("Task updated");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("ID", resolved);
+    if let Some(title) = output.title.as_ref() {
+        human.push_summary("Title", title.clone());
+    }
+    if let Some(body) = output.body.as_ref() {
+        let label = if body.trim().is_empty() {
+            "(cleared)".to_string()
+        } else {
+            body.clone()
+        };
+        human.push_summary("Body", label);
+    }
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task edit",
+        &output,
+        Some(&human),
+    )
+}
+
 pub fn run_close(options: CloseOptions) -> Result<()> {
     let ctx = load_context(options.repo, options.actor, true)?;
     let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
@@ -608,6 +693,53 @@ pub fn run_close(options: CloseOptions) -> Result<()> {
             quiet: options.quiet || events_to_stdout,
         },
         "task close",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_delete(options: DeleteOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let resolved = ctx.store.resolve_task_id(&options.id)?;
+
+    let details = ctx.store.details(&resolved)?;
+    let relations = &details.relations;
+    let has_relations = relations.parent.is_some()
+        || !relations.children.is_empty()
+        || !relations.blocks.is_empty()
+        || !relations.blocked_by.is_empty()
+        || !relations.relates.is_empty();
+    if has_relations {
+        return Err(Error::InvalidArgument(format!(
+            "task has relations; clear them first (sv task relations {resolved})"
+        )));
+    }
+
+    let mut event = TaskEvent::new(TaskEventType::TaskDeleted, resolved.clone());
+    event.actor = ctx.actor.clone();
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskDeleted, &event);
+
+    let output = TaskDeleteOutput { id: resolved.clone() };
+
+    let mut human = HumanOutput::new("Task deleted");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("ID", resolved);
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task delete",
         &output,
         Some(&human),
     )
@@ -1189,9 +1321,61 @@ struct TaskPriorityOutput {
 }
 
 #[derive(serde::Serialize)]
+struct TaskEditOutput {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+}
+
+#[derive(serde::Serialize)]
 struct TaskCommentOutput {
     id: String,
     comment: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn task(id: &str) -> TaskRecord {
+        let now = Utc::now();
+        TaskRecord {
+            id: id.to_string(),
+            title: "Title".to_string(),
+            status: "open".to_string(),
+            priority: "P2".to_string(),
+            created_at: now,
+            updated_at: now,
+            created_by: None,
+            updated_by: None,
+            body: None,
+            workspace_id: None,
+            workspace: None,
+            branch: None,
+            started_at: None,
+            started_by: None,
+            closed_at: None,
+            closed_by: None,
+            comments_count: 0,
+            last_comment_at: None,
+        }
+    }
+
+    #[test]
+    fn apply_limit_truncates() {
+        let mut tasks = vec![task("a"), task("b"), task("c")];
+        apply_limit(&mut tasks, Some(2)).expect("limit");
+        assert_eq!(tasks.len(), 2);
+    }
+
+    #[test]
+    fn apply_limit_rejects_zero() {
+        let mut tasks = vec![task("a")];
+        assert!(apply_limit(&mut tasks, Some(0)).is_err());
+    }
 }
 
 #[derive(serde::Serialize)]
