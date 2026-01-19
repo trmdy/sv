@@ -211,52 +211,181 @@ fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
 
     let cache_key = (task.id.clone(), width as u16);
     if let Some(lines) = app.cache.detail.get(&cache_key) {
-        return lines
-            .iter()
-            .map(|line| Line::from(line.clone()))
-            .collect::<Vec<Line>>();
+        return lines.clone();
     }
 
-    let mut lines = Vec::new();
-    lines.push(format!("{} {}", task.id, task.title));
-    lines.push(format!("Status: {}  Priority: {}", task.status, task.priority));
-    lines.push(format!(
-        "Updated: {}  Created: {}",
-        format_timestamp(task.updated_at),
-        format_timestamp(task.created_at)
-    ));
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled("# ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            task.id.clone(),
+            Style::default()
+                .fg(Color::LightBlue)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            task.title.clone(),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        label_span("Status: "),
+        Span::styled(
+            task.status.clone(),
+            Style::default()
+                .fg(status_color(&task.status))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        label_span("Priority: "),
+        Span::styled(
+            task.priority.clone(),
+            Style::default()
+                .fg(priority_color(&task.priority))
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        label_span("Updated: "),
+        Span::styled(
+            format_timestamp(task.updated_at),
+            Style::default().fg(Color::LightYellow),
+        ),
+        Span::raw("  "),
+        label_span("Created: "),
+        Span::styled(
+            format_timestamp(task.created_at),
+            Style::default().fg(Color::LightYellow),
+        ),
+    ]));
     if let Some(workspace) = task.workspace.as_deref() {
-        lines.push(format!("Workspace: {}", workspace));
+        lines.push(Line::from(vec![
+            label_span("Workspace: "),
+            Span::styled(
+                workspace.to_string(),
+                Style::default().fg(Color::LightCyan),
+            ),
+        ]));
     }
     if let Some(branch) = task.branch.as_deref() {
-        lines.push(format!("Branch: {}", branch));
+        lines.push(Line::from(vec![
+            label_span("Branch: "),
+            Span::styled(branch.to_string(), Style::default().fg(Color::LightCyan)),
+        ]));
     }
-    lines.push(String::new());
+    lines.push(Line::from(""));
 
-    let body = task.body.as_deref().unwrap_or("No description.");
-    lines.push(body.to_string());
+    lines.push(section_header("Body"));
+    let body = task
+        .body
+        .as_deref()
+        .map(|value| value.trim_end())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("No description.");
+    for line in body.lines() {
+        lines.push(Line::from(Span::styled(
+            line.to_string(),
+            Style::default().fg(Color::White),
+        )));
+    }
 
     if let Some(details) = app.selected_details() {
+        append_relations(&mut lines, &details.relations);
         append_comments(&mut lines, details);
     } else if task.comments_count > 0 {
-        lines.push(String::new());
-        lines.push(format!("Comments: {} (loading...)", task.comments_count));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("Comments: {}", task.comments_count),
+                Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" (loading...)", Style::default().fg(Color::DarkGray)),
+        ]));
     }
 
     app.cache.detail.insert(cache_key, lines.clone());
-    lines.into_iter().map(Line::from).collect()
+    lines
 }
 
-fn append_comments(lines: &mut Vec<String>, details: &TaskDetails) {
+fn append_relations(lines: &mut Vec<Line<'static>>, relations: &crate::task::TaskRelations) {
+    lines.push(Line::from(""));
+    lines.push(section_header("Relations"));
+    let mut any = false;
+
+    if let Some(parent) = relations.parent.as_deref() {
+        any = true;
+        lines.push(Line::from(vec![
+            label_span("Parent: "),
+            Span::styled(parent.to_string(), id_style()),
+        ]));
+    }
+    if !relations.children.is_empty() {
+        any = true;
+        lines.push(Line::from(vec![
+            label_span("Children: "),
+            Span::styled(relations.children.join(", "), id_style()),
+        ]));
+    }
+    if !relations.blocks.is_empty() {
+        any = true;
+        lines.push(Line::from(vec![
+            label_span("Blocks: "),
+            Span::styled(relations.blocks.join(", "), id_style()),
+        ]));
+    }
+    if !relations.blocked_by.is_empty() {
+        any = true;
+        lines.push(Line::from(vec![
+            label_span("Blocked by: "),
+            Span::styled(relations.blocked_by.join(", "), id_style()),
+        ]));
+    }
+    if !relations.relates.is_empty() {
+        any = true;
+        for relation in &relations.relates {
+            lines.push(Line::from(vec![
+                label_span("Relates: "),
+                Span::styled(relation.id.clone(), id_style()),
+                Span::raw(" - "),
+                Span::styled(
+                    relation.description.clone(),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+        }
+    }
+    if !any {
+        lines.push(Line::from(Span::styled(
+            "None",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+}
+
+fn append_comments(lines: &mut Vec<Line<'static>>, details: &TaskDetails) {
     if details.comments.is_empty() {
         return;
     }
-    lines.push(String::new());
-    lines.push(format!("Comments: {}", details.comments.len()));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("Comments: {}", details.comments.len()),
+        Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
+    )));
     for comment in &details.comments {
         let actor = comment.actor.as_deref().unwrap_or("unknown");
         let timestamp = format_timestamp(comment.timestamp);
-        lines.push(format!("- {timestamp} {actor}: {}", comment.comment));
+        lines.push(Line::from(vec![
+            Span::styled("- ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                timestamp,
+                Style::default().fg(Color::LightYellow),
+            ),
+            Span::raw(" "),
+            Span::styled(actor.to_string(), id_style()),
+            Span::styled(": ", Style::default().fg(Color::DarkGray)),
+            Span::styled(comment.comment.clone(), Style::default().fg(Color::White)),
+        ]));
     }
 }
 
@@ -286,8 +415,8 @@ fn format_status_label(status: &str) -> String {
 
 fn status_color(status: &str) -> Color {
     match normalize_status(status).as_str() {
-        "open" => Color::Green,
-        "in_progress" => Color::Yellow,
+        "open" => Color::LightGreen,
+        "in_progress" => Color::LightBlue,
         "closed" => Color::DarkGray,
         _ => Color::LightBlue,
     }
@@ -334,4 +463,23 @@ fn truncate_text(value: &str, max: usize) -> String {
 
 fn format_timestamp(value: DateTime<Utc>) -> String {
     value.format("%Y-%m-%d %H:%M").to_string()
+}
+
+fn label_span(label: &str) -> Span<'static> {
+    Span::styled(label.to_string(), Style::default().fg(Color::DarkGray))
+}
+
+fn section_header(title: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        title.to_string(),
+        Style::default()
+            .fg(Color::LightMagenta)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn id_style() -> Style {
+    Style::default()
+        .fg(Color::LightBlue)
+        .add_modifier(Modifier::BOLD)
 }
