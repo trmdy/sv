@@ -685,6 +685,20 @@ impl TaskStore {
                 keep_ids.insert(event.event_id.clone());
             }
 
+            if let Some(deleted) = task_events
+                .iter()
+                .rev()
+                .find(|event| event.event_type == TaskEventType::TaskDeleted)
+            {
+                keep_ids.insert(deleted.event_id.clone());
+                if let Some(create) =
+                    task_events.iter().find(|event| event.event_type == TaskEventType::TaskCreated)
+                {
+                    keep_ids.insert(create.event_id.clone());
+                }
+                continue;
+            }
+
             let last_event_time = task_events
                 .last()
                 .map(|event| event.timestamp)
@@ -735,6 +749,14 @@ impl TaskStore {
                 .find(|event| event.event_type == TaskEventType::TaskPriorityChanged)
             {
                 keep_ids.insert(last_priority.event_id.clone());
+            }
+
+            if let Some(last_edit) = task_events
+                .iter()
+                .rev()
+                .find(|event| event.event_type == TaskEventType::TaskEdited)
+            {
+                keep_ids.insert(last_edit.event_id.clone());
             }
         }
 
@@ -1004,6 +1026,8 @@ fn event_status(event: &TaskEvent, config: &TasksConfig) -> Result<Option<String
             }),
         TaskEventType::TaskCommented
         | TaskEventType::TaskPriorityChanged
+        | TaskEventType::TaskEdited
+        | TaskEventType::TaskDeleted
         | TaskEventType::TaskParentSet
         | TaskEventType::TaskParentCleared
         | TaskEventType::TaskBlocked
@@ -1142,6 +1166,35 @@ fn apply_event(
             record.updated_at = event.timestamp;
             record.updated_by = event.actor.clone();
         }
+        TaskEventType::TaskEdited => {
+            let record = map.get_mut(&event.task_id).ok_or_else(|| {
+                Error::InvalidArgument(format!("task not found: {}", event.task_id))
+            })?;
+            let mut changed = false;
+            if let Some(title) = event.title.as_ref() {
+                let trimmed = title.trim();
+                if trimmed.is_empty() {
+                    return Err(Error::InvalidArgument("title cannot be empty".to_string()));
+                }
+                record.title = trimmed.to_string();
+                changed = true;
+            }
+            if let Some(body) = event.body.as_ref() {
+                if body.trim().is_empty() {
+                    record.body = None;
+                } else {
+                    record.body = Some(body.clone());
+                }
+                changed = true;
+            }
+            if !changed {
+                return Err(Error::InvalidArgument(
+                    "task edit must include --title or --body".to_string(),
+                ));
+            }
+            record.updated_at = event.timestamp;
+            record.updated_by = event.actor.clone();
+        }
         TaskEventType::TaskClosed => {
             let record = map.get_mut(&event.task_id).ok_or_else(|| {
                 Error::InvalidArgument(format!("task not found: {}", event.task_id))
@@ -1163,6 +1216,14 @@ fn apply_event(
             record.branch = event.branch.clone().or(record.branch.clone());
             record.updated_at = event.timestamp;
             record.updated_by = event.actor.clone();
+        }
+        TaskEventType::TaskDeleted => {
+            if map.remove(&event.task_id).is_none() {
+                return Err(Error::InvalidArgument(format!(
+                    "task not found: {}",
+                    event.task_id
+                )));
+            }
         }
         TaskEventType::TaskCommented => {
             let record = map.get_mut(&event.task_id).ok_or_else(|| {
@@ -1482,6 +1543,41 @@ mod tests {
     }
 
     #[test]
+    fn edit_updates_title_and_body() {
+        let config = default_config();
+        let mut map = HashMap::new();
+        let now = Utc::now();
+        let mut create = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
+        create.title = Some("Test".to_string());
+        create.timestamp = now;
+        apply_event(&mut map, &create, &config).expect("create");
+
+        let mut edit = TaskEvent::new(TaskEventType::TaskEdited, "task-1");
+        edit.title = Some("New title".to_string());
+        edit.body = Some("New body".to_string());
+        edit.timestamp = now + chrono::Duration::milliseconds(1);
+        apply_event(&mut map, &edit, &config).expect("edit");
+
+        let task = map.get("task-1").expect("task");
+        assert_eq!(task.title, "New title");
+        assert_eq!(task.body.as_deref(), Some("New body"));
+        assert_eq!(task.updated_at, edit.timestamp);
+    }
+
+    #[test]
+    fn delete_removes_task() {
+        let config = default_config();
+        let mut map = HashMap::new();
+        let mut create = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
+        create.title = Some("Test".to_string());
+        apply_event(&mut map, &create, &config).expect("create");
+
+        let delete = TaskEvent::new(TaskEventType::TaskDeleted, "task-1");
+        apply_event(&mut map, &delete, &config).expect("delete");
+        assert!(map.get("task-1").is_none());
+    }
+
+    #[test]
     fn compact_removes_intermediate_statuses() {
         let config = default_config();
         let storage = Storage::for_repo(PathBuf::from("."));
@@ -1511,6 +1607,40 @@ mod tests {
         let (compacted, report) = store.compact_events(&events, policy).expect("compact");
         assert!(compacted.len() < events.len());
         assert_eq!(report.compacted_tasks, 1);
+    }
+
+    #[test]
+    fn compact_keeps_latest_edit() {
+        let config = default_config();
+        let storage = Storage::for_repo(PathBuf::from("."));
+        let store = TaskStore::new(storage, config.clone());
+
+        let mut events = Vec::new();
+        let now = Utc::now();
+        let mut create = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
+        create.title = Some("Initial".to_string());
+        create.timestamp = now;
+        events.push(create);
+
+        let mut edit = TaskEvent::new(TaskEventType::TaskEdited, "task-1");
+        edit.title = Some("Edited".to_string());
+        edit.timestamp = now + chrono::Duration::milliseconds(1);
+        events.push(edit);
+
+        let mut close = TaskEvent::new(TaskEventType::TaskClosed, "task-1");
+        close.status = Some("closed".to_string());
+        close.timestamp = now + chrono::Duration::milliseconds(2);
+        events.push(close);
+
+        let policy = CompactionPolicy {
+            older_than: None,
+            max_log_mb: None,
+        };
+        let (compacted, _report) = store.compact_events(&events, policy).expect("compact");
+        let snapshot = store.build_snapshot(&compacted).expect("snapshot");
+        let task = snapshot.tasks.into_iter().find(|task| task.id == "task-1");
+        let title = task.map(|t| t.title);
+        assert_eq!(title.as_deref(), Some("Edited"));
     }
 
     #[test]
