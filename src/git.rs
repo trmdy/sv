@@ -330,7 +330,7 @@ pub fn remove_worktree(repo: &Repository, name: &str, force: bool) -> Result<Pat
 }
 
 /// Check if a repository has uncommitted changes.
-fn has_uncommitted_changes(repo: &Repository) -> Result<bool> {
+pub fn has_uncommitted_changes(repo: &Repository) -> Result<bool> {
     let statuses = repo.statuses(None)?;
     
     for entry in statuses.iter() {
