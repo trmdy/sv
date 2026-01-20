@@ -1828,17 +1828,19 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
     // - no hard conflicts (Conflict status)
     // - something was applied (including in_conflict commits, which were committed)
     let total_applied = replay_summary.applied + replay_summary.in_conflict;
+    let refname = if dest.starts_with("refs/") {
+        dest.clone()
+    } else {
+        format!("refs/heads/{}", dest)
+    };
+    let mut dest_is_head = false;
+    let mut worktree_updated = false;
+    let mut worktree_update_warning: Option<String> = None;
     let applied = if !opts.no_apply && replay_summary.conflicts == 0 && total_applied > 0 {
         // Get the current tip of the integration branch
         let integration_commit = repo.revparse_single(&integration_ref)?.peel_to_commit()?;
         
         // Update the dest ref to point to the integration branch tip
-        let refname = if dest.starts_with("refs/") {
-            dest.clone()
-        } else {
-            format!("refs/heads/{}", dest)
-        };
-        
         repo.reference(
             &refname,
             integration_commit.id(),
@@ -1850,6 +1852,26 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
     } else {
         false
     };
+    if applied {
+        if let Ok(head_info) = git::head_info(&repo) {
+            dest_is_head = head_info.name.as_deref() == Some(refname.as_str());
+            if dest_is_head {
+                if git::has_uncommitted_changes(&repo)? {
+                    worktree_update_warning =
+                        Some("worktree has local changes; not updated".to_string());
+                } else {
+                    let mut checkout = git2::build::CheckoutBuilder::new();
+                    checkout.safe();
+                    if let Err(err) = repo.checkout_head(Some(&mut checkout)) {
+                        worktree_update_warning =
+                            Some(format!("worktree update failed: {}", err));
+                    } else {
+                        worktree_updated = true;
+                    }
+                }
+            }
+        }
+    }
 
     // Build conflict output
     let conflict_output: Vec<HoistConflictSummary> = replay_outcome
@@ -1979,6 +2001,13 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
                 println!("{} updated to include {} commit(s) ({} with conflicts)", dest, commit_count, replay_summary.in_conflict);
             } else {
                 println!("{} updated to include {} commit(s)", dest, commit_count);
+            }
+            if dest_is_head {
+                if worktree_updated {
+                    println!("  Worktree: updated");
+                } else if let Some(warning) = &worktree_update_warning {
+                    println!("  Worktree: not updated ({warning})");
+                }
             }
         } else if opts.no_apply {
             println!("Skipped apply (--no-apply). To apply: git checkout {} && git merge --ff-only {}", dest, integration_ref);
