@@ -153,7 +153,7 @@ fn render_list_row(
     width: usize,
 ) -> Line<'static> {
     let status_label = format_status_label(&task.status);
-    let status_text = pad_text(&status_label, STATUS_WIDTH);
+    let status_text = pad_text_center(&status_label, STATUS_WIDTH);
     let id_text = pad_text(&task.id, ID_WIDTH);
     let priority_text = pad_text(&task.priority, PRIORITY_WIDTH);
     let indent_prefix = if depth > 0 {
@@ -168,10 +168,7 @@ fn render_list_row(
 
     let prefix = " ";
     let ready_marker = if ready { "." } else { " " };
-    let status_span = Span::styled(
-        status_text,
-        Style::default().fg(status_color(&task.status)).add_modifier(Modifier::BOLD),
-    );
+    let status_span = Span::styled(status_text, status_style(&task.status).add_modifier(Modifier::BOLD));
     let ready_span = Span::styled(ready_marker, Style::default().fg(Color::LightGreen));
     let id_span = Span::styled(id_text, Style::default().fg(Color::LightBlue));
     let priority_span = Span::styled(
@@ -232,10 +229,8 @@ fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
     lines.push(Line::from(vec![
         label_span("Status: "),
         Span::styled(
-            task.status.clone(),
-            Style::default()
-                .fg(status_color(&task.status))
-                .add_modifier(Modifier::BOLD),
+            display_status_text(&task.status),
+            status_style(&task.status).add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         label_span("Priority: "),
@@ -406,19 +401,32 @@ fn list_window(total: usize, selected: Option<usize>, height: usize) -> (usize, 
 
 fn format_status_label(status: &str) -> String {
     match normalize_status(status).as_str() {
-        "open" => "open".to_string(),
-        "in_progress" => "prog".to_string(),
-        "closed" => "closed".to_string(),
+        "open" => "OPEN".to_string(),
+        "in_progress" => "PROG".to_string(),
+        "closed" => "DONE".to_string(),
         value => truncate_text(value, 6),
     }
 }
 
-fn status_color(status: &str) -> Color {
+fn status_style(status: &str) -> Style {
+    let normalized = normalize_status(status);
+    let (fg, bg) = status_colors(&normalized);
+    Style::default().fg(fg).bg(bg)
+}
+
+fn display_status_text(status: &str) -> String {
     match normalize_status(status).as_str() {
-        "open" => Color::LightGreen,
-        "in_progress" => Color::LightBlue,
-        "closed" => Color::DarkGray,
-        _ => Color::LightBlue,
+        "closed" => "done".to_string(),
+        _ => status.trim().to_string(),
+    }
+}
+
+fn status_colors(status: &str) -> (Color, Color) {
+    match normalize_status(status).as_str() {
+        "open" => (Color::Rgb(80, 250, 123), Color::Rgb(26, 61, 42)),
+        "in_progress" => (Color::Rgb(139, 233, 253), Color::Rgb(26, 51, 68)),
+        "closed" => (Color::Rgb(98, 114, 164), Color::Rgb(42, 42, 61)),
+        _ => (Color::White, Color::DarkGray),
     }
 }
 
@@ -443,6 +451,21 @@ fn pad_text(value: &str, width: usize) -> String {
         text = truncate_text(&text, width);
     }
     format!("{text:width$}")
+}
+
+fn pad_text_center(value: &str, width: usize) -> String {
+    let mut text = value.to_string();
+    if text.len() > width {
+        text = truncate_text(&text, width);
+    }
+    let len = text.chars().count();
+    if len >= width {
+        return text;
+    }
+    let total_pad = width - len;
+    let left = total_pad / 2;
+    let right = total_pad - left;
+    format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
 }
 
 fn truncate_text(value: &str, max: usize) -> String {
