@@ -1397,7 +1397,7 @@ fn blocked_ids_from_state(
     status_by_id: &HashMap<String, String>,
     config: &TasksConfig,
 ) -> HashSet<String> {
-    state
+    let mut blocked: HashSet<String> = state
         .blocks
         .iter()
         .filter_map(|(blocker, blocked)| {
@@ -1408,7 +1408,32 @@ fn blocked_ids_from_state(
                 Some(blocked.clone())
             }
         })
-        .collect()
+        .collect();
+
+    if blocked.is_empty() {
+        return blocked;
+    }
+
+    let mut children_by_parent: HashMap<String, Vec<String>> = HashMap::new();
+    for (child, parent) in &state.parent_by_child {
+        children_by_parent
+            .entry(parent.clone())
+            .or_default()
+            .push(child.clone());
+    }
+
+    let mut stack: Vec<String> = blocked.iter().cloned().collect();
+    while let Some(task_id) = stack.pop() {
+        if let Some(children) = children_by_parent.get(&task_id) {
+            for child in children {
+                if blocked.insert(child.clone()) {
+                    stack.push(child.clone());
+                }
+            }
+        }
+    }
+
+    blocked
 }
 
 fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations> {
@@ -1894,6 +1919,58 @@ mod tests {
         let ready = store.list_ready().expect("list ready");
         let ids: HashSet<String> = ready.into_iter().map(|task| task.id).collect();
         assert!(ids.contains("task-a"));
+    }
+
+    #[test]
+    fn blocked_parent_cascades_to_children() {
+        let dir = tempdir().expect("tempdir");
+        let repo_root = dir.path().to_path_buf();
+        let storage = Storage::new(
+            repo_root.clone(),
+            repo_root.join(".git"),
+            repo_root.clone(),
+        );
+        let store = TaskStore::new(storage, TasksConfig::default());
+
+        let now = Utc::now();
+        let mut parent = TaskEvent::new(TaskEventType::TaskCreated, "task-parent");
+        parent.title = Some("Parent".to_string());
+        parent.timestamp = now;
+        store.append_event(parent).expect("create parent");
+
+        let mut child = TaskEvent::new(TaskEventType::TaskCreated, "task-child");
+        child.title = Some("Child".to_string());
+        child.timestamp = now + chrono::Duration::milliseconds(1);
+        store.append_event(child).expect("create child");
+
+        let mut blocker = TaskEvent::new(TaskEventType::TaskCreated, "task-blocker");
+        blocker.title = Some("Blocker".to_string());
+        blocker.timestamp = now + chrono::Duration::milliseconds(2);
+        store.append_event(blocker).expect("create blocker");
+
+        let mut set_parent = TaskEvent::new(TaskEventType::TaskParentSet, "task-child");
+        set_parent.related_task_id = Some("task-parent".to_string());
+        set_parent.timestamp = now + chrono::Duration::milliseconds(3);
+        store.append_event(set_parent).expect("set parent");
+
+        let mut block = TaskEvent::new(TaskEventType::TaskBlocked, "task-blocker");
+        block.related_task_id = Some("task-parent".to_string());
+        block.timestamp = now + chrono::Duration::milliseconds(4);
+        store.append_event(block).expect("block parent");
+
+        let ready = store.list_ready().expect("list ready");
+        let ids: HashSet<String> = ready.into_iter().map(|task| task.id).collect();
+        assert!(!ids.contains("task-parent"));
+        assert!(!ids.contains("task-child"));
+
+        let mut close_blocker = TaskEvent::new(TaskEventType::TaskClosed, "task-blocker");
+        close_blocker.timestamp = now + chrono::Duration::milliseconds(5);
+        store.append_event(close_blocker).expect("close blocker");
+
+        let ready = store.list_ready().expect("list ready");
+        let ids: HashSet<String> = ready.into_iter().map(|task| task.id).collect();
+        assert!(ids.contains("task-parent"));
+        assert!(ids.contains("task-child"));
     }
 
     #[test]

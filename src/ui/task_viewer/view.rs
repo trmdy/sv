@@ -271,7 +271,7 @@ fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
     }
     lines.push(Line::from(""));
 
-    lines.push(section_header("Body"));
+    lines.push(section_header("## Body"));
     let body = task
         .body
         .as_deref()
@@ -292,7 +292,7 @@ fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled(
-                format!("Comments: {}", task.comments_count),
+                format!("## Comments: {}", task.comments_count),
                 Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
             ),
             Span::styled(" (loading...)", Style::default().fg(Color::DarkGray)),
@@ -305,7 +305,7 @@ fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
 
 fn append_relations(lines: &mut Vec<Line<'static>>, relations: &crate::task::TaskRelations) {
     lines.push(Line::from(""));
-    lines.push(section_header("Relations"));
+    lines.push(section_header("## Relations"));
     let mut any = false;
 
     if let Some(parent) = relations.parent.as_deref() {
@@ -364,7 +364,7 @@ fn append_comments(lines: &mut Vec<Line<'static>>, details: &TaskDetails) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!("Comments: {}", details.comments.len()),
+        format!("## Comments: {}", details.comments.len()),
         Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
     )));
     for comment in &details.comments {
