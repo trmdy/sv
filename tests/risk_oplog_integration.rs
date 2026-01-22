@@ -2,12 +2,11 @@ mod support;
 
 use std::fs;
 
-use assert_cmd::Command;
 use chrono::Utc;
 use predicates::str::contains;
 use serde_json::Value;
 
-use support::TestRepo;
+use support::{sv_cmd, TestRepo};
 use sv::oplog::{OpLog, OpOutcome, OpRecord};
 use sv::storage::{Storage, WorkspaceEntry};
 
@@ -62,7 +61,7 @@ fn risk_reports_overlap() -> Result<(), Box<dyn std::error::Error>> {
         None,
     ))?;
 
-    let output = Command::cargo_bin("sv")?
+    let output = sv_cmd()
         .current_dir(repo.path())
         .arg("risk")
         .arg("--json")
@@ -106,7 +105,7 @@ fn op_log_lists_recent_ops() -> Result<(), Box<dyn std::error::Error>> {
     record.affected_refs.push("refs/heads/sv/ws/agent1".to_string());
     log.append(&record)?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("op")
         .arg("log")

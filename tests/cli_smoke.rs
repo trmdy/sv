@@ -1,10 +1,9 @@
-use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::str::contains;
 
 #[test]
 fn sv_help_works() {
-    Command::cargo_bin("sv")
-        .expect("binary")
+    cargo_bin_cmd!("sv")
         .arg("--help")
         .assert()
         .success()
@@ -27,8 +26,7 @@ fn subcommand_help_works() {
     ];
 
     for cmd in subcommands {
-        Command::cargo_bin("sv")
-            .expect("binary")
+        cargo_bin_cmd!("sv")
             .arg(cmd)
             .arg("--help")
             .assert()

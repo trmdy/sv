@@ -1,17 +1,16 @@
 mod support;
 
-use assert_cmd::Command;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
-use support::TestRepo;
+use support::{sv_cmd, TestRepo};
 
 #[test]
 fn take_and_list_lease() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("take")
         .arg("src/lib.rs")
@@ -22,7 +21,7 @@ fn take_and_list_lease() -> Result<(), Box<dyn std::error::Error>> {
         .assert()
         .success();
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("lease")
         .arg("ls")
@@ -38,7 +37,7 @@ fn who_shows_active_lease() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("take")
         .arg("src/main.rs")
@@ -47,7 +46,7 @@ fn who_shows_active_lease() -> Result<(), Box<dyn std::error::Error>> {
         .assert()
         .success();
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("lease")
         .arg("who")
@@ -64,7 +63,7 @@ fn release_clears_lease() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("take")
         .arg("docs/**")
@@ -73,14 +72,14 @@ fn release_clears_lease() -> Result<(), Box<dyn std::error::Error>> {
         .assert()
         .success();
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("release")
         .arg("docs/**")
         .assert()
         .success();
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("lease")
         .arg("ls")
@@ -96,13 +95,13 @@ fn wait_until_lease_expires() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .args(["take", "src/wait.rs", "--ttl", "1s"])
         .assert()
         .success();
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .args([
             "lease",
@@ -127,7 +126,7 @@ fn ownerless_lease_does_not_block_commit() -> Result<(), Box<dyn std::error::Err
     repo.write_file("src/ownerless.rs", "ownerless\n")?;
     repo.stage_path("src/ownerless.rs")?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .env_remove("SV_ACTOR")
         .args([
@@ -141,7 +140,7 @@ fn ownerless_lease_does_not_block_commit() -> Result<(), Box<dyn std::error::Err
         .assert()
         .success();
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .env_remove("SV_ACTOR")
         .args(["commit", "-m", "ownerless commit"])

@@ -1,8 +1,6 @@
 mod support;
 
-use assert_cmd::Command;
-
-use support::TestRepo;
+use support::{sv_cmd, TestRepo};
 
 #[test]
 #[ignore = "undo command not implemented yet"]
@@ -10,7 +8,7 @@ fn undo_latest_operation() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("undo")
         .assert()
@@ -25,7 +23,7 @@ fn undo_specific_operation() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("undo")
         .arg("--op")

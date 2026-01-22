@@ -1,12 +1,11 @@
 mod support;
 
 use assert_cmd::Command;
-
 use support::TestRepo;
 use sv::storage::{ProtectOverride, Storage};
 
 fn sv_cmd(repo: &TestRepo) -> Command {
-    let mut cmd = Command::cargo_bin("sv").expect("binary");
+    let mut cmd = support::sv_cmd();
     cmd.current_dir(repo.path());
     cmd
 }

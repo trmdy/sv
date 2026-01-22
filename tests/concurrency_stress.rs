@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use assert_cmd::cargo::cargo_bin;
 use sv::error::Error;
 use sv::lock::FileLock;
 use sv::oplog::OpLog;
@@ -20,7 +19,7 @@ const READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const READY_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn sv_bin() -> PathBuf {
-    cargo_bin("sv")
+    assert_cmd::cargo::cargo_bin!("sv").to_path_buf()
 }
 
 fn spawn_sv(repo: &Path, args: &[String], actor: Option<&str>) -> std::io::Result<Child> {

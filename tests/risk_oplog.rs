@@ -1,11 +1,10 @@
 mod support;
 
-use assert_cmd::Command;
 use chrono::Utc;
 use predicates::str::contains;
 
 use sv::oplog::{OpLog, OpRecord};
-use support::TestRepo;
+use support::{sv_cmd, TestRepo};
 
 fn setup_repo() -> TestRepo {
     let repo = TestRepo::init().expect("init repo");
@@ -23,8 +22,7 @@ fn op_log_lists_entries() {
     let record = OpRecord::new("sv init", Some("tester".to_string()));
     log.append(&record).expect("append op");
 
-    Command::cargo_bin("sv")
-        .expect("binary")
+    sv_cmd()
         .current_dir(repo.path())
         .args(["op", "log", "--limit", "1"])
         .assert()
@@ -39,8 +37,7 @@ fn risk_command_reports_overlap() {
     repo.commit_file("README.md", "# sv\n", "init")
         .expect("commit file");
 
-    Command::cargo_bin("sv")
-        .expect("binary")
+    sv_cmd()
         .current_dir(repo.path())
         .args(["risk", "--json"])
         .assert()
@@ -57,8 +54,7 @@ fn undo_command_reverts_last_op() {
     record.timestamp = Utc::now();
     log.append(&record).expect("append op");
 
-    Command::cargo_bin("sv")
-        .expect("binary")
+    sv_cmd()
         .current_dir(repo.path())
         .args(["undo"])
         .assert()

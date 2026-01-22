@@ -1,18 +1,17 @@
 mod support;
 
-use assert_cmd::Command;
 use sv::config::Config;
 use sv::storage::Storage;
 use sv::task::{TaskEvent, TaskEventType, TaskStore};
 
-use support::TestRepo;
+use support::{sv_cmd, TestRepo};
 
 #[test]
 fn status_runs_in_repo() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("status")
         .assert()
@@ -44,7 +43,7 @@ fn status_runs_with_relation_events() -> Result<(), Box<dyn std::error::Error>> 
     relate.relation_description = Some("shares context".to_string());
     store.append_event(relate)?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("status")
         .assert()

@@ -1,9 +1,8 @@
 mod support;
 
-use assert_cmd::Command;
 use serde_json::Value;
 
-use support::TestRepo;
+use support::{sv_cmd, TestRepo};
 
 #[test]
 fn commit_writes_oplog_entry() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,7 +11,7 @@ fn commit_writes_oplog_entry() -> Result<(), Box<dyn std::error::Error>> {
     repo.write_file("README.md", "# sv\n")?;
     repo.stage_path("README.md")?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("commit")
         .arg("-m")
@@ -20,7 +19,7 @@ fn commit_writes_oplog_entry() -> Result<(), Box<dyn std::error::Error>> {
         .assert()
         .success();
 
-    let output = Command::cargo_bin("sv")?
+    let output = sv_cmd()
         .current_dir(repo.path())
         .arg("op")
         .arg("log")

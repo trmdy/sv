@@ -1,6 +1,10 @@
+#![allow(dead_code)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use assert_cmd::cargo::cargo_bin_cmd;
+use assert_cmd::Command;
 use git2::{IndexAddOption, Oid, Repository, Signature, WorktreeAddOptions};
 use sv::lease::Lease;
 use tempfile::TempDir;
@@ -8,6 +12,10 @@ use tempfile::TempDir;
 pub struct TestRepo {
     dir: TempDir,
     repo: Repository,
+}
+
+pub fn sv_cmd() -> Command {
+    cargo_bin_cmd!("sv")
 }
 
 impl TestRepo {

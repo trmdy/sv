@@ -1,11 +1,10 @@
 mod support;
 
-use assert_cmd::Command;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use std::fs;
 
-use support::TestRepo;
+use support::{sv_cmd, TestRepo};
 
 #[test]
 fn commit_injects_change_id() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,7 +14,7 @@ fn commit_injects_change_id() -> Result<(), Box<dyn std::error::Error>> {
     repo.commit_all("initial commit")?;
     repo.write_file("README.md", "# sv v2\n")?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("commit")
         .arg("-a")
@@ -40,7 +39,7 @@ fn protected_path_blocks_commit() -> Result<(), Box<dyn std::error::Error>> {
     repo.commit_all("initial commit")?;
     repo.write_file(".beads/issues.jsonl", "[1]\n")?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("commit")
         .arg("-a")
@@ -62,7 +61,7 @@ fn allow_protected_overrides_guard() -> Result<(), Box<dyn std::error::Error>> {
     repo.commit_all("initial commit")?;
     repo.write_file(".beads/issues.jsonl", "[1]\n")?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .arg("commit")
         .arg("-a")
@@ -79,7 +78,7 @@ fn allow_protected_overrides_guard() -> Result<(), Box<dyn std::error::Error>> {
 fn protect_add_and_rm_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .args(["protect", "add", ".beads/**"])
         .assert()
@@ -89,7 +88,7 @@ fn protect_add_and_rm_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
     let contents = fs::read_to_string(&config_path)?;
     assert!(contents.contains(".beads/**"));
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .args(["protect", "rm", ".beads/**"])
         .assert()
@@ -110,7 +109,7 @@ fn protect_status_reports_staged_matches() -> Result<(), Box<dyn std::error::Err
     repo.write_file(".beads/issues.jsonl", "[]\n")?;
     repo.stage_path(".beads/issues.jsonl")?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .args(["protect", "status"])
         .assert()
@@ -131,7 +130,7 @@ fn lease_conflict_blocks_commit() -> Result<(), Box<dyn std::error::Error>> {
     repo.commit_all("initial commit")?;
     repo.write_file("src/lib.rs", "fn main() { println!(\"hi\"); }\n")?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .env("SV_ACTOR", "bob")
         .args([
@@ -147,7 +146,7 @@ fn lease_conflict_blocks_commit() -> Result<(), Box<dyn std::error::Error>> {
         .assert()
         .success();
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .env("SV_ACTOR", "alice")
         .arg("commit")
@@ -169,7 +168,7 @@ fn force_lease_allows_commit() -> Result<(), Box<dyn std::error::Error>> {
     repo.commit_all("initial commit")?;
     repo.write_file("src/lib.rs", "fn main() { println!(\"hi\"); }\n")?;
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .env("SV_ACTOR", "bob")
         .args([
@@ -185,7 +184,7 @@ fn force_lease_allows_commit() -> Result<(), Box<dyn std::error::Error>> {
         .assert()
         .success();
 
-    Command::cargo_bin("sv")?
+    sv_cmd()
         .current_dir(repo.path())
         .env("SV_ACTOR", "alice")
         .arg("commit")
