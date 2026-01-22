@@ -123,7 +123,7 @@ pub fn run(options: CommitOptions) -> Result<()> {
 
     // Inject Change-Id trailer if missing (sv-8jf.5.2)
     let mut message = options.message.clone();
-    let mut file = options.file.clone();
+    let file = options.file.clone();
     let mut use_no_edit = options.no_edit;
 
     if let Some(msg) = message.as_deref() {

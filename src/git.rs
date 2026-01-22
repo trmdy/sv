@@ -1169,7 +1169,7 @@ mod tests {
     #[test]
     fn test_create_and_list_worktree() {
         let (temp, repo) = init_test_repo();
-        
+
         let wt_path = temp.path().join(".sv").join("worktrees").join("test-wt");
         
         // Create worktree
@@ -1435,7 +1435,7 @@ mod tests {
 
     #[test]
     fn test_amend_commit() {
-        let (temp, repo) = init_test_repo();
+        let (_temp, repo) = init_test_repo();
 
         // Get original HEAD
         let original_head = repo.head().unwrap().target().unwrap();

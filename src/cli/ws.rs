@@ -22,6 +22,7 @@ pub struct NewOptions {
     pub base: Option<String>,
     pub dir: Option<PathBuf>,
     pub branch: Option<String>,
+    #[allow(dead_code)]
     pub sparse: Vec<String>,
     pub actor: Option<String>,
     pub repo: Option<PathBuf>,
