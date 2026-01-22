@@ -35,14 +35,55 @@ jobs:
       - name: Test
         run: cargo test
 
-      - name: Build release
-        run: cargo build --release
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
 
-      - name: Upload release binary
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/sv dist/
+          tar -czf dist/sv-${{ matrix.target }}.tar.gz -C dist sv
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/sv.exe dist/
+          Compress-Archive -Path dist/sv.exe -DestinationPath ("dist/sv-${{ matrix.target }}.zip") -Force
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sv-${{ matrix.os }}
-          path: |
-            target/release/sv
-            target/release/sv.exe
-          if-no-files-found: ignore
+          name: sv-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error

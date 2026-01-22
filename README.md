@@ -22,6 +22,29 @@ server or proprietary backend.
 
 ## Installation
 
+### Prebuilt binaries (recommended)
+
+GitHub Releases ship binaries for:
+- Linux (x86_64)
+- macOS (x86_64, arm64)
+- Windows (x86_64)
+
+Manual download:
+- https://github.com/tOgg1/sv/releases
+
+Linux install script:
+```bash
+curl -fsSL https://raw.githubusercontent.com/tOgg1/sv/main/install.sh | bash
+```
+Linux script supports x86_64 only.
+
+macOS Homebrew (tap):
+```bash
+brew tap tOgg1/sv https://github.com/tOgg1/sv
+brew install sv
+```
+Note: `Formula/sv.rb` sha256 values must be updated per release.
+
 ### From source
 
 ```bash
@@ -31,7 +54,7 @@ cargo build --release
 # Binary at ./target/release/sv
 ```
 
-### Requirements
+### Requirements (source builds)
 
 - Rust 1.70+ (stable)
 - Git 2.20+

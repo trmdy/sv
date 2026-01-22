@@ -10,47 +10,55 @@ permissions:
 
 jobs:
   build:
-    name: build (${{ matrix.os }})
+    name: build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
       - name: Build release
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package (unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          target=$(rustc -Vv | sed -n 's/^host: //p')
           mkdir -p dist
-          cp target/release/sv dist/
-          tar -czf dist/sv-${target}.tar.gz -C dist sv
+          cp target/${{ matrix.target }}/release/sv dist/
+          tar -czf dist/sv-${{ matrix.target }}.tar.gz -C dist sv
 
       - name: Package (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $target = (rustc -Vv | Select-String '^host:' | ForEach-Object { $_.Line.Split()[1] })
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item target/release/sv.exe dist/
-          Compress-Archive -Path dist/sv.exe -DestinationPath ("dist/sv-$target.zip") -Force
+          Copy-Item target/${{ matrix.target }}/release/sv.exe dist/
+          Compress-Archive -Path dist/sv.exe -DestinationPath ("dist/sv-${{ matrix.target }}.zip") -Force
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.os }}
+          name: release-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
