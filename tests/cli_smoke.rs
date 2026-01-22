@@ -33,3 +33,25 @@ fn subcommand_help_works() {
             .success();
     }
 }
+
+#[test]
+fn task_robot_help_works() {
+    cargo_bin_cmd!("sv")
+        .arg("task")
+        .arg("--robot-help")
+        .assert()
+        .success()
+        .stdout(contains("sv task --robot-help"))
+        .stdout(contains("sv task new"));
+}
+
+#[test]
+fn ws_robot_help_works() {
+    cargo_bin_cmd!("sv")
+        .arg("ws")
+        .arg("--robot-help")
+        .assert()
+        .success()
+        .stdout(contains("sv ws --robot-help"))
+        .stdout(contains("sv ws new"));
+}

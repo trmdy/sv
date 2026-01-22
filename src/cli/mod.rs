@@ -113,6 +113,188 @@ Tips for agent automation
   - Acquire leases before editing paths; release when done.
   - Tasks: if tasks.id_prefix is missing or still "sv", run `sv task prefix <repo>`.
 "#;
+const WS_ROBOT_HELP: &str = r#"sv ws --robot-help
+
+Purpose
+  Workspaces (git worktrees) as sandboxes.
+
+Commands
+  sv ws new <name> [--base] [--dir] [--branch] [--sparse ...]
+  sv ws here [--name]
+  sv ws list [--selector]
+  sv ws info <name>
+  sv ws rm <name> [--force]
+  sv ws clean [--selector] [--dest] [--force] [--dry-run]
+
+Notes
+  selector syntax: ws(active), ahead("main"), name~"agent*", touching("src/**")
+"#;
+const TAKE_ROBOT_HELP: &str = r#"sv take --robot-help
+
+Purpose
+  Acquire leases on paths or globs.
+
+Usage
+  sv take <paths...> [--strength] [--intent] [--scope] [--ttl] [--note]
+
+Notes
+  strength: observe|cooperative|strong|exclusive
+  note required for strong/exclusive
+"#;
+const RELEASE_ROBOT_HELP: &str = r#"sv release --robot-help
+
+Purpose
+  Release leases by id or pathspec.
+
+Usage
+  sv release <ids|pathspecs...> [--force]
+"#;
+const LEASE_ROBOT_HELP: &str = r#"sv lease --robot-help
+
+Purpose
+  Inspect/manage leases.
+
+Commands
+  sv lease ls [--selector] [--actor]
+  sv lease who <path>
+  sv lease renew <ids...> [--ttl]
+  sv lease break <ids...> --reason "<text>"
+  sv lease wait <targets...> [--timeout] [--poll]
+"#;
+const PROTECT_ROBOT_HELP: &str = r#"sv protect --robot-help
+
+Purpose
+  Manage protected paths.
+
+Commands
+  sv protect status
+  sv protect add <patterns...> [--mode guard|readonly|warn]
+  sv protect off <patterns...>
+  sv protect rm <patterns...> [--force]
+"#;
+const COMMIT_ROBOT_HELP: &str = r#"sv commit --robot-help
+
+Purpose
+  Commit with protected/lease checks + Change-Id injection.
+
+Usage
+  sv commit -m "<msg>" [-a] [--amend] [--no-edit] [--allow-protected] [--force-lease]
+"#;
+const TASK_ROBOT_HELP: &str = r#"sv task --robot-help
+
+Purpose
+  Task tracking for this repo. Tasks stored in:
+  .tasks/tasks.jsonl (tracked)
+  .git/sv/tasks.jsonl (shared across worktrees)
+
+Quickstart
+  sv task new "Ship CLI help"
+  sv task list --status open
+  sv task start 01HZ...
+  sv task close 01HZ...
+
+Commands
+  sv task                           Open task TUI
+  sv task new "<title>" [--status] [--priority P0-P4] [--body]
+  sv task list [--status] [--priority] [--workspace] [--actor] [--updated-since] [--limit]
+  sv task ready [--priority] [--workspace] [--actor] [--updated-since] [--limit]
+  sv task show <id>
+  sv task start <id>
+  sv task status <id> <status>
+  sv task priority <id> <P0-P4>
+  sv task edit <id> [--title] [--body]
+  sv task close <id> [--status]
+  sv task delete <id>
+  sv task comment <id> "<text>"
+  sv task parent set <child> <parent>
+  sv task parent clear <child>
+  sv task block <blocker> <blocked>
+  sv task unblock <blocker> <blocked>
+  sv task relate <left> <right> --desc "<text>"
+  sv task unrelate <left> <right>
+  sv task relations <id>
+  sv task sync
+  sv task compact [--older-than] [--max-log-mb] [--dry-run]
+  sv task prefix [<prefix>]
+
+Notes
+  list/ready sorted: status -> priority -> readiness -> updated_at -> id
+  readiness: default_status and not blocked
+  Use --json for machine output; use --events <path> with --json.
+"#;
+const RISK_ROBOT_HELP: &str = r#"sv risk --robot-help
+
+Purpose
+  Overlap/conflict analysis across workspaces.
+
+Usage
+  sv risk [--selector] [--base] [--simulate]
+"#;
+const OP_ROBOT_HELP: &str = r#"sv op --robot-help
+
+Purpose
+  Operation history.
+
+Commands
+  sv op log [--limit] [--actor] [--operation] [--since] [--until] [--json]
+"#;
+const UNDO_ROBOT_HELP: &str = r#"sv undo --robot-help
+
+Purpose
+  Undo last operation.
+
+Usage
+  sv undo [--op <id>]
+"#;
+const ACTOR_ROBOT_HELP: &str = r#"sv actor --robot-help
+
+Purpose
+  Configure actor identity.
+
+Commands
+  sv actor set <name>
+  sv actor show
+"#;
+const INIT_ROBOT_HELP: &str = r#"sv init --robot-help
+
+Purpose
+  Initialize sv state in repo.
+
+Usage
+  sv init
+"#;
+const STATUS_ROBOT_HELP: &str = r#"sv status --robot-help
+
+Purpose
+  Show current workspace status.
+
+Usage
+  sv status [--json]
+"#;
+const SWITCH_ROBOT_HELP: &str = r#"sv switch --robot-help
+
+Purpose
+  Resolve workspace path for fast switching.
+
+Usage
+  sv switch <name> [--path]
+"#;
+const ONTO_ROBOT_HELP: &str = r#"sv onto --robot-help
+
+Purpose
+  Rebase/merge current workspace onto target workspace.
+
+Usage
+  sv onto <target> [--strategy rebase|merge|cherry-pick] [--base] [--preflight]
+"#;
+const HOIST_ROBOT_HELP: &str = r#"sv hoist --robot-help
+
+Purpose
+  Integrate multiple workspaces into an integration branch.
+
+Usage
+  sv hoist -s <selector> [--dest] [--strategy] [--order] [--dry-run] [--close-tasks] [--rm] [--rm-force]
+"#;
 
 /// sv - Simultaneous Versioning
 ///
@@ -172,7 +354,6 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Workspace management (workspaces)
-    #[command(subcommand)]
     #[command(long_about = r#"Manage workspaces used as agent sandboxes.
 
 Examples:
@@ -180,7 +361,10 @@ Examples:
   sv ws list
   sv ws info agent1
 "#)]
-    Ws(WsCommands),
+    Ws {
+        #[command(subcommand)]
+        command: Option<WsCommands>,
+    },
 
     /// Take a lease on paths
     #[command(long_about = r#"Create lease reservations on paths or globs.
@@ -236,7 +420,6 @@ Examples:
     },
 
     /// Lease management commands
-    #[command(subcommand)]
     #[command(long_about = r#"Inspect and manage active leases.
 
 Examples:
@@ -245,10 +428,12 @@ Examples:
   sv lease renew 01HZXJ6ZP9QK3A5T --ttl 4h
   sv lease wait src/auth/** --timeout 10m
 "#)]
-    Lease(LeaseCommands),
+    Lease {
+        #[command(subcommand)]
+        command: Option<LeaseCommands>,
+    },
 
     /// Protected path management
-    #[command(subcommand)]
     #[command(long_about = r#"Manage protected path rules and overrides.
 
 Examples:
@@ -256,7 +441,10 @@ Examples:
   sv protect add .beads/** --mode guard
   sv protect off Cargo.lock
 "#)]
-    Protect(ProtectCommands),
+    Protect {
+        #[command(subcommand)]
+        command: Option<ProtectCommands>,
+    },
 
     /// Commit with sv checks (protected paths, lease conflicts, Change-Id)
     #[command(long_about = r#"Commit with sv checks for protected paths and lease conflicts.
@@ -335,14 +523,16 @@ Examples:
     },
 
     /// Operation log and undo
-    #[command(subcommand)]
     #[command(long_about = r#"Inspect operation history.
 
 Examples:
   sv op log --limit 20
   sv op log --actor alice
 "#)]
-    Op(OpCommands),
+    Op {
+        #[command(subcommand)]
+        command: Option<OpCommands>,
+    },
 
     /// Undo the last operation
     #[command(long_about = r#"Undo a recent sv operation.
@@ -358,14 +548,16 @@ Examples:
     },
 
     /// Set or show actor identity
-    #[command(subcommand)]
     #[command(long_about = r#"Manage the actor identity used for leases and ops.
 
 Examples:
   sv actor set alice
   sv actor show
 "#)]
-    Actor(ActorCommands),
+    Actor {
+        #[command(subcommand)]
+        command: Option<ActorCommands>,
+    },
 
     /// Initialize sv in a repository
     #[command(long_about = r#"Initialize sv state in the repo.
@@ -2064,7 +2256,26 @@ impl Cli {
         } = self;
 
         if robot_help {
-            println!("{ROBOT_HELP}");
+            let help = match &command {
+                Some(Commands::Ws { .. }) => WS_ROBOT_HELP,
+                Some(Commands::Take { .. }) => TAKE_ROBOT_HELP,
+                Some(Commands::Release { .. }) => RELEASE_ROBOT_HELP,
+                Some(Commands::Lease { .. }) => LEASE_ROBOT_HELP,
+                Some(Commands::Protect { .. }) => PROTECT_ROBOT_HELP,
+                Some(Commands::Commit { .. }) => COMMIT_ROBOT_HELP,
+                Some(Commands::Task { .. }) => TASK_ROBOT_HELP,
+                Some(Commands::Risk { .. }) => RISK_ROBOT_HELP,
+                Some(Commands::Op { .. }) => OP_ROBOT_HELP,
+                Some(Commands::Undo { .. }) => UNDO_ROBOT_HELP,
+                Some(Commands::Actor { .. }) => ACTOR_ROBOT_HELP,
+                Some(Commands::Init) => INIT_ROBOT_HELP,
+                Some(Commands::Status) => STATUS_ROBOT_HELP,
+                Some(Commands::Switch { .. }) => SWITCH_ROBOT_HELP,
+                Some(Commands::Onto { .. }) => ONTO_ROBOT_HELP,
+                Some(Commands::Hoist { .. }) => HOIST_ROBOT_HELP,
+                None => ROBOT_HELP,
+            };
+            println!("{help}");
             return Ok(());
         }
 
@@ -2116,64 +2327,70 @@ impl Cli {
                     quiet,
                 })
             }
-            Commands::Ws(cmd) => match cmd {
-                WsCommands::New { name, base, dir, branch, sparse } => {
-                    ws::run_new(ws::NewOptions {
-                        name,
-                        base,
-                        dir,
-                        branch,
-                        sparse,
-                        actor,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                WsCommands::Here { name } => {
-                    ws::run_here(ws::HereOptions {
-                        name,
-                        actor,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                WsCommands::List { selector } => {
-                    ws::run_list(ws::ListOptions {
-                        selector,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                WsCommands::Info { name } => {
-                    ws::run_info(ws::InfoOptions {
-                        name,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                WsCommands::Rm { name, force } => {
-                    ws::run_rm(ws::RmOptions {
-                        name,
-                        force,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                WsCommands::Clean { selector, dest, force, dry_run } => {
-                    ws::run_clean(ws::CleanOptions {
-                        selector,
-                        dest,
-                        force,
-                        dry_run,
-                        repo,
-                        json,
-                        quiet,
-                    })
+            Commands::Ws { command } => match command {
+                Some(cmd) => match cmd {
+                    WsCommands::New { name, base, dir, branch, sparse } => {
+                        ws::run_new(ws::NewOptions {
+                            name,
+                            base,
+                            dir,
+                            branch,
+                            sparse,
+                            actor,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    WsCommands::Here { name } => {
+                        ws::run_here(ws::HereOptions {
+                            name,
+                            actor,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    WsCommands::List { selector } => {
+                        ws::run_list(ws::ListOptions {
+                            selector,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    WsCommands::Info { name } => {
+                        ws::run_info(ws::InfoOptions {
+                            name,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    WsCommands::Rm { name, force } => {
+                        ws::run_rm(ws::RmOptions {
+                            name,
+                            force,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    WsCommands::Clean { selector, dest, force, dry_run } => {
+                        ws::run_clean(ws::CleanOptions {
+                            selector,
+                            dest,
+                            force,
+                            dry_run,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                },
+                None => {
+                    print_subcommand_help("ws")?;
+                    return Err(Error::InvalidArgument("missing ws command".to_string()));
                 }
             }
             Commands::Take { paths, strength, intent, scope, ttl, note } => {
@@ -2202,88 +2419,100 @@ impl Cli {
                     quiet,
                 })
             }
-            Commands::Lease(cmd) => match cmd {
-                LeaseCommands::Ls { selector, actor } => {
-                    lease::run_ls(lease::LsOptions {
-                        selector,
-                        actor,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                LeaseCommands::Who { path } => {
-                    lease::run_who(lease::WhoOptions {
-                        path,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                LeaseCommands::Renew { ids, ttl } => {
-                    lease::run_renew(lease::RenewOptions {
-                        ids,
-                        ttl,
-                        actor,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                LeaseCommands::Break { ids, reason } => {
-                    lease::run_break(lease::BreakOptions {
-                        ids,
-                        reason,
-                        actor,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                LeaseCommands::Wait { targets, timeout, poll } => {
-                    lease::run_wait(lease::WaitOptions {
-                        targets,
-                        timeout,
-                        poll,
-                        repo,
-                        json,
-                        quiet,
-                    })
+            Commands::Lease { command } => match command {
+                Some(cmd) => match cmd {
+                    LeaseCommands::Ls { selector, actor } => {
+                        lease::run_ls(lease::LsOptions {
+                            selector,
+                            actor,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    LeaseCommands::Who { path } => {
+                        lease::run_who(lease::WhoOptions {
+                            path,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    LeaseCommands::Renew { ids, ttl } => {
+                        lease::run_renew(lease::RenewOptions {
+                            ids,
+                            ttl,
+                            actor,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    LeaseCommands::Break { ids, reason } => {
+                        lease::run_break(lease::BreakOptions {
+                            ids,
+                            reason,
+                            actor,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    LeaseCommands::Wait { targets, timeout, poll } => {
+                        lease::run_wait(lease::WaitOptions {
+                            targets,
+                            timeout,
+                            poll,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                },
+                None => {
+                    print_subcommand_help("lease")?;
+                    return Err(Error::InvalidArgument("missing lease command".to_string()));
                 }
             }
-            Commands::Protect(cmd) => match cmd {
-                ProtectCommands::Status => {
-                    protect::run_status(protect::StatusOptions {
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                ProtectCommands::Add { patterns, mode } => {
-                    protect::run_add(protect::AddOptions {
-                        patterns,
-                        mode,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                ProtectCommands::Off { patterns } => {
-                    protect::run_off(protect::OffOptions {
-                        patterns,
-                        repo,
-                        json,
-                        quiet,
-                    })
-                }
-                ProtectCommands::Rm { patterns, force } => {
-                    protect::run_rm(protect::RmOptions {
-                        patterns,
-                        force,
-                        repo,
-                        json,
-                        quiet,
-                    })
+            Commands::Protect { command } => match command {
+                Some(cmd) => match cmd {
+                    ProtectCommands::Status => {
+                        protect::run_status(protect::StatusOptions {
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    ProtectCommands::Add { patterns, mode } => {
+                        protect::run_add(protect::AddOptions {
+                            patterns,
+                            mode,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    ProtectCommands::Off { patterns } => {
+                        protect::run_off(protect::OffOptions {
+                            patterns,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    ProtectCommands::Rm { patterns, force } => {
+                        protect::run_rm(protect::RmOptions {
+                            patterns,
+                            force,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                },
+                None => {
+                    print_subcommand_help("protect")?;
+                    return Err(Error::InvalidArgument("missing protect command".to_string()));
                 }
             }
             Commands::Commit { message, file, amend, all, no_edit, allow_protected, force_lease } => {
@@ -2543,18 +2772,24 @@ impl Cli {
                     quiet,
                 })
             }
-            Commands::Op(cmd) => match cmd {
-                OpCommands::Log { limit, actor, operation, since, until } => {
-                    op::run_log(op::LogOptions {
-                        limit,
-                        actor,
-                        operation,
-                        since,
-                        until,
-                        repo,
-                        json,
-                        quiet,
-                    })
+            Commands::Op { command } => match command {
+                Some(cmd) => match cmd {
+                    OpCommands::Log { limit, actor, operation, since, until } => {
+                        op::run_log(op::LogOptions {
+                            limit,
+                            actor,
+                            operation,
+                            since,
+                            until,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                },
+                None => {
+                    print_subcommand_help("op")?;
+                    return Err(Error::InvalidArgument("missing op command".to_string()));
                 }
             },
             Commands::Undo { op } => {
@@ -2563,8 +2798,8 @@ impl Cli {
                 }
                 Ok(())
             }
-            Commands::Actor(cmd) => {
-                match cmd {
+            Commands::Actor { command } => match command {
+                Some(cmd) => match cmd {
                     ActorCommands::Set { name } => {
                         actor::run_set(actor::SetOptions {
                             name,
@@ -2581,6 +2816,10 @@ impl Cli {
                             quiet,
                         })
                     }
+                },
+                None => {
+                    print_subcommand_help("actor")?;
+                    return Err(Error::InvalidArgument("missing actor command".to_string()));
                 }
             }
             Commands::Hoist { selector, dest, strategy, order, dry_run, continue_on_conflict, no_propagate_conflicts, no_apply, close_tasks, rm, rm_force } => {
@@ -2604,4 +2843,13 @@ impl Cli {
             }
         }
     }
+}
+
+fn print_subcommand_help(name: &str) -> Result<()> {
+    let mut cli = Cli::command();
+    if let Some(subcommand) = cli.find_subcommand_mut(name) {
+        subcommand.print_help()?;
+        println!();
+    }
+    Ok(())
 }
