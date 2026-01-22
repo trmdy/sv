@@ -190,10 +190,13 @@ pub fn run_list(opts: ListOptions) -> Result<()> {
 
     let storage = Storage::new(workdir.clone(), common_dir, workdir);
     let registry = storage.read_workspaces()?;
+    let entries = match opts.selector.as_deref() {
+        Some(selector) => super::resolve_hoist_workspaces(&repo, &registry, selector)?,
+        None => registry.workspaces.clone(),
+    };
 
     // Convert to list items
-    let items: Vec<WorkspaceListItem> = registry
-        .workspaces
+    let items: Vec<WorkspaceListItem> = entries
         .iter()
         .map(|entry| {
             let ahead_behind = compute_ahead_behind(&repo, &entry.branch, &entry.base);
