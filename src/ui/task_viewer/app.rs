@@ -5,16 +5,21 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
+use crate::actor;
 use crate::error::{Error, Result};
 use crate::task::{TaskDetails, TaskRecord, TaskStore};
 
+use super::actions::{self, ActionOutcome, EditTaskInput, NewTaskInput};
 use super::cache::RenderCache;
+use super::editor::{EditorAction, EditorKind, EditorState, PriorityAction, PriorityPicker};
 use super::model;
 use super::view;
 
@@ -61,6 +66,9 @@ pub struct AppState {
     pub(crate) filter_active: bool,
     pub(crate) status_filter: Option<String>,
     pub(crate) blocked_ids: HashSet<String>,
+    pub(crate) editor: Option<EditorState>,
+    pub(crate) priority_picker: Option<PriorityPicker>,
+    pub(crate) info_message: Option<String>,
     detail_cache: HashMap<String, TaskDetails>,
     pending_details: HashSet<String>,
     status_message: Option<String>,
@@ -69,10 +77,12 @@ pub struct AppState {
     pub(crate) show_detail: bool,
     pub(crate) cache: RenderCache,
     config: crate::config::TasksConfig,
+    store: TaskStore,
+    actor: Option<String>,
 }
 
 impl AppState {
-    fn new(store: &TaskStore) -> Self {
+    fn new(store: TaskStore, actor: Option<String>) -> Self {
         Self {
             tasks: Vec::new(),
             task_depths: Vec::new(),
@@ -82,6 +92,9 @@ impl AppState {
             filter_active: false,
             status_filter: None,
             blocked_ids: HashSet::new(),
+            editor: None,
+            priority_picker: None,
+            info_message: None,
             detail_cache: HashMap::new(),
             pending_details: HashSet::new(),
             status_message: None,
@@ -90,6 +103,8 @@ impl AppState {
             show_detail: false,
             cache: RenderCache::new(),
             config: store.config().clone(),
+            store,
+            actor,
         }
     }
 
@@ -124,10 +139,30 @@ impl AppState {
         if let Some(error) = self.watch_error.as_ref() {
             return Some((error.clone(), StatusKind::Error));
         }
+        if let Some(info) = self.info_message.as_ref() {
+            return Some((info.clone(), StatusKind::Info));
+        }
         if !self.filter.is_empty() {
             return Some((format!("filter: {}", self.filter), StatusKind::Info));
         }
         None
+    }
+
+    pub(crate) fn footer_hint(&self) -> String {
+        if let Some(editor) = self.editor.as_ref() {
+            if editor.confirming() {
+                return "y confirm  backspace edit  esc cancel".to_string();
+            }
+            return "tab next  shift+tab prev  enter next  esc cancel".to_string();
+        }
+        if self.priority_picker.is_some() {
+            return "j/k move  enter apply  esc cancel".to_string();
+        }
+        if self.filter_active {
+            return "esc clear  enter done  j/k move  ctrl+d/u jump  q quit".to_string();
+        }
+        "j/k move  n new  e edit  p priority  / filter  o/i/c/a status  r reload  q quit"
+            .to_string()
     }
 
     pub(crate) fn task_count_summary(&self) -> String {
@@ -155,16 +190,9 @@ impl AppState {
     }
 
     fn apply_filter(&mut self, previous_id: Option<String>) {
-        self.filtered = model::filter_task_indices(
-            &self.tasks,
-            &self.filter,
-            self.status_filter.as_deref(),
-        );
-        self.selected = model::select_by_id(
-            &self.tasks,
-            &self.filtered,
-            previous_id.as_deref(),
-        );
+        self.filtered =
+            model::filter_task_indices(&self.tasks, &self.filter, self.status_filter.as_deref());
+        self.selected = model::select_by_id(&self.tasks, &self.filtered, previous_id.as_deref());
     }
 
     fn move_selection(&mut self, delta: isize, req_tx: &Sender<LoadRequest>) {
@@ -198,6 +226,23 @@ impl AppState {
         self.status_filter = status;
     }
 
+    fn set_error(&mut self, message: String) {
+        self.status_message = Some(message);
+        self.info_message = None;
+    }
+
+    fn set_info(&mut self, message: String) {
+        self.info_message = Some(message);
+        self.status_message = None;
+    }
+
+    fn apply_outcome(&mut self, outcome: ActionOutcome, req_tx: &Sender<LoadRequest>) {
+        if outcome.changed {
+            let _ = req_tx.send(LoadRequest::Reload);
+        }
+        self.set_info(outcome.message);
+    }
+
     fn list_jump(&self) -> isize {
         let mut height = self.viewport.height.saturating_sub(4);
         if self.filter_active || !self.filter.is_empty() || self.status_filter.is_some() {
@@ -209,6 +254,7 @@ impl AppState {
 }
 
 pub fn run(store: TaskStore) -> Result<()> {
+    let actor = actor::resolve_actor_optional(Some(store.storage().workspace_root()), None)?;
     let (ui_tx, ui_rx) = mpsc::channel();
     let (req_tx, req_rx) = mpsc::channel();
 
@@ -221,11 +267,15 @@ pub fn run(store: TaskStore) -> Result<()> {
         ));
     }
 
-    let mut app = AppState::new(&store);
+    let mut app = AppState::new(store, actor);
     run_terminal(&mut app, ui_rx, req_tx)
 }
 
-fn run_terminal(app: &mut AppState, ui_rx: Receiver<UiMsg>, req_tx: Sender<LoadRequest>) -> Result<()> {
+fn run_terminal(
+    app: &mut AppState,
+    ui_rx: Receiver<UiMsg>,
+    req_tx: Sender<LoadRequest>,
+) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -322,6 +372,101 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
         return true;
     }
 
+    if app.editor.is_some() {
+        let mut editor = app.editor.take().unwrap();
+        let kind = editor.kind();
+        let task_id = editor.task_id().map(|value| value.to_string());
+        let action = editor.handle_key(key);
+        match action {
+            EditorAction::None => {
+                app.editor = Some(editor);
+            }
+            EditorAction::Cancel => {
+                app.editor = None;
+                app.set_info("cancelled".to_string());
+            }
+            EditorAction::Submit => match editor.build_submit() {
+                Ok(submit) => {
+                    let outcome = match kind {
+                        EditorKind::NewTask => actions::create_task(
+                            &app.store,
+                            app.actor.clone(),
+                            NewTaskInput {
+                                title: submit.title,
+                                priority: submit.priority,
+                                parent: submit.parent,
+                                relates: submit.relates.map(|relate| actions::RelateInput {
+                                    id: relate.id,
+                                    description: relate.description,
+                                }),
+                                body: submit.body,
+                            },
+                        ),
+                        EditorKind::EditTask => {
+                            if let Some(task_id) = task_id {
+                                actions::edit_task(
+                                    &app.store,
+                                    app.actor.clone(),
+                                    &task_id,
+                                    EditTaskInput {
+                                        title: submit.title,
+                                        body: submit.body,
+                                    },
+                                )
+                            } else {
+                                Err(Error::OperationFailed(
+                                    "missing task id for edit".to_string(),
+                                ))
+                            }
+                        }
+                    };
+
+                    match outcome {
+                        Ok(outcome) => {
+                            app.editor = None;
+                            app.apply_outcome(outcome, req_tx);
+                        }
+                        Err(err) => {
+                            editor.set_error(err.to_string());
+                            app.editor = Some(editor);
+                        }
+                    }
+                }
+                Err(err) => {
+                    editor.set_error(err);
+                    app.editor = Some(editor);
+                }
+            },
+        }
+        return false;
+    }
+
+    if app.priority_picker.is_some() {
+        let mut picker = app.priority_picker.take().unwrap();
+        let action = picker.handle_key(key);
+        match action {
+            PriorityAction::None => {
+                app.priority_picker = Some(picker);
+            }
+            PriorityAction::Cancel => {
+                app.priority_picker = None;
+            }
+            PriorityAction::Confirm => {
+                let Some(task_id) = app.selected_task().map(|task| task.id.clone()) else {
+                    app.set_error("no task selected".to_string());
+                    return false;
+                };
+                let selected = picker.selected_priority().to_string();
+                app.priority_picker = None;
+                match actions::change_priority(&app.store, app.actor.clone(), &task_id, &selected) {
+                    Ok(outcome) => app.apply_outcome(outcome, req_tx),
+                    Err(err) => app.set_error(err.to_string()),
+                }
+            }
+        }
+        return false;
+    }
+
     if app.filter_active {
         match key.code {
             KeyCode::Esc => {
@@ -374,6 +519,27 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
             let _ = req_tx.send(LoadRequest::Reload);
             false
         }
+        KeyCode::Char('n') => {
+            let default_priority = app.store.default_priority();
+            app.editor = Some(EditorState::new_task(default_priority));
+            false
+        }
+        KeyCode::Char('e') => {
+            let Some(task) = app.selected_task() else {
+                app.set_error("no task selected".to_string());
+                return false;
+            };
+            app.editor = Some(EditorState::edit_task(task));
+            false
+        }
+        KeyCode::Char('p') => {
+            let Some(task) = app.selected_task() else {
+                app.set_error("no task selected".to_string());
+                return false;
+            };
+            app.priority_picker = Some(PriorityPicker::new(&task.priority));
+            false
+        }
         KeyCode::Char('o') => {
             app.set_status_filter(Some("open".to_string()));
             let previous = app.selected_task().map(|task| task.id.clone());
@@ -381,7 +547,7 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
             app.queue_detail_load(req_tx);
             false
         }
-        KeyCode::Char('p') => {
+        KeyCode::Char('i') => {
             app.set_status_filter(Some("in_progress".to_string()));
             let previous = app.selected_task().map(|task| task.id.clone());
             app.apply_filter(previous);
@@ -463,10 +629,9 @@ fn spawn_watch(store: TaskStore, req_tx: Sender<LoadRequest>, ui_tx: Sender<UiMs
 
     thread::spawn(move || {
         let (event_tx, event_rx) = mpsc::channel();
-        let watcher: notify::Result<RecommendedWatcher> =
-            notify::recommended_watcher(move |res| {
-                let _ = event_tx.send(res);
-            });
+        let watcher: notify::Result<RecommendedWatcher> = notify::recommended_watcher(move |res| {
+            let _ = event_tx.send(res);
+        });
 
         let mut watcher = match watcher {
             Ok(watcher) => watcher,

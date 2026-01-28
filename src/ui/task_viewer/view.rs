@@ -2,12 +2,13 @@ use chrono::{DateTime, Utc};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::task::{TaskDetails, TaskRecord};
 
 use super::app::{AppState, StatusKind};
+use super::editor::{EditorFieldId, EditorState, PriorityPicker};
 
 const STATUS_WIDTH: usize = 7;
 const READY_WIDTH: usize = 1;
@@ -35,6 +36,12 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
     }
 
     render_footer(frame, app, footer);
+
+    if let Some(editor) = app.editor.as_ref() {
+        render_editor_modal(frame, area, editor);
+    } else if let Some(picker) = app.priority_picker.as_ref() {
+        render_priority_modal(frame, area, picker);
+    }
 }
 
 fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
@@ -112,15 +119,13 @@ fn render_detail(frame: &mut Frame, app: &mut AppState, area: Rect) {
 }
 
 fn render_footer(frame: &mut Frame, app: &AppState, area: Rect) {
-    let hint = if app.filter_active {
-        "esc clear  enter done  j/k move  ctrl+d/u jump  q quit"
-    } else {
-        "j/k move  ctrl+d/u jump  / filter  r reload  q quit"
-    };
+    let hint = app.footer_hint();
     let hint_span = Span::styled(hint, Style::default().fg(Color::LightCyan));
     let line = if let Some((status, kind)) = app.status_line() {
         let status_style = match kind {
-            StatusKind::Error => Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD),
+            StatusKind::Error => Style::default()
+                .fg(Color::LightRed)
+                .add_modifier(Modifier::BOLD),
             StatusKind::Info => Style::default().fg(Color::Yellow),
         };
         Line::from(vec![
@@ -143,6 +148,200 @@ fn render_footer(frame: &mut Frame, app: &AppState, area: Rect) {
                 .border_style(Style::default().fg(Color::LightBlue)),
         );
     frame.render_widget(widget, area);
+}
+
+fn render_editor_modal(frame: &mut Frame, area: Rect, editor: &EditorState) {
+    let title = match editor.kind() {
+        super::editor::EditorKind::NewTask => "New Task",
+        super::editor::EditorKind::EditTask => "Edit Task",
+    };
+    let content_width = area.width.saturating_sub(8).min(72);
+    let lines = build_editor_lines(editor, content_width as usize);
+    let height = (lines.len() as u16 + 2)
+        .min(area.height.saturating_sub(4))
+        .max(8);
+    let width = content_width.max(40).min(area.width.saturating_sub(4));
+    let modal = centered_rect(width, height, area);
+
+    frame.render_widget(Clear, modal);
+    let widget = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(widget, modal);
+}
+
+fn render_priority_modal(frame: &mut Frame, area: Rect, picker: &PriorityPicker) {
+    let content_width = 22u16.min(area.width.saturating_sub(6));
+    let height = (picker.options().len() as u16 + 4).min(area.height.saturating_sub(4));
+    let modal = centered_rect(content_width, height, area);
+    frame.render_widget(Clear, modal);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (idx, option) in picker.options().iter().enumerate() {
+        let mut span = Span::styled(option.clone(), Style::default().fg(Color::White));
+        if idx == picker.selected_index() {
+            span.style = span.style.add_modifier(Modifier::REVERSED);
+        }
+        lines.push(Line::from(span));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "enter apply  esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let widget = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title("Priority"))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(widget, modal);
+}
+
+fn build_editor_lines(editor: &EditorState, width: usize) -> Vec<Line<'static>> {
+    if editor.confirming() {
+        return build_confirm_lines(editor, width);
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (idx, field) in editor.fields().iter().enumerate() {
+        let label = format!("{:<12}", field.label);
+        let mut value = field.value.clone();
+        let placeholder = if value.trim().is_empty() {
+            if field.required {
+                Some("<required>".to_string())
+            } else if field.id == EditorFieldId::Priority {
+                editor
+                    .default_priority()
+                    .map(|priority| format!("(default {priority})"))
+            } else {
+                Some("(optional)".to_string())
+            }
+        } else {
+            None
+        };
+        let value_style = if placeholder.is_some() {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        if let Some(place) = placeholder {
+            value = place;
+        }
+        let value = truncate_text(&value, width.saturating_sub(14));
+        let mut spans = vec![
+            Span::styled(label, Style::default().fg(Color::DarkGray)),
+            Span::raw(" "),
+            Span::styled(value, value_style),
+        ];
+        if idx == editor.active_index() {
+            for span in &mut spans {
+                span.style = span.style.add_modifier(Modifier::REVERSED);
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+
+    if let Some(error) = editor.error() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            error.to_string(),
+            Style::default()
+                .fg(Color::LightRed)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "tab next  shift+tab prev  enter next  esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines
+}
+
+fn build_confirm_lines(editor: &EditorState, width: usize) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        "Confirm task details",
+        Style::default()
+            .fg(Color::LightYellow)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    if let Ok(submit) = editor.build_submit() {
+        lines.push(Line::from(vec![
+            label_span("Title: "),
+            Span::styled(
+                truncate_text(&submit.title, width.saturating_sub(8)),
+                id_style(),
+            ),
+        ]));
+        let priority = submit
+            .priority
+            .or_else(|| editor.default_priority().map(|value| value.to_string()))
+            .unwrap_or_else(|| "P2".to_string());
+        lines.push(Line::from(vec![
+            label_span("Priority: "),
+            Span::styled(
+                priority.clone(),
+                Style::default().fg(priority_color(&priority)),
+            ),
+        ]));
+        if let Some(parent) = submit.parent.as_ref() {
+            lines.push(Line::from(vec![
+                label_span("Parent: "),
+                Span::styled(truncate_text(parent, width.saturating_sub(9)), id_style()),
+            ]));
+        }
+        if let Some(relate) = submit.relates.as_ref() {
+            let summary = format!("{} - {}", relate.id, relate.description);
+            lines.push(Line::from(vec![
+                label_span("Relates: "),
+                Span::styled(
+                    truncate_text(&summary, width.saturating_sub(10)),
+                    id_style(),
+                ),
+            ]));
+        }
+        if submit.body.trim().is_empty() {
+            lines.push(Line::from(vec![
+                label_span("Description: "),
+                Span::styled("(none)".to_string(), Style::default().fg(Color::DarkGray)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                label_span("Description: "),
+                Span::styled(
+                    truncate_text(&submit.body, width.saturating_sub(14)),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+        }
+    }
+
+    if let Some(error) = editor.error() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            error.to_string(),
+            Style::default()
+                .fg(Color::LightRed)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "y confirm  backspace edit  esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let width = width.min(area.width.saturating_sub(2));
+    let height = height.min(area.height.saturating_sub(2));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    Rect::new(x, y, width, height)
 }
 
 fn render_list_row(
@@ -168,7 +367,10 @@ fn render_list_row(
 
     let prefix = " ";
     let ready_marker = if ready { "." } else { " " };
-    let status_span = Span::styled(status_text, status_style(&task.status).add_modifier(Modifier::BOLD));
+    let status_span = Span::styled(
+        status_text,
+        status_style(&task.status).add_modifier(Modifier::BOLD),
+    );
     let ready_span = Span::styled(ready_marker, Style::default().fg(Color::LightGreen));
     let id_span = Span::styled(id_text, Style::default().fg(Color::LightBlue));
     let priority_span = Span::styled(
@@ -223,7 +425,9 @@ fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
         Span::raw(" "),
         Span::styled(
             task.title.clone(),
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         ),
     ]));
     lines.push(Line::from(vec![
@@ -257,10 +461,7 @@ fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
     if let Some(workspace) = task.workspace.as_deref() {
         lines.push(Line::from(vec![
             label_span("Workspace: "),
-            Span::styled(
-                workspace.to_string(),
-                Style::default().fg(Color::LightCyan),
-            ),
+            Span::styled(workspace.to_string(), Style::default().fg(Color::LightCyan)),
         ]));
     }
     if let Some(branch) = task.branch.as_deref() {
@@ -293,7 +494,9 @@ fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
         lines.push(Line::from(vec![
             Span::styled(
                 format!("## Comments: {}", task.comments_count),
-                Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::LightMagenta)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" (loading...)", Style::default().fg(Color::DarkGray)),
         ]));
@@ -365,17 +568,16 @@ fn append_comments(lines: &mut Vec<Line<'static>>, details: &TaskDetails) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         format!("## Comments: {}", details.comments.len()),
-        Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::LightMagenta)
+            .add_modifier(Modifier::BOLD),
     )));
     for comment in &details.comments {
         let actor = comment.actor.as_deref().unwrap_or("unknown");
         let timestamp = format_timestamp(comment.timestamp);
         lines.push(Line::from(vec![
             Span::styled("- ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                timestamp,
-                Style::default().fg(Color::LightYellow),
-            ),
+            Span::styled(timestamp, Style::default().fg(Color::LightYellow)),
             Span::raw(" "),
             Span::styled(actor.to_string(), id_style()),
             Span::styled(": ", Style::default().fg(Color::DarkGray)),

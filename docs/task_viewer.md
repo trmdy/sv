@@ -2,7 +2,7 @@
 
 ## Summary
 - `sv task` launches a fullscreen TUI for browsing repo tasks.
-- v1: read-only. v2: start/close/comment actions.
+- v1: read-only. v2: create/edit/priority actions.
 - Performance-first: no stutter, event-driven redraw, cached rendering.
 
 ## Goals
@@ -13,7 +13,6 @@
 ## Non-goals (v1)
 - No web UI.
 - No kanban, graph, or analytics dashboards.
-- No inline edits in TUI (v2 actions only).
 
 ## CLI entrypoint
 - `sv task` with no subcommand launches the TUI.
@@ -38,7 +37,7 @@ Split view (default):
 │ / filter: tui                    ││ Body...                  │
 │                                  ││                          │
 └──────────────────────────────────┘└───────────────────────────┘
-     j/k move  / filter  r reload  ? help  q quit   filter:tui
+     j/k move  n new  e edit  p priority  / filter  r reload  q quit   filter:tui
 ```
 
 Narrow view:
@@ -70,9 +69,11 @@ Narrow view:
 - `enter`: toggle detail in narrow mode.
 - `/`: start filter (fuzzy by id + title).
 - `esc`: clear filter or close filter input.
-- `o/p/c/a`: quick filter open / in_progress / closed / all.
+- `o/i/c/a`: quick filter open / in_progress / closed / all.
 - `r`: manual reload.
-- `?`: help overlay.
+- `n`: new task wizard.
+- `e`: inline edit task.
+- `p`: change task priority.
 - `q` or `ctrl+c`: quit.
 
 ## Keymap table (v1)
@@ -84,11 +85,13 @@ Narrow view:
 | `/` | Focus filter |
 | `esc` | Clear filter |
 | `o` | Filter open |
-| `p` | Filter in_progress |
+| `i` | Filter in_progress |
 | `c` | Filter closed |
 | `a` | Clear status filter |
 | `r` | Reload |
-| `?` | Help |
+| `n` | New task wizard |
+| `e` | Inline edit |
+| `p` | Change priority |
 | `q` / `ctrl+c` | Quit |
 
 ## Filter behavior
