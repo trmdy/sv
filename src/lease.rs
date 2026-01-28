@@ -50,30 +50,30 @@ impl LeaseStrength {
     /// Note: This is the default compatibility; policy can override via config.
     pub fn is_compatible_with(&self, other: &LeaseStrength, allow_overlap: bool) -> bool {
         use LeaseStrength::*;
-        
+
         match (self, other) {
             // Observe overlaps with anything
             (Observe, _) | (_, Observe) => true,
-            
+
             // Cooperative overlaps with observe and cooperative
             (Cooperative, Cooperative) => true,
-            
+
             // Strong overlaps with observe; cooperative only with allow_overlap flag
             (Strong, Cooperative) | (Cooperative, Strong) => allow_overlap,
-            
+
             // Strong blocks strong
             (Strong, Strong) => false,
-            
+
             // Exclusive blocks everything except observe (handled above)
             (Exclusive, _) | (_, Exclusive) => false,
         }
     }
-    
+
     /// Check if this strength requires a note
     pub fn requires_note(&self) -> bool {
         matches!(self, LeaseStrength::Strong | LeaseStrength::Exclusive)
     }
-    
+
     /// Get the priority level (higher = stronger)
     pub fn priority(&self) -> u8 {
         match self {
@@ -98,7 +98,7 @@ impl fmt::Display for LeaseStrength {
 
 impl FromStr for LeaseStrength {
     type Err = Error;
-    
+
     fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "observe" => Ok(LeaseStrength::Observe),
@@ -185,7 +185,7 @@ impl fmt::Display for LeaseIntent {
 
 impl FromStr for LeaseIntent {
     type Err = Error;
-    
+
     fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "bugfix" | "bug" | "fix" => Ok(LeaseIntent::Bugfix),
@@ -242,7 +242,7 @@ impl fmt::Display for LeaseScope {
 
 impl FromStr for LeaseScope {
     type Err = Error;
-    
+
     fn from_str(s: &str) -> Result<Self> {
         if s == "repo" {
             Ok(LeaseScope::Repo)
@@ -301,11 +301,11 @@ pub struct LeaseHints {
     /// Specific symbols (functions, classes) being modified
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub symbols: Vec<String>,
-    
+
     /// Line ranges being modified (start, end)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<(u32, u32)>,
-    
+
     /// Free-form hints
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freeform: Option<String>,
@@ -326,45 +326,45 @@ impl LeaseHints {
 pub struct Lease {
     /// Unique identifier
     pub id: Uuid,
-    
+
     /// Path pattern (file, directory, or glob)
     pub pathspec: String,
-    
+
     /// Strength of the lease
     pub strength: LeaseStrength,
-    
+
     /// Intent of the work
     pub intent: LeaseIntent,
-    
+
     /// Actor holding the lease (None for ownerless/shared leases)
     pub actor: Option<String>,
-    
+
     /// Scope of the lease
     pub scope: LeaseScope,
-    
+
     /// Explanatory note (required for strong/exclusive)
     pub note: Option<String>,
-    
+
     /// Time-to-live duration string (e.g., "2h", "30m")
     pub ttl: String,
-    
+
     /// Expiration timestamp
     pub expires_at: DateTime<Utc>,
-    
+
     /// Creation timestamp
     pub created_at: DateTime<Utc>,
-    
+
     /// Current status
     pub status: LeaseStatus,
-    
+
     /// Optional detailed hints
     #[serde(default, skip_serializing_if = "LeaseHints::is_empty")]
     pub hints: LeaseHints,
-    
+
     /// Timestamp when status changed (for released/expired/broken)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_changed_at: Option<DateTime<Utc>>,
-    
+
     /// Reason for status change (for broken leases)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_reason: Option<String>,
@@ -375,17 +375,17 @@ impl Lease {
     pub fn builder(pathspec: impl Into<String>) -> LeaseBuilder {
         LeaseBuilder::new(pathspec)
     }
-    
+
     /// Check if this lease is currently active (not expired, not released)
     pub fn is_active(&self) -> bool {
         self.status == LeaseStatus::Active && Utc::now() < self.expires_at
     }
-    
+
     /// Check if this lease has expired based on TTL
     pub fn is_expired(&self) -> bool {
         Utc::now() >= self.expires_at
     }
-    
+
     /// Check if this lease overlaps with a given path
     ///
     /// Uses glob matching: the lease pathspec is treated as a glob pattern.
@@ -394,21 +394,21 @@ impl Lease {
         if self.pathspec == path {
             return true;
         }
-        
+
         // Try glob match
         if let Ok(pattern) = glob::Pattern::new(&self.pathspec) {
             return pattern.matches(path);
         }
-        
+
         // Try prefix match for directories
         if self.pathspec.ends_with('/') || self.pathspec.ends_with("/**") {
             let prefix = self.pathspec.trim_end_matches("/**").trim_end_matches('/');
             return path.starts_with(prefix);
         }
-        
+
         false
     }
-    
+
     /// Check if this lease's pathspec overlaps with another pathspec
     ///
     /// This is symmetric: checks if either pattern could match paths matched by the other.
@@ -417,12 +417,12 @@ impl Lease {
         if self.pathspec == other_pathspec {
             return true;
         }
-        
+
         // Check if self matches other as a path
         if self.matches_path(other_pathspec) {
             return true;
         }
-        
+
         // Check if other matches self as a path (create temp lease for convenience)
         let other_as_pattern = glob::Pattern::new(other_pathspec).ok();
         if let Some(pattern) = other_as_pattern {
@@ -430,27 +430,27 @@ impl Lease {
                 return true;
             }
         }
-        
+
         // Check prefix overlaps for directory patterns
         let self_prefix = self.pathspec.trim_end_matches("/**").trim_end_matches('/');
         let other_prefix = other_pathspec.trim_end_matches("/**").trim_end_matches('/');
-        
+
         self_prefix.starts_with(other_prefix) || other_prefix.starts_with(self_prefix)
     }
-    
+
     /// Mark this lease as released
     pub fn release(&mut self) {
         self.status = LeaseStatus::Released;
         self.status_changed_at = Some(Utc::now());
     }
-    
+
     /// Mark this lease as broken with a reason
     pub fn break_lease(&mut self, reason: impl Into<String>) {
         self.status = LeaseStatus::Broken;
         self.status_changed_at = Some(Utc::now());
         self.status_reason = Some(reason.into());
     }
-    
+
     /// Renew the lease with a new TTL
     pub fn renew(&mut self, ttl: impl Into<String>) -> Result<()> {
         let ttl_str = ttl.into();
@@ -479,7 +479,7 @@ impl Lease {
         self.expires_at = Utc::now() + duration;
         Ok(())
     }
-    
+
     /// Validate the lease
     pub fn validate(&self) -> Result<()> {
         self.validate_with_note_requirement(true)
@@ -493,7 +493,9 @@ impl Lease {
 
         // Validate pathspec is not empty
         if self.pathspec.trim().is_empty() {
-            return Err(Error::InvalidArgument("Pathspec cannot be empty".to_string()));
+            return Err(Error::InvalidArgument(
+                "Pathspec cannot be empty".to_string(),
+            ));
         }
 
         Ok(())
@@ -532,31 +534,31 @@ impl LeaseBuilder {
             hints: LeaseHints::default(),
         }
     }
-    
+
     /// Set the lease strength
     pub fn strength(mut self, strength: LeaseStrength) -> Self {
         self.strength = strength;
         self
     }
-    
+
     /// Set the lease intent
     pub fn intent(mut self, intent: LeaseIntent) -> Self {
         self.intent = intent;
         self
     }
-    
+
     /// Set the actor (owner) of the lease
     pub fn actor(mut self, actor: impl Into<String>) -> Self {
         self.actor = Some(actor.into());
         self
     }
-    
+
     /// Set the lease scope
     pub fn scope(mut self, scope: LeaseScope) -> Self {
         self.scope = scope;
         self
     }
-    
+
     /// Set the explanatory note
     pub fn note(mut self, note: impl Into<String>) -> Self {
         self.note = Some(note.into());
@@ -568,30 +570,30 @@ impl LeaseBuilder {
         self.require_note = require_note;
         self
     }
-    
+
     /// Set the TTL
     pub fn ttl(mut self, ttl: impl Into<String>) -> Self {
         self.ttl = ttl.into();
         self
     }
-    
+
     /// Add symbol hints
     pub fn symbols(mut self, symbols: Vec<String>) -> Self {
         self.hints.symbols = symbols;
         self
     }
-    
+
     /// Add line range hints
     pub fn lines(mut self, lines: Vec<(u32, u32)>) -> Self {
         self.hints.lines = lines;
         self
     }
-    
+
     /// Build the lease
     pub fn build(self) -> Result<Lease> {
         let duration = parse_duration(&self.ttl)?;
         let now = Utc::now();
-        
+
         let lease = Lease {
             id: Uuid::new_v4(),
             pathspec: self.pathspec,
@@ -608,7 +610,7 @@ impl LeaseBuilder {
             status_changed_at: None,
             status_reason: None,
         };
-        
+
         lease.validate_with_note_requirement(self.require_note)?;
         Ok(lease)
     }
@@ -621,11 +623,13 @@ impl LeaseBuilder {
 /// Parse a duration string like "2h", "30m", "1d"
 pub fn parse_duration(s: &str) -> Result<Duration> {
     let s = s.trim();
-    
+
     if s.is_empty() {
-        return Err(Error::InvalidArgument("Duration cannot be empty".to_string()));
+        return Err(Error::InvalidArgument(
+            "Duration cannot be empty".to_string(),
+        ));
     }
-    
+
     // Find where the number ends and unit begins
     let (num_str, unit) = if let Some(pos) = s.find(|c: char| !c.is_ascii_digit()) {
         (&s[..pos], &s[pos..])
@@ -633,11 +637,11 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
         // Assume minutes if no unit
         (s, "m")
     };
-    
-    let num: i64 = num_str.parse().map_err(|_| {
-        Error::InvalidArgument(format!("Invalid duration number: {}", num_str))
-    })?;
-    
+
+    let num: i64 = num_str
+        .parse()
+        .map_err(|_| Error::InvalidArgument(format!("Invalid duration number: {}", num_str)))?;
+
     let duration = match unit.to_lowercase().as_str() {
         "s" | "sec" | "second" | "seconds" => Duration::seconds(num),
         "m" | "min" | "minute" | "minutes" => Duration::minutes(num),
@@ -651,7 +655,7 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
             )));
         }
     };
-    
+
     Ok(duration)
 }
 
@@ -670,43 +674,47 @@ impl LeaseStore {
     pub fn new() -> Self {
         Self { leases: Vec::new() }
     }
-    
+
     /// Create a lease store from a vector of leases
     pub fn from_vec(leases: Vec<Lease>) -> Self {
         Self { leases }
     }
-    
+
     /// Get all leases
     pub fn all(&self) -> &[Lease] {
         &self.leases
     }
-    
+
     /// Get all active leases (not expired, not released)
     pub fn active(&self) -> impl Iterator<Item = &Lease> {
         self.leases.iter().filter(|l| l.is_active())
     }
-    
+
     /// Find a lease by ID
     pub fn find(&self, id: &Uuid) -> Option<&Lease> {
         self.leases.iter().find(|l| l.id == *id)
     }
-    
+
     /// Find a lease by ID (mutable)
     pub fn find_mut(&mut self, id: &Uuid) -> Option<&mut Lease> {
         self.leases.iter_mut().find(|l| l.id == *id)
     }
-    
+
     /// Find all leases that overlap with a path
     pub fn overlapping_path<'a>(&'a self, path: &'a str) -> impl Iterator<Item = &'a Lease> {
-        self.leases.iter().filter(move |l| l.is_active() && l.matches_path(path))
+        self.leases
+            .iter()
+            .filter(move |l| l.is_active() && l.matches_path(path))
     }
-    
+
     /// Find all leases held by an actor
     pub fn by_actor(&self, actor: &str) -> impl Iterator<Item = &Lease> {
         let actor = actor.to_string();
-        self.leases.iter().filter(move |l| l.actor.as_ref() == Some(&actor))
+        self.leases
+            .iter()
+            .filter(move |l| l.actor.as_ref() == Some(&actor))
     }
-    
+
     /// Add a lease to the store
     pub fn add(&mut self, lease: Lease) {
         self.leases.push(lease);
@@ -722,14 +730,18 @@ impl LeaseStore {
     }
 
     /// Find an existing active lease by actor and exact pathspec (mutable)
-    pub fn find_by_actor_and_path_mut(&mut self, actor: &str, pathspec: &str) -> Option<&mut Lease> {
+    pub fn find_by_actor_and_path_mut(
+        &mut self,
+        actor: &str,
+        pathspec: &str,
+    ) -> Option<&mut Lease> {
         self.leases.iter_mut().find(|l| {
             l.is_active()
                 && l.actor.as_ref().map(|a| a == actor).unwrap_or(false)
                 && l.pathspec == pathspec
         })
     }
-    
+
     /// Check if a new lease would conflict with existing leases
     pub fn check_conflicts(
         &self,
@@ -751,18 +763,18 @@ impl LeaseStore {
                 if actor.is_none() || existing.actor.is_none() {
                     return false;
                 }
-                
+
                 // Check pathspec overlap
                 if !existing.pathspec_overlaps(pathspec) {
                     return false;
                 }
-                
+
                 // Check strength compatibility
                 !strength.is_compatible_with(&existing.strength, allow_overlap)
             })
             .collect()
     }
-    
+
     /// Mark expired leases
     pub fn expire_stale(&mut self) {
         let _ = self.expire_stale_collect_at(Utc::now());
@@ -803,8 +815,7 @@ impl LeaseStore {
         let mut expired = Vec::new();
 
         self.leases.retain(|lease| {
-            let ready = lease.status == LeaseStatus::Expired
-                && lease.expires_at + grace <= now;
+            let ready = lease.status == LeaseStatus::Expired && lease.expires_at + grace <= now;
             if ready {
                 expired.push(lease.clone());
                 false
@@ -815,7 +826,7 @@ impl LeaseStore {
 
         expired
     }
-    
+
     /// Convert to vector (consumes the store)
     pub fn into_vec(self) -> Vec<Lease> {
         self.leases
@@ -829,56 +840,74 @@ impl LeaseStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_strength_compatibility() {
         use LeaseStrength::*;
-        
+
         // Observe is compatible with everything
         assert!(Observe.is_compatible_with(&Observe, false));
         assert!(Observe.is_compatible_with(&Cooperative, false));
         assert!(Observe.is_compatible_with(&Strong, false));
         assert!(Observe.is_compatible_with(&Exclusive, false));
-        
+
         // Cooperative is compatible with observe and cooperative
         assert!(Cooperative.is_compatible_with(&Observe, false));
         assert!(Cooperative.is_compatible_with(&Cooperative, false));
         assert!(!Cooperative.is_compatible_with(&Strong, false));
         assert!(Cooperative.is_compatible_with(&Strong, true)); // with allow_overlap
         assert!(!Cooperative.is_compatible_with(&Exclusive, false));
-        
+
         // Strong blocks strong and exclusive
         assert!(Strong.is_compatible_with(&Observe, false));
         assert!(!Strong.is_compatible_with(&Cooperative, false));
         assert!(Strong.is_compatible_with(&Cooperative, true));
         assert!(!Strong.is_compatible_with(&Strong, false));
         assert!(!Strong.is_compatible_with(&Exclusive, false));
-        
+
         // Exclusive blocks everything except observe
         assert!(Exclusive.is_compatible_with(&Observe, false));
         assert!(!Exclusive.is_compatible_with(&Cooperative, false));
         assert!(!Exclusive.is_compatible_with(&Strong, false));
         assert!(!Exclusive.is_compatible_with(&Exclusive, false));
     }
-    
+
     #[test]
     fn test_strength_parse() {
-        assert_eq!(LeaseStrength::from_str("observe").unwrap(), LeaseStrength::Observe);
-        assert_eq!(LeaseStrength::from_str("COOPERATIVE").unwrap(), LeaseStrength::Cooperative);
-        assert_eq!(LeaseStrength::from_str("Strong").unwrap(), LeaseStrength::Strong);
-        assert_eq!(LeaseStrength::from_str("exclusive").unwrap(), LeaseStrength::Exclusive);
+        assert_eq!(
+            LeaseStrength::from_str("observe").unwrap(),
+            LeaseStrength::Observe
+        );
+        assert_eq!(
+            LeaseStrength::from_str("COOPERATIVE").unwrap(),
+            LeaseStrength::Cooperative
+        );
+        assert_eq!(
+            LeaseStrength::from_str("Strong").unwrap(),
+            LeaseStrength::Strong
+        );
+        assert_eq!(
+            LeaseStrength::from_str("exclusive").unwrap(),
+            LeaseStrength::Exclusive
+        );
         assert!(LeaseStrength::from_str("invalid").is_err());
     }
-    
+
     #[test]
     fn test_intent_parse() {
-        assert_eq!(LeaseIntent::from_str("bugfix").unwrap(), LeaseIntent::Bugfix);
+        assert_eq!(
+            LeaseIntent::from_str("bugfix").unwrap(),
+            LeaseIntent::Bugfix
+        );
         assert_eq!(LeaseIntent::from_str("bug").unwrap(), LeaseIntent::Bugfix);
-        assert_eq!(LeaseIntent::from_str("feature").unwrap(), LeaseIntent::Feature);
+        assert_eq!(
+            LeaseIntent::from_str("feature").unwrap(),
+            LeaseIntent::Feature
+        );
         assert_eq!(LeaseIntent::from_str("docs").unwrap(), LeaseIntent::Docs);
         assert!(LeaseIntent::from_str("invalid").is_err());
     }
-    
+
     #[test]
     fn test_scope_parse() {
         assert_eq!(LeaseScope::from_str("repo").unwrap(), LeaseScope::Repo);
@@ -892,7 +921,7 @@ mod tests {
         );
         assert!(LeaseScope::from_str("invalid").is_err());
     }
-    
+
     #[test]
     fn test_duration_parse() {
         assert_eq!(parse_duration("2h").unwrap(), Duration::hours(2));
@@ -902,7 +931,7 @@ mod tests {
         assert_eq!(parse_duration("2w").unwrap(), Duration::weeks(2));
         assert!(parse_duration("invalid").is_err());
     }
-    
+
     #[test]
     fn test_lease_builder() {
         let lease = Lease::builder("src/auth/**")
@@ -913,14 +942,14 @@ mod tests {
             .ttl("4h")
             .build()
             .unwrap();
-        
+
         assert_eq!(lease.pathspec, "src/auth/**");
         assert_eq!(lease.strength, LeaseStrength::Strong);
         assert_eq!(lease.intent, LeaseIntent::Bugfix);
         assert_eq!(lease.actor, Some("agent1".to_string()));
         assert!(lease.is_active());
     }
-    
+
     #[test]
     fn test_lease_note_required() {
         // Strong without note should fail
@@ -928,14 +957,14 @@ mod tests {
             .strength(LeaseStrength::Strong)
             .build();
         assert!(result.is_err());
-        
+
         // Strong with note should succeed
         let result = Lease::builder("src/**")
             .strength(LeaseStrength::Strong)
             .note("Important work")
             .build();
         assert!(result.is_ok());
-        
+
         // Cooperative without note should succeed
         let result = Lease::builder("src/**")
             .strength(LeaseStrength::Cooperative)
@@ -951,19 +980,17 @@ mod tests {
             .build();
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_lease_path_matching() {
-        let lease = Lease::builder("src/auth/**")
-            .build()
-            .unwrap();
-        
+        let lease = Lease::builder("src/auth/**").build().unwrap();
+
         assert!(lease.matches_path("src/auth/login.rs"));
         assert!(lease.matches_path("src/auth/nested/deep.rs"));
         assert!(!lease.matches_path("src/other/file.rs"));
         assert!(!lease.matches_path("tests/auth.rs"));
     }
-    
+
     #[test]
     fn test_lease_serialization() {
         let lease = Lease::builder("src/**")
@@ -972,20 +999,20 @@ mod tests {
             .actor("agent1")
             .build()
             .unwrap();
-        
+
         let json = serde_json::to_string(&lease).unwrap();
         let parsed: Lease = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(lease.id, parsed.id);
         assert_eq!(lease.pathspec, parsed.pathspec);
         assert_eq!(lease.strength, parsed.strength);
         assert_eq!(lease.intent, parsed.intent);
     }
-    
+
     #[test]
     fn test_lease_store_conflicts() {
         let mut store = LeaseStore::new();
-        
+
         // Add an exclusive lease
         store.add(
             Lease::builder("src/auth/**")
@@ -993,9 +1020,9 @@ mod tests {
                 .actor("agent1")
                 .note("Critical fix")
                 .build()
-                .unwrap()
+                .unwrap(),
         );
-        
+
         // Check conflicts for different actors
         let conflicts = store.check_conflicts(
             "src/auth/login.rs",
@@ -1004,7 +1031,7 @@ mod tests {
             false,
         );
         assert_eq!(conflicts.len(), 1);
-        
+
         // Same actor should not conflict
         let conflicts = store.check_conflicts(
             "src/auth/login.rs",
@@ -1013,7 +1040,7 @@ mod tests {
             false,
         );
         assert_eq!(conflicts.len(), 0);
-        
+
         // Non-overlapping path should not conflict
         let conflicts = store.check_conflicts(
             "src/other/file.rs",
@@ -1027,58 +1054,62 @@ mod tests {
     #[test]
     fn test_find_by_actor_and_path() {
         let mut store = LeaseStore::new();
-        
+
         // Add a lease
         store.add(
             Lease::builder("src/lib.rs")
                 .strength(LeaseStrength::Cooperative)
                 .actor("agent1")
                 .build()
-                .unwrap()
+                .unwrap(),
         );
-        
+
         // Should find the lease
         let found = store.find_by_actor_and_path("agent1", "src/lib.rs");
         assert!(found.is_some());
         assert_eq!(found.unwrap().pathspec, "src/lib.rs");
-        
+
         // Should not find for different actor
         let not_found = store.find_by_actor_and_path("agent2", "src/lib.rs");
         assert!(not_found.is_none());
-        
+
         // Should not find for different path
         let not_found = store.find_by_actor_and_path("agent1", "src/main.rs");
         assert!(not_found.is_none());
     }
-    
+
     #[test]
     fn test_find_by_actor_and_path_mut_and_update() {
         let mut store = LeaseStore::new();
-        
+
         store.add(
             Lease::builder("src/lib.rs")
                 .strength(LeaseStrength::Cooperative)
                 .intent(LeaseIntent::Feature)
                 .actor("agent1")
                 .build()
-                .unwrap()
+                .unwrap(),
         );
-        
+
         // Find and update
         let existing = store.find_by_actor_and_path_mut("agent1", "src/lib.rs");
         assert!(existing.is_some());
-        
+
         let lease = existing.unwrap();
-        lease.update(
-            LeaseStrength::Strong,
-            LeaseIntent::Refactor,
-            LeaseScope::Repo,
-            "4h",
-            Some("updated note".to_string()),
-        ).unwrap();
-        
+        lease
+            .update(
+                LeaseStrength::Strong,
+                LeaseIntent::Refactor,
+                LeaseScope::Repo,
+                "4h",
+                Some("updated note".to_string()),
+            )
+            .unwrap();
+
         // Verify update
-        let updated = store.find_by_actor_and_path("agent1", "src/lib.rs").unwrap();
+        let updated = store
+            .find_by_actor_and_path("agent1", "src/lib.rs")
+            .unwrap();
         assert_eq!(updated.strength, LeaseStrength::Strong);
         assert_eq!(updated.intent, LeaseIntent::Refactor);
         assert_eq!(updated.note, Some("updated note".to_string()));

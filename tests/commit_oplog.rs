@@ -60,7 +60,9 @@ fn commit_writes_oplog_entry() -> Result<(), Box<dyn std::error::Error>> {
         .get("files")
         .and_then(|value| value.as_array())
         .expect("files array");
-    assert!(files.iter().any(|value| value.as_str() == Some("README.md")));
+    assert!(files
+        .iter()
+        .any(|value| value.as_str() == Some("README.md")));
 
     Ok(())
 }

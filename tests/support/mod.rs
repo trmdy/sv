@@ -93,9 +93,10 @@ impl TestRepo {
             .and_then(|oid| self.repo.find_commit(oid).ok());
 
         let oid = match parent {
-            Some(parent) => self
-                .repo
-                .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?,
+            Some(parent) => {
+                self.repo
+                    .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?
+            }
             None => self
                 .repo
                 .commit(Some("HEAD"), &sig, &sig, message, &tree, &[])?,

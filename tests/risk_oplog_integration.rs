@@ -19,7 +19,10 @@ fn risk_reports_overlap() -> Result<(), Box<dyn std::error::Error>> {
     repo.commit_all("base commit")?;
 
     let git_repo = repo.repo();
-    if git_repo.find_branch("main", git2::BranchType::Local).is_err() {
+    if git_repo
+        .find_branch("main", git2::BranchType::Local)
+        .is_err()
+    {
         repo.create_branch("main")?;
     }
     repo.checkout_branch("main")?;
@@ -102,7 +105,9 @@ fn op_log_lists_recent_ops() -> Result<(), Box<dyn std::error::Error>> {
     let mut record = OpRecord::new("sv ws new agent1", Some("agent1".to_string()));
     record.outcome = OpOutcome::success();
     record.affected_workspaces.push("agent1".to_string());
-    record.affected_refs.push("refs/heads/sv/ws/agent1".to_string());
+    record
+        .affected_refs
+        .push("refs/heads/sv/ws/agent1".to_string());
     log.append(&record)?;
 
     sv_cmd()

@@ -36,7 +36,7 @@ impl FileLock {
     /// Returns an error if the lock cannot be acquired within the timeout.
     pub fn acquire(path: impl AsRef<Path>, timeout_ms: u64) -> Result<Self> {
         let path = path.as_ref();
-        
+
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -80,7 +80,7 @@ impl FileLock {
     /// Acquire an exclusive lock without timeout (blocking)
     pub fn acquire_blocking(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        
+
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -94,7 +94,7 @@ impl FileLock {
             .open(path)?;
 
         file.lock_exclusive()?;
-        
+
         Ok(FileLock {
             file,
             path: path.to_path_buf(),
@@ -107,7 +107,7 @@ impl FileLock {
     /// or `Err` for other errors.
     pub fn try_acquire(path: impl AsRef<Path>) -> Result<Option<Self>> {
         let path = path.as_ref();
-        
+
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -162,7 +162,7 @@ impl Drop for FileLock {
 /// need to coordinate with other processes.
 pub fn write_atomic(path: impl AsRef<Path>, data: &[u8]) -> Result<()> {
     let path = path.as_ref();
-    
+
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -171,16 +171,14 @@ pub fn write_atomic(path: impl AsRef<Path>, data: &[u8]) -> Result<()> {
     // Create temp file in same directory (important for atomic rename)
     let temp_path = path.with_extension(format!(
         "{}.tmp.{}",
-        path.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or(""),
+        path.extension().and_then(|e| e.to_str()).unwrap_or(""),
         std::process::id()
     ));
 
     // Write to temp file
     let mut temp_file = File::create(&temp_path)?;
     temp_file.write_all(data)?;
-    temp_file.sync_all()?;  // Ensure data is flushed to disk
+    temp_file.sync_all()?; // Ensure data is flushed to disk
     drop(temp_file);
 
     // Atomic rename
@@ -203,20 +201,16 @@ pub fn write_atomic_str(path: impl AsRef<Path>, data: &str) -> Result<()> {
 /// 2. Write to temp file
 /// 3. Rename temp to target
 /// 4. Release lock (automatic on drop)
-pub fn write_atomic_locked(
-    path: impl AsRef<Path>,
-    data: &[u8],
-    timeout_ms: u64,
-) -> Result<()> {
+pub fn write_atomic_locked(path: impl AsRef<Path>, data: &[u8], timeout_ms: u64) -> Result<()> {
     let path = path.as_ref();
     let lock_path = PathBuf::from(format!("{}.lock", path.display()));
-    
+
     // Acquire lock
     let _lock = FileLock::acquire(&lock_path, timeout_ms)?;
-    
+
     // Write atomically
     write_atomic(path, data)?;
-    
+
     // Lock released on drop
     Ok(())
 }
@@ -227,13 +221,13 @@ pub fn write_atomic_locked(
 pub fn read_locked(path: impl AsRef<Path>, timeout_ms: u64) -> Result<Vec<u8>> {
     let path = path.as_ref();
     let lock_path = PathBuf::from(format!("{}.lock", path.display()));
-    
+
     // Acquire lock
     let _lock = FileLock::acquire(&lock_path, timeout_ms)?;
-    
+
     // Read file
     let data = fs::read(path)?;
-    
+
     // Lock released on drop
     Ok(data)
 }
@@ -350,9 +344,7 @@ mod tests {
         drop(lock);
 
         let lock_path_clone2 = temp_dir.path().join("concurrent.lock");
-        let handle2 = thread::spawn(move || {
-            FileLock::acquire(&lock_path_clone2, 1000).is_ok()
-        });
+        let handle2 = thread::spawn(move || FileLock::acquire(&lock_path_clone2, 1000).is_ok());
 
         assert!(handle2.join().unwrap());
     }
@@ -421,11 +413,7 @@ mod tests {
         for idx in 0..threads {
             let barrier = Arc::clone(&barrier);
             let file_path = file_path.clone();
-            let payload = format!(
-                "{{\"writer\":{},\"data\":\"{}\"}}",
-                idx,
-                "x".repeat(64)
-            );
+            let payload = format!("{{\"writer\":{},\"data\":\"{}\"}}", idx, "x".repeat(64));
             expected.push(payload.clone());
 
             handles.push(thread::spawn(move || {

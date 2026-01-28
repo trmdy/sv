@@ -730,13 +730,7 @@ pub fn run_clean(opts: CleanOptions) -> Result<()> {
         }
     }
 
-    let mut cleanup = remove_workspaces(
-        &workdir,
-        &candidates,
-        opts.force,
-        opts.dry_run,
-        &workdir,
-    );
+    let mut cleanup = remove_workspaces(&workdir, &candidates, opts.force, opts.dry_run, &workdir);
     cleanup.skipped.extend(skipped);
 
     let output = CleanOutput {
@@ -767,7 +761,11 @@ pub fn run_clean(opts: CleanOptions) -> Result<()> {
         println!("  Removed: {}", output.cleanup.removed.len());
 
         if !output.cleanup.removed.is_empty() {
-            let label = if opts.dry_run { "Would remove" } else { "Removed" };
+            let label = if opts.dry_run {
+                "Would remove"
+            } else {
+                "Removed"
+            };
             println!("{label}:");
             for name in &output.cleanup.removed {
                 println!("  - {}", name);

@@ -52,14 +52,7 @@ fn commit_on_ref(
                 &[&parent_commit],
             )?
         }
-        None => repo.commit(
-            Some(refname),
-            &signature,
-            &signature,
-            message,
-            &tree,
-            &[],
-        )?,
+        None => repo.commit(Some(refname), &signature, &signature, message, &tree, &[])?,
     };
 
     Ok(oid)
@@ -99,10 +92,7 @@ fn risk_reports_overlaps_for_shared_paths() -> Result<(), Box<dyn std::error::Er
     repo.commit_file("README.md", "base\n", "base commit")?;
 
     let git_repo = repo.repo();
-    let base = git_repo
-        .head()?
-        .target()
-        .ok_or("missing base head")?;
+    let base = git_repo.head()?.target().ok_or("missing base head")?;
 
     let branch_a = "refs/heads/sv/ws/ws-a";
     let branch_b = "refs/heads/sv/ws/ws-b";

@@ -15,4 +15,4 @@ You are implementing the tasks currently in the queue for this repo. Follow thes
 - Before ending the session, run the git checklist: `git status`, `git add <files>`, `git commit -m "..."`, `git push`.
 
 Completion rule
-- If all tasks are closed and all tests pass, write exactly `DONE implementing` in `USER_TODO.md` and do nothing more.
+- If all tasks are closed and all tests pass, write exactly `DONE implementing` in `USER_TODO.md`. Then run `forge stop i2`

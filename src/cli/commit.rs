@@ -15,7 +15,7 @@ use crate::change_id;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::git;
-use crate::lease::{Lease, LeaseScope, LeaseStrength, LeaseStore};
+use crate::lease::{Lease, LeaseScope, LeaseStore, LeaseStrength};
 use crate::oplog::{CommitDetails, OpDetails, OpLog, OpRecord, RefUpdate, UndoData};
 use crate::protect;
 use crate::storage::Storage;
@@ -68,13 +68,14 @@ struct LeaseConflictInfo {
 /// Run the commit command
 pub fn run(options: CommitOptions) -> Result<()> {
     // Discover repository
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
-    
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
-    
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
+
     let workdir = repository
         .workdir()
         .ok_or_else(|| Error::NotARepo(start.clone()))?;
@@ -86,7 +87,7 @@ pub fn run(options: CommitOptions) -> Result<()> {
 
     // Get list of files to be committed
     let staged_files = get_staged_files(&repository)?;
-    
+
     if staged_files.is_empty() && !options.amend {
         if options.json {
             let result = CommitResult {
@@ -106,7 +107,7 @@ pub fn run(options: CommitOptions) -> Result<()> {
 
     // Check protected paths (sv-8jf.4.5)
     let (protected_guard, protected_warn) = check_protected_paths(&repository, &staged_files)?;
-    
+
     // Warn about warn-mode protected files
     if !protected_warn.is_empty() && !options.quiet {
         eprintln!("Warning: Committing protected files (warn mode):");
@@ -114,7 +115,7 @@ pub fn run(options: CommitOptions) -> Result<()> {
             eprintln!("  {} (pattern: {}, mode: {})", pf.file, pf.pattern, pf.mode);
         }
     }
-    
+
     // Block on guard-mode protected files unless --allow-protected
     if !protected_guard.is_empty() && !options.allow_protected {
         // Return error with exit code 3 (policy blocked)
@@ -145,17 +146,18 @@ pub fn run(options: CommitOptions) -> Result<()> {
 
     // Check lease conflicts (sv-8jf.5.3)
     // Get current branch name for scope filtering
-    let current_branch = repository.head()
+    let current_branch = repository
+        .head()
         .ok()
         .and_then(|h| h.shorthand().map(|s| s.to_string()));
-    
+
     let lease_conflicts = check_lease_conflicts(
         &repository,
         &staged_files,
         current_branch.as_deref(),
         options.actor.as_deref(),
     )?;
-    
+
     if !lease_conflicts.is_empty() && !options.force_lease {
         // Return error with exit code 3 (policy blocked)
         return Err(Error::LeaseConflict {
@@ -166,8 +168,15 @@ pub fn run(options: CommitOptions) -> Result<()> {
     }
 
     // Capture old HEAD for undo support
-    let old_head = repository.head().ok().and_then(|h| h.target()).map(|o| o.to_string());
-    let head_ref = repository.head().ok().and_then(|h| h.name().map(String::from));
+    let old_head = repository
+        .head()
+        .ok()
+        .and_then(|h| h.target())
+        .map(|o| o.to_string());
+    let head_ref = repository
+        .head()
+        .ok()
+        .and_then(|h| h.name().map(String::from));
 
     // Build git commit command
     let mut cmd = Command::new("git");
@@ -189,14 +198,16 @@ pub fn run(options: CommitOptions) -> Result<()> {
     }
 
     // Execute git commit
-    let output = cmd.output()
-        .map_err(|e| Error::Io(e))?;
+    let output = cmd.output().map_err(|e| Error::Io(e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     if !output.status.success() {
-        return Err(Error::OperationFailed(format!("git commit failed: {}", stderr.trim())));
+        return Err(Error::OperationFailed(format!(
+            "git commit failed: {}",
+            stderr.trim()
+        )));
     }
 
     // Extract commit hash from output or HEAD
@@ -214,31 +225,42 @@ pub fn run(options: CommitOptions) -> Result<()> {
         let actor_name = actor::resolve_actor_optional(Some(workdir), options.actor.as_deref())
             .ok()
             .flatten();
-        
-        let msg_summary = options.message.as_ref()
+
+        let msg_summary = options
+            .message
+            .as_ref()
             .map(|m| m.lines().next().unwrap_or("").to_string())
             .unwrap_or_else(|| "(no message)".to_string());
-        
-        let mut record = OpRecord::new(
-            format!("sv commit -m \"{}\"", msg_summary),
-            actor_name,
-        );
+
+        let mut record = OpRecord::new(format!("sv commit -m \"{}\"", msg_summary), actor_name);
         record.affected_refs = head_ref.iter().cloned().collect();
         record.details = Some(OpDetails {
             commit: Some(CommitDetails {
                 commit_hash: commit_hash.clone(),
                 change_id,
                 files: staged_files.clone(),
-                allow_protected: if options.allow_protected { Some(true) } else { None },
-                force_lease: if options.force_lease { Some(true) } else { None },
+                allow_protected: if options.allow_protected {
+                    Some(true)
+                } else {
+                    None
+                },
+                force_lease: if options.force_lease {
+                    Some(true)
+                } else {
+                    None
+                },
             }),
         });
         record.undo_data = Some(UndoData {
-            ref_updates: head_ref.map(|ref_name| vec![RefUpdate {
-                name: ref_name,
-                old: old_head,
-                new: Some(commit_hash.clone()),
-            }]).unwrap_or_default(),
+            ref_updates: head_ref
+                .map(|ref_name| {
+                    vec![RefUpdate {
+                        name: ref_name,
+                        old: old_head,
+                        new: Some(commit_hash.clone()),
+                    }]
+                })
+                .unwrap_or_default(),
             ..UndoData::default()
         });
         // Best effort - don't fail the command if oplog write fails
@@ -271,45 +293,42 @@ fn check_protected_paths(
     repo: &git2::Repository,
     staged_files: &[String],
 ) -> Result<(Vec<ProtectedFileInfo>, Vec<ProtectedFileInfo>)> {
-    let workdir = repo.workdir()
+    let workdir = repo
+        .workdir()
         .ok_or_else(|| Error::OperationFailed("no working directory".to_string()))?;
-    
+
     // Load config from workspace root
     let config = Config::load_from_repo(&workdir.to_path_buf());
-    
+
     // Get the common git dir (handles worktrees correctly)
     let git_dir = git::common_dir(repo);
-    
+
     // Load per-workspace overrides using proper paths
-    let storage = Storage::new(
-        workdir.to_path_buf(),
-        git_dir,
-        workdir.to_path_buf(),
-    );
+    let storage = Storage::new(workdir.to_path_buf(), git_dir, workdir.to_path_buf());
     let override_data = protect::load_override(&storage).ok();
-    
+
     // Convert staged files to PathBuf for the protect API
     let staged_paths: Vec<PathBuf> = staged_files.iter().map(PathBuf::from).collect();
-    
+
     // Compute protection status
     let status = protect::compute_status(&config, override_data.as_ref(), &staged_paths)?;
-    
+
     let mut guard_files = Vec::new();
     let mut warn_files = Vec::new();
-    
+
     for rule_status in &status.rules {
         // Skip disabled patterns
         if rule_status.disabled {
             continue;
         }
-        
+
         for matched_file in &rule_status.matched_files {
             let info = ProtectedFileInfo {
                 file: matched_file.to_string_lossy().to_string(),
                 pattern: rule_status.rule.pattern.clone(),
                 mode: rule_status.rule.mode.clone(),
             };
-            
+
             match rule_status.rule.mode.as_str() {
                 "guard" => guard_files.push(info),
                 "warn" => warn_files.push(info),
@@ -318,7 +337,7 @@ fn check_protected_paths(
             }
         }
     }
-    
+
     Ok((guard_files, warn_files))
 }
 
@@ -332,29 +351,26 @@ fn check_lease_conflicts(
     current_branch: Option<&str>,
     actor_override: Option<&str>,
 ) -> Result<Vec<LeaseConflictInfo>> {
-    let workdir = repo.workdir()
+    let workdir = repo
+        .workdir()
         .ok_or_else(|| Error::OperationFailed("no working directory".to_string()))?;
-    
+
     // Get the common git dir (handles worktrees correctly)
     let git_dir = git::common_dir(repo);
-    
+
     // Get current actor
     let current_actor = actor::resolve_actor(Some(workdir), actor_override).ok();
-    
+
     // Load lease store using proper paths for worktrees
-    let storage = Storage::new(
-        workdir.to_path_buf(),
-        git_dir,
-        workdir.to_path_buf(),
-    );
+    let storage = Storage::new(workdir.to_path_buf(), git_dir, workdir.to_path_buf());
     let existing_leases: Vec<Lease> = storage.read_jsonl(&storage.leases_file())?;
     let mut store = LeaseStore::from_vec(existing_leases);
-    
+
     // Expire stale leases
     store.expire_stale();
-    
+
     let mut conflicts = Vec::new();
-    
+
     for file in staged_files {
         // Find active leases that conflict with this file
         for lease in store.active() {
@@ -368,7 +384,7 @@ fn check_lease_conflicts(
             if lease.actor.is_none() {
                 continue;
             }
-            
+
             // Check lease scope - skip if scope doesn't apply to current context
             match &lease.scope {
                 LeaseScope::Repo => {
@@ -389,35 +405,39 @@ fn check_lease_conflicts(
                     let _ = ws; // Suppress unused warning for now
                 }
             }
-            
+
             // Check if lease pathspec overlaps with file
             if !lease.pathspec_overlaps(file) {
                 continue;
             }
-            
+
             // Only block on exclusive or strong leases
-            if lease.strength == LeaseStrength::Exclusive || lease.strength == LeaseStrength::Strong {
+            if lease.strength == LeaseStrength::Exclusive || lease.strength == LeaseStrength::Strong
+            {
                 conflicts.push(LeaseConflictInfo {
                     file: file.clone(),
                     lease_id: lease.id.to_string()[..8].to_string(),
-                    holder: lease.actor.clone().unwrap_or_else(|| "(ownerless)".to_string()),
+                    holder: lease
+                        .actor
+                        .clone()
+                        .unwrap_or_else(|| "(ownerless)".to_string()),
                     strength: lease.strength.to_string(),
                 });
             }
         }
     }
-    
+
     Ok(conflicts)
 }
 
 /// Stage all modified tracked files (equivalent to git add -u)
 fn stage_all_modified(repo: &git2::Repository) -> Result<()> {
     let mut index = repo.index()?;
-    
+
     index.update_all(["*"].iter(), None)?;
-    
+
     index.write()?;
-    
+
     Ok(())
 }
 
@@ -427,15 +447,11 @@ fn get_staged_files(repo: &git2::Repository) -> Result<Vec<String>> {
         Ok(head) => Some(head.peel_to_tree()?),
         Err(_) => None, // Initial commit, no HEAD yet
     };
-    
+
     let index = repo.index()?;
-    
-    let diff = repo.diff_tree_to_index(
-        head.as_ref(),
-        Some(&index),
-        None,
-    )?;
-    
+
+    let diff = repo.diff_tree_to_index(head.as_ref(), Some(&index), None)?;
+
     let mut files = Vec::new();
     diff.foreach(
         &mut |delta, _| {
@@ -448,7 +464,7 @@ fn get_staged_files(repo: &git2::Repository) -> Result<Vec<String>> {
         None,
         None,
     )?;
-    
+
     Ok(files)
 }
 
@@ -467,12 +483,12 @@ mod tests {
     fn setup_test_repo() -> (TempDir, git2::Repository) {
         let temp = TempDir::new().unwrap();
         let repo = git2::Repository::init(temp.path()).unwrap();
-        
+
         // Configure user for commits
         let mut config = repo.config().unwrap();
         config.set_str("user.name", "Test User").unwrap();
         config.set_str("user.email", "test@example.com").unwrap();
-        
+
         (temp, repo)
     }
 
@@ -486,15 +502,15 @@ mod tests {
     #[test]
     fn test_get_staged_files_with_staged() {
         let (temp, repo) = setup_test_repo();
-        
+
         // Create and stage a file
         let file_path = temp.path().join("test.txt");
         std::fs::write(&file_path, "hello").unwrap();
-        
+
         let mut index = repo.index().unwrap();
         index.add_path(std::path::Path::new("test.txt")).unwrap();
         index.write().unwrap();
-        
+
         let files = get_staged_files(&repo).unwrap();
         assert_eq!(files, vec!["test.txt"]);
     }

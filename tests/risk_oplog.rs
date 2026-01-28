@@ -3,8 +3,8 @@ mod support;
 use chrono::Utc;
 use predicates::str::contains;
 
-use sv::oplog::{OpLog, OpRecord};
 use support::{sv_cmd, TestRepo};
+use sv::oplog::{OpLog, OpRecord};
 
 fn setup_repo() -> TestRepo {
     let repo = TestRepo::init().expect("init repo");

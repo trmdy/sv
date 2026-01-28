@@ -24,9 +24,9 @@ fn parses_intersection_with_predicate() {
                 kind: EntityKind::Workspace,
                 predicate: Some(Predicate::Active),
             }))),
-            Box::new(SelectorExpr::Atom(SelectorAtom::Predicate(Predicate::Ahead(
-                "main".to_string()
-            ))))
+            Box::new(SelectorExpr::Atom(SelectorAtom::Predicate(
+                Predicate::Ahead("main".to_string())
+            )))
         )
     );
 }

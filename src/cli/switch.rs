@@ -126,6 +126,9 @@ mod tests {
             .find_workspace("ws1")
             .expect("find workspace")
             .expect("workspace entry");
-        assert_eq!(updated.last_active.as_deref(), Some(output.last_active.as_str()));
+        assert_eq!(
+            updated.last_active.as_deref(),
+            Some(output.last_active.as_str())
+        );
     }
 }

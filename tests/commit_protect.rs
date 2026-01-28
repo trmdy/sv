@@ -34,7 +34,10 @@ fn commit_injects_change_id() -> Result<(), Box<dyn std::error::Error>> {
 fn protected_path_blocks_commit() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
-    repo.write_file(".sv.toml", "[protect]\nmode = \"guard\"\npaths = [\".beads/**\"]\n")?;
+    repo.write_file(
+        ".sv.toml",
+        "[protect]\nmode = \"guard\"\npaths = [\".beads/**\"]\n",
+    )?;
     repo.write_file(".beads/issues.jsonl", "[]\n")?;
     repo.commit_all("initial commit")?;
     repo.write_file(".beads/issues.jsonl", "[1]\n")?;
@@ -56,7 +59,10 @@ fn protected_path_blocks_commit() -> Result<(), Box<dyn std::error::Error>> {
 fn allow_protected_overrides_guard() -> Result<(), Box<dyn std::error::Error>> {
     let repo = TestRepo::init()?;
     repo.init_sv_dirs()?;
-    repo.write_file(".sv.toml", "[protect]\nmode = \"guard\"\npaths = [\".beads/**\"]\n")?;
+    repo.write_file(
+        ".sv.toml",
+        "[protect]\nmode = \"guard\"\npaths = [\".beads/**\"]\n",
+    )?;
     repo.write_file(".beads/issues.jsonl", "[]\n")?;
     repo.commit_all("initial commit")?;
     repo.write_file(".beads/issues.jsonl", "[1]\n")?;
@@ -105,7 +111,10 @@ fn protect_status_reports_staged_matches() -> Result<(), Box<dyn std::error::Err
     let repo = TestRepo::init()?;
     repo.write_file("README.md", "base")?;
     repo.commit_all("initial commit")?;
-    repo.write_file(".sv.toml", "[protect]\nmode = \"guard\"\npaths = [\".beads/**\"]\n")?;
+    repo.write_file(
+        ".sv.toml",
+        "[protect]\nmode = \"guard\"\npaths = [\".beads/**\"]\n",
+    )?;
     repo.write_file(".beads/issues.jsonl", "[]\n")?;
     repo.stage_path(".beads/issues.jsonl")?;
 
@@ -115,8 +124,7 @@ fn protect_status_reports_staged_matches() -> Result<(), Box<dyn std::error::Err
         .assert()
         .success()
         .stdout(
-            contains("staged files match protected patterns")
-                .and(contains(".beads/issues.jsonl")),
+            contains("staged files match protected patterns").and(contains(".beads/issues.jsonl")),
         );
 
     Ok(())

@@ -137,11 +137,7 @@ pub struct TaskRecord {
     pub last_comment_at: Option<DateTime<Utc>>,
 }
 
-pub fn sort_tasks(
-    tasks: &mut [TaskRecord],
-    config: &TasksConfig,
-    blocked_ids: &HashSet<String>,
-) {
+pub fn sort_tasks(tasks: &mut [TaskRecord], config: &TasksConfig, blocked_ids: &HashSet<String>) {
     let ready_status = config.default_status.as_str();
     tasks.sort_by(|left, right| {
         let left_status = status_rank(&left.status, config);
@@ -452,13 +448,17 @@ impl TaskStore {
     pub fn resolve_task_id(&self, input: &str) -> Result<String> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
-            return Err(Error::InvalidArgument("task id cannot be empty".to_string()));
+            return Err(Error::InvalidArgument(
+                "task id cannot be empty".to_string(),
+            ));
         }
 
         let trimmed_norm = normalize_id(trimmed);
         let candidate_norm = suffix_from_id(&trimmed_norm).to_string();
         if candidate_norm.is_empty() {
-            return Err(Error::InvalidArgument("task id cannot be empty".to_string()));
+            return Err(Error::InvalidArgument(
+                "task id cannot be empty".to_string(),
+            ));
         }
 
         let snapshot = self.snapshot_readonly()?;
@@ -491,9 +491,7 @@ impl TaskStore {
         matches.sort();
         matches.dedup();
         if matches.is_empty() {
-            return Err(Error::InvalidArgument(format!(
-                "task not found: {trimmed}"
-            )));
+            return Err(Error::InvalidArgument(format!("task not found: {trimmed}")));
         }
         if matches.len() > 1 {
             return Err(Error::InvalidArgument(format!(
@@ -539,9 +537,7 @@ impl TaskStore {
             .cloned()
             .collect();
         if filtered.is_empty() {
-            return Err(Error::InvalidArgument(format!(
-                "task not found: {task_id}"
-            )));
+            return Err(Error::InvalidArgument(format!("task not found: {task_id}")));
         }
         sort_events(&mut filtered);
         let snapshot = self.build_snapshot(&events)?;
@@ -617,10 +613,7 @@ impl TaskStore {
         })
     }
 
-    pub fn compact(
-        &self,
-        policy: CompactionPolicy,
-    ) -> Result<(Vec<TaskEvent>, TaskCompactReport)> {
+    pub fn compact(&self, policy: CompactionPolicy) -> Result<(Vec<TaskEvent>, TaskCompactReport)> {
         let events = self.load_merged_events()?;
         self.compact_events(&events, policy)
     }
@@ -676,9 +669,7 @@ impl TaskStore {
                 .push(event.clone());
         }
 
-        let cutoff = policy
-            .older_than
-            .map(|duration| Utc::now() - duration);
+        let cutoff = policy.older_than.map(|duration| Utc::now() - duration);
         let closed_statuses = self.closed_statuses();
 
         let mut keep_ids = HashSet::new();
@@ -703,8 +694,9 @@ impl TaskStore {
                 .find(|event| event.event_type == TaskEventType::TaskDeleted)
             {
                 keep_ids.insert(deleted.event_id.clone());
-                if let Some(create) =
-                    task_events.iter().find(|event| event.event_type == TaskEventType::TaskCreated)
+                if let Some(create) = task_events
+                    .iter()
+                    .find(|event| event.event_type == TaskEventType::TaskCreated)
                 {
                     keep_ids.insert(create.event_id.clone());
                 }
@@ -734,8 +726,9 @@ impl TaskStore {
             }
 
             compacted_tasks += 1;
-            if let Some(first_create) =
-                task_events.iter().find(|event| event.event_type == TaskEventType::TaskCreated)
+            if let Some(first_create) = task_events
+                .iter()
+                .find(|event| event.event_type == TaskEventType::TaskCreated)
             {
                 keep_ids.insert(first_create.event_id.clone());
             }
@@ -750,7 +743,8 @@ impl TaskStore {
             if let Some(last_status) = task_events.iter().rev().find(|event| {
                 event.event_type == TaskEventType::TaskClosed
                     || (event.event_type == TaskEventType::TaskStatusChanged
-                        && event.status.as_deref().map(|s| closed_statuses.contains(s)) == Some(true))
+                        && event.status.as_deref().map(|s| closed_statuses.contains(s))
+                            == Some(true))
             }) {
                 keep_ids.insert(last_status.event_id.clone());
             }
@@ -789,11 +783,7 @@ impl TaskStore {
         Ok((compacted, report))
     }
 
-    fn should_auto_compact(
-        &self,
-        events: &[TaskEvent],
-        policy: &CompactionPolicy,
-    ) -> Result<bool> {
+    fn should_auto_compact(&self, events: &[TaskEvent], policy: &CompactionPolicy) -> Result<bool> {
         let max_log_mb = policy.max_log_mb;
         if max_log_mb.is_none() && policy.older_than.is_none() {
             return Ok(false);
@@ -932,12 +922,7 @@ impl TaskStore {
     }
 
     pub fn validate_status(&self, status: &str) -> Result<()> {
-        if self
-            .config
-            .statuses
-            .iter()
-            .any(|value| value == status)
-        {
+        if self.config.statuses.iter().any(|value| value == status) {
             Ok(())
         } else {
             Err(Error::InvalidArgument(format!(
@@ -985,7 +970,9 @@ fn sort_events(events: &mut Vec<TaskEvent>) {
 fn normalize_priority(priority: &str) -> Result<String> {
     let trimmed = priority.trim();
     if trimmed.is_empty() {
-        return Err(Error::InvalidArgument("priority cannot be empty".to_string()));
+        return Err(Error::InvalidArgument(
+            "priority cannot be empty".to_string(),
+        ));
     }
 
     let normalized = trimmed.to_ascii_uppercase();
@@ -1018,24 +1005,16 @@ fn event_status(event: &TaskEvent, config: &TasksConfig) -> Result<Option<String
             .status
             .clone()
             .unwrap_or_else(|| config.in_progress_status.clone()),
-        TaskEventType::TaskStatusChanged => {
-            event.status.clone().ok_or_else(|| {
-                Error::InvalidArgument(format!(
-                    "status missing for task event {}",
-                    event.event_id
-                ))
-            })?
-        }
-        TaskEventType::TaskClosed => event
-            .status
-            .clone()
-            .unwrap_or_else(|| {
-                config
-                    .closed_statuses
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "closed".to_string())
-            }),
+        TaskEventType::TaskStatusChanged => event.status.clone().ok_or_else(|| {
+            Error::InvalidArgument(format!("status missing for task event {}", event.event_id))
+        })?,
+        TaskEventType::TaskClosed => event.status.clone().unwrap_or_else(|| {
+            config
+                .closed_statuses
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "closed".to_string())
+        }),
         TaskEventType::TaskCommented
         | TaskEventType::TaskPriorityChanged
         | TaskEventType::TaskEdited
@@ -1211,10 +1190,13 @@ fn apply_event(
             let record = map.get_mut(&event.task_id).ok_or_else(|| {
                 Error::InvalidArgument(format!("task not found: {}", event.task_id))
             })?;
-            let status = event
-                .status
-                .clone()
-                .unwrap_or_else(|| config.closed_statuses.first().cloned().unwrap_or_else(|| "closed".to_string()));
+            let status = event.status.clone().unwrap_or_else(|| {
+                config
+                    .closed_statuses
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "closed".to_string())
+            });
             if !config.statuses.iter().any(|value| value == &status) {
                 return Err(Error::InvalidArgument(format!(
                     "unknown task status '{status}'"
@@ -1258,7 +1240,8 @@ fn apply_event(
             if related_task_id == event.task_id {
                 return Ok(());
             }
-            if event.event_type == TaskEventType::TaskRelated && relation_description(event).is_none()
+            if event.event_type == TaskEventType::TaskRelated
+                && relation_description(event).is_none()
             {
                 return Ok(());
             }
@@ -1438,9 +1421,7 @@ fn blocked_ids_from_state(
 
 fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations> {
     if !events.iter().any(|event| event.task_id == task_id) {
-        return Err(Error::InvalidArgument(format!(
-            "task not found: {task_id}"
-        )));
+        return Err(Error::InvalidArgument(format!("task not found: {task_id}")));
     }
     let state = build_relation_state(events)?;
 
@@ -1501,7 +1482,10 @@ fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations>
     children.sort();
     blocks.sort();
     blocked_by.sort();
-    relates.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.description.cmp(&b.description)));
+    relates.sort_by(|a, b| {
+        a.id.cmp(&b.id)
+            .then_with(|| a.description.cmp(&b.description))
+    });
 
     Ok(TaskRelations {
         parent,
@@ -1813,7 +1797,8 @@ mod tests {
         for id in ["task-a", "task-b", "task-c"] {
             status_by_id.insert(id.to_string(), config.default_status.clone());
         }
-        let blocked = blocked_task_ids_from_events(&events, &status_by_id, &config).expect("blocked");
+        let blocked =
+            blocked_task_ids_from_events(&events, &status_by_id, &config).expect("blocked");
         assert!(blocked.contains("task-a"));
         assert!(!blocked.contains("task-b"));
     }
@@ -1856,11 +1841,7 @@ mod tests {
     fn list_ready_excludes_blocked_tasks() {
         let dir = tempdir().expect("tempdir");
         let repo_root = dir.path().to_path_buf();
-        let storage = Storage::new(
-            repo_root.clone(),
-            repo_root.join(".git"),
-            repo_root.clone(),
-        );
+        let storage = Storage::new(repo_root.clone(), repo_root.join(".git"), repo_root.clone());
         let store = TaskStore::new(storage, TasksConfig::default());
 
         let now = Utc::now();
@@ -1889,11 +1870,7 @@ mod tests {
     fn list_ready_ignores_closed_blockers() {
         let dir = tempdir().expect("tempdir");
         let repo_root = dir.path().to_path_buf();
-        let storage = Storage::new(
-            repo_root.clone(),
-            repo_root.join(".git"),
-            repo_root.clone(),
-        );
+        let storage = Storage::new(repo_root.clone(), repo_root.join(".git"), repo_root.clone());
         let store = TaskStore::new(storage, TasksConfig::default());
 
         let now = Utc::now();
@@ -1925,11 +1902,7 @@ mod tests {
     fn blocked_parent_cascades_to_children() {
         let dir = tempdir().expect("tempdir");
         let repo_root = dir.path().to_path_buf();
-        let storage = Storage::new(
-            repo_root.clone(),
-            repo_root.join(".git"),
-            repo_root.clone(),
-        );
+        let storage = Storage::new(repo_root.clone(), repo_root.join(".git"), repo_root.clone());
         let store = TaskStore::new(storage, TasksConfig::default());
 
         let now = Utc::now();
@@ -1976,12 +1949,9 @@ mod tests {
     #[test]
     fn task_id_suffix_uses_random_section() {
         let existing = HashSet::new();
-        let suffix = TaskStore::unique_task_suffix_from_base(
-            "0123456789abcdefghijklmnop",
-            3,
-            &existing,
-        )
-        .expect("suffix");
+        let suffix =
+            TaskStore::unique_task_suffix_from_base("0123456789abcdefghijklmnop", 3, &existing)
+                .expect("suffix");
         assert_eq!(suffix, "abc");
     }
 
@@ -1989,11 +1959,8 @@ mod tests {
     fn task_id_suffix_stays_same_length_when_taken() {
         let mut existing = HashSet::new();
         existing.insert("abc".to_string());
-        let suffix = TaskStore::unique_task_suffix_from_base(
-            "0123456789abcdefghijklmnop",
-            3,
-            &existing,
-        );
+        let suffix =
+            TaskStore::unique_task_suffix_from_base("0123456789abcdefghijklmnop", 3, &existing);
         assert!(suffix.is_none());
     }
 
@@ -2015,11 +1982,7 @@ mod tests {
     fn resolve_task_id_accepts_partial_and_prefixed() {
         let dir = tempdir().expect("tempdir");
         let repo_root = dir.path().to_path_buf();
-        let storage = Storage::new(
-            repo_root.clone(),
-            repo_root.join(".git"),
-            repo_root.clone(),
-        );
+        let storage = Storage::new(repo_root.clone(), repo_root.join(".git"), repo_root.clone());
         let mut config = TasksConfig::default();
         config.id_prefix = "prefix".to_string();
         let store = TaskStore::new(storage, config);
@@ -2095,22 +2058,10 @@ mod tests {
             .write_json(&store.tracked_snapshot_path(), &snapshot)
             .expect("write snapshot");
 
-        assert_eq!(
-            store.resolve_task_id("ab").expect("resolve"),
-            "old-ab1"
-        );
-        assert_eq!(
-            store.resolve_task_id("AB").expect("resolve"),
-            "old-ab1"
-        );
-        assert_eq!(
-            store.resolve_task_id("b").expect("resolve"),
-            "prefix-b1c"
-        );
-        assert_eq!(
-            store.resolve_task_id("a9").expect("resolve"),
-            "legacy-a9b"
-        );
+        assert_eq!(store.resolve_task_id("ab").expect("resolve"), "old-ab1");
+        assert_eq!(store.resolve_task_id("AB").expect("resolve"), "old-ab1");
+        assert_eq!(store.resolve_task_id("b").expect("resolve"), "prefix-b1c");
+        assert_eq!(store.resolve_task_id("a9").expect("resolve"), "legacy-a9b");
         assert_eq!(
             store.resolve_task_id("old-ab1").expect("resolve"),
             "old-ab1"

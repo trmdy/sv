@@ -37,9 +37,10 @@ struct ActorShowReport {
 }
 
 pub fn run_set(options: SetOptions) -> Result<()> {
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     let repository = git::open_repo(Some(start.as_path()))?;
     let workdir = git::workdir(&repository)?;
@@ -73,9 +74,10 @@ pub fn run_set(options: SetOptions) -> Result<()> {
 }
 
 pub fn run_show(options: ShowOptions) -> Result<()> {
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     let repository = git::open_repo(Some(start.as_path()))?;
     let workdir = git::workdir(&repository)?;

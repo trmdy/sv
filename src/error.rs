@@ -92,9 +92,9 @@ impl Error {
             | Error::LeaseNotFound(_) => exit_codes::USER_ERROR,
 
             // Policy blocks
-            Error::ProtectedPath(_)
-            | Error::LeaseConflict { .. }
-            | Error::NoteRequired(_) => exit_codes::POLICY_BLOCKED,
+            Error::ProtectedPath(_) | Error::LeaseConflict { .. } | Error::NoteRequired(_) => {
+                exit_codes::POLICY_BLOCKED
+            }
 
             // Operation failures
             Error::Git(_)

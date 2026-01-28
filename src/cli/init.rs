@@ -33,8 +33,8 @@ pub fn run(repo: Option<PathBuf>, json: bool, quiet: bool) -> Result<()> {
         None => std::env::current_dir()?,
     };
 
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
 
     let workdir = repository
         .workdir()
@@ -43,8 +43,7 @@ pub fn run(repo: Option<PathBuf>, json: bool, quiet: bool) -> Result<()> {
 
     let common_dir = resolve_common_dir(&repository)?;
 
-    let (created_git_sv, created_oplog, created_hoist) =
-        ensure_git_sv_dirs(&common_dir)?;
+    let (created_git_sv, created_oplog, created_hoist) = ensure_git_sv_dirs(&common_dir)?;
     let created_sv_dir = ensure_dir(&workdir.join(".sv"))?;
     let created_config = ensure_config(&workdir)?;
     let updated_gitignore = ensure_gitignore(&workdir)?;
@@ -111,12 +110,7 @@ pub fn run(repo: Option<PathBuf>, json: bool, quiet: bool) -> Result<()> {
         human.push_next_step("sv ws new <workspace>");
     }
 
-    emit_success(
-        OutputOptions { json, quiet },
-        "init",
-        &report,
-        Some(&human),
-    )?;
+    emit_success(OutputOptions { json, quiet }, "init", &report, Some(&human))?;
 
     Ok(())
 }
@@ -183,25 +177,16 @@ fn ensure_gitignore(repo_root: &Path) -> Result<bool> {
     let mut additions = Vec::new();
     let entries = parse_gitignore_entries(&existing);
 
-    if !contains_any(
-        &entries,
-        &[".sv", ".sv/", "/.sv", "/.sv/"],
-    ) {
+    if !contains_any(&entries, &[".sv", ".sv/", "/.sv", "/.sv/"]) {
         additions.push("# sv workspace-local state".to_string());
         additions.push(".sv/".to_string());
     }
 
     let mut task_patterns = Vec::new();
-    if !contains_any(
-        &entries,
-        &[".tasks/*.lock", "/.tasks/*.lock"],
-    ) {
+    if !contains_any(&entries, &[".tasks/*.lock", "/.tasks/*.lock"]) {
         task_patterns.push(".tasks/*.lock".to_string());
     }
-    if !contains_any(
-        &entries,
-        &[".tasks/*.tmp", "/.tasks/*.tmp"],
-    ) {
+    if !contains_any(&entries, &[".tasks/*.tmp", "/.tasks/*.tmp"]) {
         task_patterns.push(".tasks/*.tmp".to_string());
     }
     if !task_patterns.is_empty() {

@@ -13,11 +13,7 @@ fn normalize_status(value: &str) -> String {
     normalize_text(value)
 }
 
-pub fn sort_tasks(
-    tasks: &mut [TaskRecord],
-    config: &TasksConfig,
-    blocked_ids: &HashSet<String>,
-) {
+pub fn sort_tasks(tasks: &mut [TaskRecord], config: &TasksConfig, blocked_ids: &HashSet<String>) {
     crate::task::sort_tasks(tasks, config, blocked_ids);
 }
 
@@ -161,7 +157,10 @@ pub fn select_by_id(
     }
     if let Some(id) = previous_id {
         let normalized = normalize_text(id);
-        if let Some(index) = tasks.iter().position(|task| normalize_text(&task.id) == normalized) {
+        if let Some(index) = tasks
+            .iter()
+            .position(|task| normalize_text(&task.id) == normalized)
+        {
             if filtered.iter().any(|candidate| *candidate == index) {
                 return Some(index);
             }
@@ -244,7 +243,13 @@ mod tests {
         let mut tasks = vec![
             task("sv-4", "Fourth", "closed", "P0", now),
             task("sv-1", "First", "open", "P1", earlier),
-            task("sv-3", "Third", "open", "P0", now + chrono::Duration::seconds(10)),
+            task(
+                "sv-3",
+                "Third",
+                "open",
+                "P0",
+                now + chrono::Duration::seconds(10),
+            ),
             task("sv-2", "Second", "open", "P0", now),
         ];
         sort_tasks(&mut tasks, &config, &blocked_ids);
@@ -269,10 +274,7 @@ mod tests {
 
         let (nested, depths) = nest_tasks(tasks, &parent_by_child);
         let ids: Vec<&str> = nested.iter().map(|task| task.id.as_str()).collect();
-        assert_eq!(
-            ids,
-            vec!["sv-parent", "sv-child", "sv-grand", "sv-root"]
-        );
+        assert_eq!(ids, vec!["sv-parent", "sv-child", "sv-grand", "sv-root"]);
         assert_eq!(depths, vec![0, 1, 2, 0]);
     }
 

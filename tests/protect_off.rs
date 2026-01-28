@@ -29,7 +29,9 @@ paths = ["Cargo.lock", ".beads/**"]
 
     let storage = Storage::for_repo(repo.path().to_path_buf());
     let overrides: ProtectOverride = storage.read_json(&storage.protect_override_file())?;
-    assert!(overrides.disabled_patterns.contains(&"Cargo.lock".to_string()));
+    assert!(overrides
+        .disabled_patterns
+        .contains(&"Cargo.lock".to_string()));
 
     Ok(())
 }

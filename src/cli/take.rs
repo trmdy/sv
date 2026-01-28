@@ -81,31 +81,32 @@ struct LeaseEventData {
 
 pub fn run(options: TakeOptions) -> Result<()> {
     // Discover repository
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
-    
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
-    
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
+
     let workdir = repository
         .workdir()
         .ok_or_else(|| Error::NotARepo(start.clone()))?
         .to_path_buf();
-    
+
     // Resolve common dir for worktree support
     let common_dir = resolve_common_dir(&repository)?;
-    
+
     // Initialize storage
     let storage = Storage::new(workdir.clone(), common_dir.clone(), workdir.clone());
-    
+
     // Ensure sv is initialized
     if !storage.is_initialized() {
         return Err(Error::OperationFailed(
-            "sv not initialized. Run 'sv init' first.".to_string()
+            "sv not initialized. Run 'sv init' first.".to_string(),
         ));
     }
-    
+
     // Load config
     let config = Config::load_from_repo(&workdir);
 
@@ -114,13 +115,13 @@ pub fn run(options: TakeOptions) -> Result<()> {
         .as_ref()
         .map(|dest| dest.open())
         .transpose()?;
-    
+
     // Parse strength
     let strength: LeaseStrength = options.strength.parse()?;
-    
+
     // Parse intent
     let intent: LeaseIntent = options.intent.parse()?;
-    
+
     // Parse scope
     let scope: LeaseScope = options.scope.parse()?;
 
@@ -135,23 +136,23 @@ pub fn run(options: TakeOptions) -> Result<()> {
     // Load existing leases
     let existing_leases: Vec<Lease> = storage.read_jsonl(&leases_file)?;
     let mut store = LeaseStore::from_vec(existing_leases);
-    
+
     // Expire stale leases
     store.expire_stale();
 
     // Cleanup expired leases with configured grace period
     let grace = parse_duration(&config.leases.expiration_grace)?;
     let _expired = store.cleanup_expired(grace);
-    
+
     // Check note requirement
     if config.leases.require_note && strength.requires_note() && options.note.is_none() {
         return Err(Error::NoteRequired(strength.to_string()));
     }
-    
+
     let mut created_leases = Vec::new();
     let mut updated_leases = Vec::new();
     let mut conflicts = Vec::new();
-    
+
     // Create or update leases for each path
     for pathspec in &options.paths {
         // Check for conflicts with OTHER actors
@@ -161,7 +162,7 @@ pub fn run(options: TakeOptions) -> Result<()> {
             actor.as_deref(),
             false, // TODO: support --allow-overlap flag
         );
-        
+
         if !path_conflicts.is_empty() {
             for conflict in path_conflicts {
                 conflicts.push(ConflictInfo {
@@ -189,27 +190,27 @@ pub fn run(options: TakeOptions) -> Result<()> {
                 continue;
             }
         }
-        
+
         // Build a new lease
         let mut builder = Lease::builder(pathspec)
             .strength(strength)
             .intent(intent)
             .scope(scope.clone())
             .ttl(&options.ttl);
-        
+
         if let Some(ref actor_name) = actor {
             builder = builder.actor(actor_name);
         }
-        
+
         if let Some(ref note) = options.note {
             builder = builder.note(note);
         }
-        
+
         let lease = builder.build()?;
-        
+
         // Add to store for conflict checking of subsequent paths
         store.add(lease.clone());
-        
+
         created_leases.push(lease);
     }
 
@@ -236,7 +237,7 @@ pub fn run(options: TakeOptions) -> Result<()> {
             format!("sv take {}", all_pathspecs.join(" ")),
             actor.clone(),
         );
-        
+
         let mut lease_changes: Vec<LeaseChange> = created_leases
             .iter()
             .map(|l| LeaseChange {
@@ -244,12 +245,12 @@ pub fn run(options: TakeOptions) -> Result<()> {
                 action: "create".to_string(),
             })
             .collect();
-        
+
         lease_changes.extend(updated_leases.iter().map(|l| LeaseChange {
             lease_id: l.id.to_string(),
             action: "update".to_string(),
         }));
-        
+
         record.undo_data = Some(UndoData {
             lease_changes,
             ..UndoData::default()
@@ -315,7 +316,7 @@ pub fn run(options: TakeOptions) -> Result<()> {
             }
         }
     }
-    
+
     // Output results
     let actor_label = actor.clone().unwrap_or_else(|| "unknown".to_string());
     let lease_to_info = |l: &Lease| LeaseInfo {
@@ -327,7 +328,7 @@ pub fn run(options: TakeOptions) -> Result<()> {
         ttl: l.ttl.clone(),
         expires_at: l.expires_at.to_rfc3339(),
     };
-    
+
     let report = TakeReport {
         actor: actor_label.clone(),
         created: created_leases.iter().map(lease_to_info).collect(),
@@ -344,11 +345,24 @@ pub fn run(options: TakeOptions) -> Result<()> {
     let total_leases = created_leases.len() + updated_leases.len();
     let header = if total_leases > 0 && !conflicts.is_empty() {
         if updated_leases.is_empty() {
-            format!("sv take: created {} lease(s) ({} conflict(s))", created_leases.len(), conflicts.len())
+            format!(
+                "sv take: created {} lease(s) ({} conflict(s))",
+                created_leases.len(),
+                conflicts.len()
+            )
         } else if created_leases.is_empty() {
-            format!("sv take: updated {} lease(s) ({} conflict(s))", updated_leases.len(), conflicts.len())
+            format!(
+                "sv take: updated {} lease(s) ({} conflict(s))",
+                updated_leases.len(),
+                conflicts.len()
+            )
         } else {
-            format!("sv take: created {}, updated {} lease(s) ({} conflict(s))", created_leases.len(), updated_leases.len(), conflicts.len())
+            format!(
+                "sv take: created {}, updated {} lease(s) ({} conflict(s))",
+                created_leases.len(),
+                updated_leases.len(),
+                conflicts.len()
+            )
         }
     } else if total_leases > 0 {
         if updated_leases.is_empty() {
@@ -356,7 +370,11 @@ pub fn run(options: TakeOptions) -> Result<()> {
         } else if created_leases.is_empty() {
             format!("sv take: updated {} lease(s)", updated_leases.len())
         } else {
-            format!("sv take: created {}, updated {} lease(s)", created_leases.len(), updated_leases.len())
+            format!(
+                "sv take: created {}, updated {} lease(s)",
+                created_leases.len(),
+                updated_leases.len()
+            )
         }
     } else if !conflicts.is_empty() {
         format!("sv take: {} conflict(s)", conflicts.len())
@@ -383,7 +401,7 @@ pub fn run(options: TakeOptions) -> Result<()> {
             format_relative_time(&lease.expires_at)
         ));
     }
-    
+
     for lease in &updated_leases {
         human.push_detail(format!(
             "{} (updated: {}, intent: {}, ttl: {}, expires {})",
@@ -409,7 +427,8 @@ pub fn run(options: TakeOptions) -> Result<()> {
         human.push_next_step("retry with --allow-overlap if intentional");
     }
 
-    let conflicts_only = created_leases.is_empty() && updated_leases.is_empty() && !conflicts.is_empty();
+    let conflicts_only =
+        created_leases.is_empty() && updated_leases.is_empty() && !conflicts.is_empty();
     if !conflicts_only {
         emit_success(
             OutputOptions {
@@ -433,7 +452,7 @@ pub fn run(options: TakeOptions) -> Result<()> {
             strength: conflicts[0].strength.clone(),
         });
     }
-    
+
     Ok(())
 }
 
@@ -459,7 +478,7 @@ fn resolve_common_dir(repository: &git2::Repository) -> Result<PathBuf> {
 fn format_relative_time(dt: &chrono::DateTime<chrono::Utc>) -> String {
     let now = chrono::Utc::now();
     let diff = *dt - now;
-    
+
     if diff.num_hours() > 0 {
         format!("in {}h {}m", diff.num_hours(), diff.num_minutes() % 60)
     } else if diff.num_minutes() > 0 {

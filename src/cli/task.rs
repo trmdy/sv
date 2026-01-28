@@ -302,7 +302,9 @@ pub fn run_list(options: ListOptions) -> Result<()> {
     if let Some(workspace) = options.workspace.as_ref() {
         let trimmed = workspace.trim();
         if trimmed.is_empty() {
-            return Err(Error::InvalidArgument("workspace cannot be empty".to_string()));
+            return Err(Error::InvalidArgument(
+                "workspace cannot be empty".to_string(),
+            ));
         }
         let needle = trimmed.to_ascii_lowercase();
         tasks.retain(|task| {
@@ -385,7 +387,9 @@ pub fn run_ready(options: ReadyOptions) -> Result<()> {
     if let Some(workspace) = options.workspace.as_ref() {
         let trimmed = workspace.trim();
         if trimmed.is_empty() {
-            return Err(Error::InvalidArgument("workspace cannot be empty".to_string()));
+            return Err(Error::InvalidArgument(
+                "workspace cannot be empty".to_string(),
+            ));
         }
         let needle = trimmed.to_ascii_lowercase();
         tasks.retain(|task| {
@@ -483,9 +487,9 @@ pub fn run_start(options: StartOptions) -> Result<()> {
     let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
     let resolved = ctx.store.resolve_task_id(&options.id)?;
 
-    let workspace = ctx.workspace.ok_or_else(|| {
-        Error::OperationFailed("workspace not found for task start".to_string())
-    })?;
+    let workspace = ctx
+        .workspace
+        .ok_or_else(|| Error::OperationFailed("workspace not found for task start".to_string()))?;
 
     let mut event = TaskEvent::new(TaskEventType::TaskStarted, resolved.clone());
     event.actor = ctx.actor.clone();
@@ -742,7 +746,9 @@ pub fn run_delete(options: DeleteOptions) -> Result<()> {
     ctx.store.append_event(event.clone())?;
     let event_warning = emit_task_event(&mut event_sink, EventKind::TaskDeleted, &event);
 
-    let output = TaskDeleteOutput { id: resolved.clone() };
+    let output = TaskDeleteOutput {
+        id: resolved.clone(),
+    };
 
     let mut human = HumanOutput::new("Task deleted");
     if let Some(warning) = event_warning {
@@ -767,7 +773,9 @@ pub fn run_comment(options: CommentOptions) -> Result<()> {
     let resolved = ctx.store.resolve_task_id(&options.id)?;
     let text = options.text.trim();
     if text.is_empty() {
-        return Err(Error::InvalidArgument("comment cannot be empty".to_string()));
+        return Err(Error::InvalidArgument(
+            "comment cannot be empty".to_string(),
+        ));
     }
 
     let mut event = TaskEvent::new(TaskEventType::TaskCommented, resolved.clone());
@@ -856,9 +864,9 @@ pub fn run_parent_clear(options: ParentClearOptions) -> Result<()> {
     let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
     let child = ctx.store.resolve_task_id(&options.child)?;
     let relations = ctx.store.relations(&child)?;
-    let parent = relations.parent.ok_or_else(|| {
-        Error::InvalidArgument(format!("task has no parent: {child}"))
-    })?;
+    let parent = relations
+        .parent
+        .ok_or_else(|| Error::InvalidArgument(format!("task has no parent: {child}")))?;
 
     let mut event = TaskEvent::new(TaskEventType::TaskParentCleared, child.clone());
     event.actor = ctx.actor.clone();
@@ -1138,7 +1146,10 @@ pub fn run_relations(options: RelationsOptions) -> Result<()> {
     }
     if !relations.relates.is_empty() {
         for relation in relations.relates {
-            human.push_detail(format!("Relates: {} ({})", relation.id, relation.description));
+            human.push_detail(format!(
+                "Relates: {} ({})",
+                relation.id, relation.description
+            ));
         }
     }
 
@@ -1508,16 +1519,12 @@ fn parse_timestamp(label: &str, value: Option<&str>) -> Result<Option<DateTime<U
         return Ok(None);
     };
     let parsed = DateTime::parse_from_rfc3339(value).map_err(|err| {
-        Error::InvalidArgument(format!(
-            "invalid {label} timestamp '{value}': {err}"
-        ))
+        Error::InvalidArgument(format!("invalid {label} timestamp '{value}': {err}"))
     })?;
     Ok(Some(parsed.with_timezone(&Utc)))
 }
 
-fn open_task_event_sink(
-    events: Option<&str>,
-) -> Result<(Option<crate::events::EventSink>, bool)> {
+fn open_task_event_sink(events: Option<&str>) -> Result<(Option<crate::events::EventSink>, bool)> {
     let destination = EventDestination::parse(events);
     let sink = destination.as_ref().map(|dest| dest.open()).transpose()?;
     let events_to_stdout = matches!(destination, Some(EventDestination::Stdout));
@@ -1596,7 +1603,10 @@ fn push_task_summary(human: &mut HumanOutput, details: &TaskDetails) {
     }
     if !details.relations.relates.is_empty() {
         for relation in &details.relations.relates {
-            human.push_detail(format!("Relates: {} ({})", relation.id, relation.description));
+            human.push_detail(format!(
+                "Relates: {} ({})",
+                relation.id, relation.description
+            ));
         }
     }
 }

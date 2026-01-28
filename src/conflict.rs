@@ -43,10 +43,7 @@ pub fn is_conflict_marker_line(line: &str) -> bool {
 /// Find all files in a commit's tree that contain conflict markers.
 ///
 /// Walks the tree and checks each blob for conflict markers.
-pub fn find_conflict_markers_in_commit(
-    repo: &Repository,
-    commit_id: Oid,
-) -> Result<Vec<String>> {
+pub fn find_conflict_markers_in_commit(repo: &Repository, commit_id: Oid) -> Result<Vec<String>> {
     let commit = repo.find_commit(commit_id)?;
     let tree = commit.tree()?;
     find_conflict_markers_in_tree(repo, &tree, "")
@@ -271,13 +268,12 @@ impl ConflictStore {
 ///
 /// This is used to create a commit that contains the conflict state.
 /// The resulting tree will have files with conflict markers embedded.
-pub fn write_conflict_tree(
-    repo: &Repository,
-    index: &mut git2::Index,
-) -> Result<Oid> {
+pub fn write_conflict_tree(repo: &Repository, index: &mut git2::Index) -> Result<Oid> {
     // Get all conflicting entries
-    let conflicts: Vec<_> = index.conflicts()?.collect::<std::result::Result<Vec<_>, _>>()?;
-    
+    let conflicts: Vec<_> = index
+        .conflicts()?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
     if conflicts.is_empty() {
         // No conflicts, just write the index as-is
         return Ok(index.write_tree_to(repo)?);
@@ -298,7 +294,7 @@ pub fn write_conflict_tree(
 
         // Remove conflict entries and add the merged blob
         index.remove_path(std::path::Path::new(&path))?;
-        
+
         // Determine file mode from available entries
         let mode = conflict
             .our
@@ -327,10 +323,7 @@ pub fn write_conflict_tree(
 }
 
 /// Create file content with conflict markers from a conflict entry.
-fn create_conflict_content(
-    repo: &Repository,
-    conflict: &git2::IndexConflict,
-) -> Result<String> {
+fn create_conflict_content(repo: &Repository, conflict: &git2::IndexConflict) -> Result<String> {
     let ours_content = if let Some(ref entry) = conflict.our {
         let blob = repo.find_blob(entry.id)?;
         String::from_utf8_lossy(blob.content()).to_string()
@@ -436,10 +429,10 @@ mod tests {
     #[test]
     fn test_conflict_store() {
         let mut store = ConflictStore::new();
-        
+
         store.add(ConflictRecord::new("commit1", vec!["file1.rs".to_string()]));
         store.add(ConflictRecord::new("commit2", vec!["file2.rs".to_string()]));
-        
+
         assert_eq!(store.all().len(), 2);
         assert_eq!(store.unresolved_count(), 2);
 
@@ -452,18 +445,15 @@ mod tests {
     #[test]
     fn test_conflict_store_find_by_hoist() {
         let mut store = ConflictStore::new();
-        
+
         store.add(
-            ConflictRecord::new("commit1", vec!["file1.rs".to_string()])
-                .with_hoist_id("hoist-1")
+            ConflictRecord::new("commit1", vec!["file1.rs".to_string()]).with_hoist_id("hoist-1"),
         );
         store.add(
-            ConflictRecord::new("commit2", vec!["file2.rs".to_string()])
-                .with_hoist_id("hoist-1")
+            ConflictRecord::new("commit2", vec!["file2.rs".to_string()]).with_hoist_id("hoist-1"),
         );
         store.add(
-            ConflictRecord::new("commit3", vec!["file3.rs".to_string()])
-                .with_hoist_id("hoist-2")
+            ConflictRecord::new("commit3", vec!["file3.rs".to_string()]).with_hoist_id("hoist-2"),
         );
 
         let hoist1_conflicts: Vec<_> = store.find_by_hoist("hoist-1").collect();

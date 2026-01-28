@@ -64,31 +64,32 @@ struct LeaseReleaseEventData {
 
 pub fn run(options: ReleaseOptions) -> Result<()> {
     // Discover repository
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
-    
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
-    
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
+
     let workdir = repository
         .workdir()
         .ok_or_else(|| Error::NotARepo(start.clone()))?
         .to_path_buf();
-    
+
     // Resolve common dir for worktree support
     let common_dir = resolve_common_dir(&repository)?;
-    
+
     // Initialize storage
     let storage = Storage::new(workdir.clone(), common_dir.clone(), workdir.clone());
-    
+
     // Ensure sv is initialized
     if !storage.is_initialized() {
         return Err(Error::OperationFailed(
-            "sv not initialized. Run 'sv init' first.".to_string()
+            "sv not initialized. Run 'sv init' first.".to_string(),
         ));
     }
-    
+
     // Load config
     let config = Config::load_from_repo(&workdir);
 
@@ -97,40 +98,43 @@ pub fn run(options: ReleaseOptions) -> Result<()> {
         .as_ref()
         .map(|dest| dest.open())
         .transpose()?;
-    
+
     // Determine current actor
-    let current_actor = options.actor
-        .or_else(|| storage.read_actor())
-        .or_else(|| {
-            if config.actor.default != "unknown" {
-                Some(config.actor.default.clone())
-            } else {
-                None
-            }
-        });
-    
+    let current_actor = options.actor.or_else(|| storage.read_actor()).or_else(|| {
+        if config.actor.default != "unknown" {
+            Some(config.actor.default.clone())
+        } else {
+            None
+        }
+    });
+
     // Acquire lock on leases file
     let leases_file = storage.leases_file();
     let lock_path = leases_file.with_extension("lock");
     let _lock = FileLock::acquire(&lock_path, DEFAULT_LOCK_TIMEOUT_MS)?;
-    
+
     // Load existing leases
     let mut leases: Vec<Lease> = storage.read_jsonl(&leases_file)?;
     let mut store = LeaseStore::from_vec(leases.clone());
-    
+
     // Expire stale leases first
     store.expire_stale();
-    
+
     let mut released = Vec::new();
     let mut released_details = Vec::new();
     let mut not_found = Vec::new();
     let mut not_owned = Vec::new();
-    
+
     // Process each target
     for target in &options.targets {
         // Try to parse as UUID first
         if let Ok(uuid) = Uuid::parse_str(target) {
-            match find_and_release_by_id(&mut leases, &uuid, current_actor.as_deref(), options.force) {
+            match find_and_release_by_id(
+                &mut leases,
+                &uuid,
+                current_actor.as_deref(),
+                options.force,
+            ) {
                 ReleaseResult::Released(lease) => {
                     released.push(ReleasedLease {
                         id: lease.id.to_string(),
@@ -158,7 +162,7 @@ pub fn run(options: ReleaseOptions) -> Result<()> {
                 current_actor.as_deref(),
                 options.force,
             );
-            
+
             if matching.is_empty() {
                 not_found.push(target.clone());
             } else {
@@ -185,11 +189,11 @@ pub fn run(options: ReleaseOptions) -> Result<()> {
             }
         }
     }
-    
+
     // Write updated leases back
     if !released.is_empty() {
         write_leases(&leases_file, &leases)?;
-        
+
         // Record operation in oplog for undo support
         let oplog = OpLog::for_storage(&storage);
         let pathspecs: Vec<_> = released.iter().map(|l| l.pathspec.clone()).collect();
@@ -224,10 +228,7 @@ pub fn run(options: ReleaseOptions) -> Result<()> {
                     actor: lease.actor.clone(),
                     ttl: lease.ttl.clone(),
                     expires_at: lease.expires_at.to_rfc3339(),
-                    released_at: lease
-                        .status_changed_at
-                        .as_ref()
-                        .map(|ts| ts.to_rfc3339()),
+                    released_at: lease.status_changed_at.as_ref().map(|ts| ts.to_rfc3339()),
                     note: lease.note.clone(),
                 },
             ) {
@@ -243,16 +244,17 @@ pub fn run(options: ReleaseOptions) -> Result<()> {
             }
         }
     }
-    
+
     // Return error if nothing was released and there were targets
     if released.is_empty() && (!not_found.is_empty() || !not_owned.is_empty()) {
         if !not_owned.is_empty() {
             return Err(Error::OperationFailed(
-                "Cannot release lease owned by another actor. Use --force to override."
-                    .to_string(),
+                "Cannot release lease owned by another actor. Use --force to override.".to_string(),
             ));
         }
-        return Err(Error::OperationFailed("No matching leases found.".to_string()));
+        return Err(Error::OperationFailed(
+            "No matching leases found.".to_string(),
+        ));
     }
 
     // Output results
@@ -307,7 +309,7 @@ pub fn run(options: ReleaseOptions) -> Result<()> {
         &report,
         Some(&human),
     )?;
-    
+
     Ok(())
 }
 
@@ -335,12 +337,12 @@ fn find_and_release_by_id(
                     }
                 }
             }
-            
+
             lease.release();
             return ReleaseResult::Released(lease.clone());
         }
     }
-    
+
     ReleaseResult::NotFound
 }
 
@@ -351,21 +353,21 @@ fn find_and_release_by_pathspec(
     force: bool,
 ) -> Vec<ReleaseResult> {
     let mut results = Vec::new();
-    
+
     for lease in leases.iter_mut() {
         if lease.status != LeaseStatus::Active {
             continue;
         }
-        
+
         // Check if pathspec matches
         let matches = lease.pathspec == pathspec
             || lease.matches_path(pathspec)
             || lease.pathspec_overlaps(pathspec);
-        
+
         if !matches {
             continue;
         }
-        
+
         // Check ownership unless force
         if !force {
             if let Some(ref owner) = lease.actor {
@@ -376,39 +378,39 @@ fn find_and_release_by_pathspec(
                     }
                 }
             }
-            
+
             // If current actor is None, only release ownerless leases
             if current_actor.is_none() && lease.actor.is_some() {
                 results.push(ReleaseResult::NotOwned(lease.clone()));
                 continue;
             }
         }
-        
+
         lease.release();
         results.push(ReleaseResult::Released(lease.clone()));
     }
-    
+
     results
 }
 
 fn write_leases(path: &PathBuf, leases: &[Lease]) -> Result<()> {
     use std::fs::File;
     use std::io::Write;
-    
+
     // Write to temp file first
     let temp_path = path.with_extension("tmp");
     let mut file = File::create(&temp_path)?;
-    
+
     for lease in leases {
         let json = serde_json::to_string(lease)?;
         writeln!(file, "{}", json)?;
     }
-    
+
     file.sync_all()?;
-    
+
     // Atomic rename
     std::fs::rename(&temp_path, path)?;
-    
+
     Ok(())
 }
 

@@ -99,10 +99,7 @@ where
     }
 }
 
-pub fn evaluate_selector<F>(
-    expr: &SelectorExpr,
-    ctx: &SelectorContext<F>,
-) -> Vec<SelectorMatch>
+pub fn evaluate_selector<F>(expr: &SelectorExpr, ctx: &SelectorContext<F>) -> Vec<SelectorMatch>
 where
     F: Fn(EntityKind, &SelectorItem, &Predicate) -> bool,
 {
@@ -110,9 +107,7 @@ where
     values.sort_by(|a, b| {
         let rank_a = kind_rank(a.kind);
         let rank_b = kind_rank(b.kind);
-        rank_a
-            .cmp(&rank_b)
-            .then_with(|| a.item.id.cmp(&b.item.id))
+        rank_a.cmp(&rank_b).then_with(|| a.item.id.cmp(&b.item.id))
     });
     values
 }
@@ -198,10 +193,7 @@ where
     out
 }
 
-fn items_for_kind<'a, F>(
-    ctx: &'a SelectorContext<F>,
-    kind: EntityKind,
-) -> &'a [SelectorItem]
+fn items_for_kind<'a, F>(ctx: &'a SelectorContext<F>, kind: EntityKind) -> &'a [SelectorItem]
 where
     F: Fn(EntityKind, &SelectorItem, &Predicate) -> bool,
 {
@@ -565,10 +557,7 @@ impl<'a> Parser<'a> {
         if std::mem::discriminant(&token.kind) == std::mem::discriminant(&kind) {
             Ok(())
         } else {
-            Err(self.error_here(&format!(
-                "Expected {:?}",
-                kind_discriminant_name(&kind)
-            )))
+            Err(self.error_here(&format!("Expected {:?}", kind_discriminant_name(&kind))))
         }
     }
 

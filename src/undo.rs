@@ -245,9 +245,9 @@ mod tests {
         let mut index = repo.index().unwrap();
         let tree_id = index.write_tree().unwrap();
         let tree = repo.find_tree(tree_id).unwrap();
-        let sig = repo.signature().unwrap_or_else(|_| {
-            git2::Signature::now("sv-test", "sv-test@example.com").unwrap()
-        });
+        let sig = repo
+            .signature()
+            .unwrap_or_else(|_| git2::Signature::now("sv-test", "sv-test@example.com").unwrap());
 
         let parents = repo
             .head()

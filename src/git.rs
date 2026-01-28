@@ -57,9 +57,7 @@ pub fn open_repo(start: Option<&Path>) -> Result<Repository> {
 pub fn workdir(repo: &Repository) -> Result<PathBuf> {
     repo.workdir()
         .map(|path| path.to_path_buf())
-        .ok_or_else(|| {
-            Error::OperationFailed("repository has no working directory".to_string())
-        })
+        .ok_or_else(|| Error::OperationFailed("repository has no working directory".to_string()))
 }
 
 /// Return information about HEAD (ref name, shorthand, and commit).
@@ -137,7 +135,8 @@ pub fn list_worktrees(repo: &Repository) -> Result<Vec<WorktreeInfo>> {
                 let path = wt.path().to_path_buf();
                 // is_locked returns Result<WorktreeLockStatus, Error>
                 // WorktreeLockStatus is Unlocked or Locked(Option<String>)
-                let is_locked = wt.is_locked()
+                let is_locked = wt
+                    .is_locked()
                     .map(|status| !matches!(status, git2::WorktreeLockStatus::Unlocked))
                     .unwrap_or(false);
                 let is_prunable = wt.is_prunable(None).unwrap_or(false);
@@ -199,7 +198,9 @@ pub fn create_worktree(
     let base_commit = repo
         .revparse_single(base_ref)?
         .peel_to_commit()
-        .map_err(|e| Error::OperationFailed(format!("Cannot resolve '{}' to commit: {}", base_ref, e)))?;
+        .map_err(|e| {
+            Error::OperationFailed(format!("Cannot resolve '{}' to commit: {}", base_ref, e))
+        })?;
 
     // Check if branch already exists
     if repo.find_branch(&branch, BranchType::Local).is_ok() {
@@ -211,7 +212,8 @@ pub fn create_worktree(
 
     // Check if worktree path already exists and is not empty
     if path.exists() {
-        let is_empty = path.read_dir()
+        let is_empty = path
+            .read_dir()
             .map(|mut d| d.next().is_none())
             .unwrap_or(false);
         if !is_empty {
@@ -246,14 +248,14 @@ pub fn create_worktree(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        
+
         // Clean up: delete the branch if git worktree add created it but failed
         // This can happen if worktree add partially succeeded before failing
         if let Ok(mut branch_ref) = repo.find_branch(&branch, BranchType::Local) {
             // Only delete if it's not checked out anywhere
             let _ = branch_ref.delete();
         }
-        
+
         return Err(Error::OperationFailed(format!(
             "Failed to create workspace (worktree): {}",
             stderr.trim()
@@ -274,14 +276,15 @@ pub fn create_worktree(
 /// The path that was removed.
 pub fn remove_worktree(repo: &Repository, name: &str, force: bool) -> Result<PathBuf> {
     // Find the worktree
-    let wt = repo.find_worktree(name).map_err(|_| {
-        Error::WorkspaceNotFound(name.to_string())
-    })?;
+    let wt = repo
+        .find_worktree(name)
+        .map_err(|_| Error::WorkspaceNotFound(name.to_string()))?;
 
     let path = wt.path().to_path_buf();
 
     // Check if it's locked
-    let is_locked = wt.is_locked()
+    let is_locked = wt
+        .is_locked()
         .map(|status| !matches!(status, git2::WorktreeLockStatus::Unlocked))
         .unwrap_or(false);
     if is_locked && !force {
@@ -332,7 +335,7 @@ pub fn remove_worktree(repo: &Repository, name: &str, force: bool) -> Result<Pat
 /// Check if a repository has uncommitted changes.
 pub fn has_uncommitted_changes(repo: &Repository) -> Result<bool> {
     let statuses = repo.statuses(None)?;
-    
+
     for entry in statuses.iter() {
         let status = entry.status();
         // Check for any changes that aren't ignored
@@ -340,7 +343,7 @@ pub fn has_uncommitted_changes(repo: &Repository) -> Result<bool> {
             return Ok(true);
         }
     }
-    
+
     Ok(false)
 }
 
@@ -380,7 +383,7 @@ pub fn prune_worktrees(repo: &Repository) -> Result<Vec<String>> {
 pub fn common_dir(repo: &Repository) -> PathBuf {
     let git_dir = repo.path();
     let commondir_file = git_dir.join("commondir");
-    
+
     if commondir_file.exists() {
         if let Ok(content) = std::fs::read_to_string(&commondir_file) {
             let rel = content.trim();
@@ -389,7 +392,7 @@ pub fn common_dir(repo: &Repository) -> PathBuf {
             }
         }
     }
-    
+
     git_dir.to_path_buf()
 }
 
@@ -446,7 +449,9 @@ pub fn diff_files(
     let from_tree = repo
         .revparse_single(from_ref)?
         .peel_to_tree()
-        .map_err(|e| Error::OperationFailed(format!("Cannot resolve '{}' to tree: {}", from_ref, e)))?;
+        .map_err(|e| {
+            Error::OperationFailed(format!("Cannot resolve '{}' to tree: {}", from_ref, e))
+        })?;
 
     // If to_ref is None, diff against the working tree (including staged changes)
     // Otherwise, diff between two tree references
@@ -455,7 +460,9 @@ pub fn diff_files(
             let to_tree = repo
                 .revparse_single(ref_name)?
                 .peel_to_tree()
-                .map_err(|e| Error::OperationFailed(format!("Cannot resolve '{}' to tree: {}", ref_name, e)))?;
+                .map_err(|e| {
+                    Error::OperationFailed(format!("Cannot resolve '{}' to tree: {}", ref_name, e))
+                })?;
             repo.diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None)?
         }
         None => {
@@ -479,11 +486,7 @@ pub fn working_tree_changes(repo: &Repository) -> Result<Vec<FileChange>> {
 /// Get the list of staged files (files in the index that differ from HEAD).
 pub fn staged_files(repo: &Repository) -> Result<Vec<FileChange>> {
     let head_tree = repo.head()?.peel_to_tree()?;
-    let diff = repo.diff_tree_to_index(
-        Some(&head_tree),
-        Some(&repo.index()?),
-        None,
-    )?;
+    let diff = repo.diff_tree_to_index(Some(&head_tree), Some(&repo.index()?), None)?;
     parse_diff_to_changes(&diff)
 }
 
@@ -551,17 +554,16 @@ pub fn staged_paths(repo: &Repository) -> Result<Vec<PathBuf>> {
 /// This checks both staged and unstaged changes.
 pub fn has_changes_in_paths(repo: &Repository, paths: &[PathBuf]) -> Result<bool> {
     let changes = working_tree_changes(repo)?;
-    
+
     for change in changes {
-        if paths.iter().any(|p| {
-            change.path == *p || 
-            change.path.starts_with(p) ||
-            p.starts_with(&change.path)
-        }) {
+        if paths
+            .iter()
+            .any(|p| change.path == *p || change.path.starts_with(p) || p.starts_with(&change.path))
+        {
             return Ok(true);
         }
     }
-    
+
     Ok(false)
 }
 
@@ -573,13 +575,10 @@ pub fn file_statuses(repo: &Repository) -> Result<Vec<FileChange>> {
     let mut changes = Vec::new();
 
     for entry in statuses.iter() {
-        let path = entry
-            .path()
-            .map(|p| PathBuf::from(p))
-            .unwrap_or_default();
-        
+        let path = entry.path().map(|p| PathBuf::from(p)).unwrap_or_default();
+
         let status = entry.status();
-        
+
         // Determine the primary status
         let file_status = if status.is_conflicted() {
             FileStatus::Conflicted
@@ -667,9 +666,7 @@ pub fn create_commit(
         // For amend, we use the parents of HEAD
         let head = repo.head()?;
         let head_commit = head.peel_to_commit()?;
-        head_commit
-            .parents()
-            .collect::<Vec<_>>()
+        head_commit.parents().collect::<Vec<_>>()
     } else {
         // For a normal commit, HEAD is the parent (if it exists)
         match repo.head() {
@@ -708,9 +705,9 @@ pub fn create_commit(
 
         head_commit.amend(
             Some("HEAD"),
-            None, // Keep author
+            None,             // Keep author
             Some(&signature), // Update committer
-            None, // Keep encoding
+            None,             // Keep encoding
             Some(message),
             Some(&tree),
         )?
@@ -766,10 +763,7 @@ pub fn commits_ahead(repo: &Repository, base_ref: &str, branch_ref: &str) -> Res
     let mut revwalk = repo.revwalk()?;
     let range = format!("{base_ref}..{branch_ref}");
     revwalk.push_range(&range).map_err(|err| {
-        Error::OperationFailed(format!(
-            "unable to walk range '{}': {}",
-            range, err
-        ))
+        Error::OperationFailed(format!("unable to walk range '{}': {}", range, err))
     })?;
     revwalk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
 
@@ -818,9 +812,10 @@ pub fn patch_id(repo: &Repository, oid: Oid) -> Result<String> {
         .spawn()?;
 
     {
-        let mut stdin = child.stdin.take().ok_or_else(|| {
-            Error::OperationFailed("git patch-id stdin unavailable".to_string())
-        })?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| Error::OperationFailed("git patch-id stdin unavailable".to_string()))?;
         stdin.write_all(&show.stdout)?;
     }
 
@@ -941,9 +936,7 @@ fn parse_trailer_line(line: &str) -> Option<Trailer> {
 
 /// Find a trailer by key (case-insensitive).
 pub fn find_trailer<'a>(trailers: &'a [Trailer], key: &str) -> Option<&'a Trailer> {
-    trailers
-        .iter()
-        .find(|t| t.key.eq_ignore_ascii_case(key))
+    trailers.iter().find(|t| t.key.eq_ignore_ascii_case(key))
 }
 
 /// Add or update a trailer in a commit message.
@@ -1052,12 +1045,12 @@ fn glob_match(pattern: &str, path: &str) -> bool {
         if parts.len() == 2 {
             let prefix = parts[0].trim_end_matches('/');
             let suffix = parts[1].trim_start_matches('/');
-            
+
             // Check prefix matches
             if !prefix.is_empty() && !path.starts_with(prefix) {
                 return false;
             }
-            
+
             // Get the part of path after prefix
             let remaining = if prefix.is_empty() {
                 path
@@ -1066,23 +1059,23 @@ fn glob_match(pattern: &str, path: &str) -> bool {
                     .and_then(|p| p.strip_prefix('/'))
                     .unwrap_or(path)
             };
-            
+
             // Check suffix (which may contain wildcards like *.rs)
             if suffix.is_empty() {
                 return true;
             }
-            
+
             // Handle suffix with wildcards
             if suffix.starts_with('*') {
                 // *.rs pattern - match extension
                 let ext = suffix.trim_start_matches('*');
                 return path.ends_with(ext);
             }
-            
+
             return remaining.ends_with(suffix) || path.ends_with(suffix);
         }
     }
-    
+
     if pattern.ends_with("/*") {
         // dir/* matches direct children
         let dir = pattern.trim_end_matches("/*");
@@ -1093,19 +1086,19 @@ fn glob_match(pattern: &str, path: &str) -> bool {
         }
         return false;
     }
-    
+
     if pattern.ends_with('*') {
         // prefix* matches paths starting with prefix
         let prefix = pattern.trim_end_matches('*');
         return path.starts_with(prefix);
     }
-    
+
     if pattern.starts_with('*') {
         // *suffix matches paths ending with suffix
         let suffix = pattern.trim_start_matches('*');
         return path.ends_with(suffix);
     }
-    
+
     // Exact match
     pattern == path
 }
@@ -1113,19 +1106,19 @@ fn glob_match(pattern: &str, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::process::Command;
+    use tempfile::TempDir;
 
     fn init_test_repo() -> (TempDir, Repository) {
         let temp = TempDir::new().unwrap();
-        
+
         // Initialize repo with git command
         Command::new("git")
             .args(["init"])
             .current_dir(temp.path())
             .output()
             .unwrap();
-        
+
         // Configure git user for commits
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
@@ -1137,7 +1130,7 @@ mod tests {
             .current_dir(temp.path())
             .output()
             .unwrap();
-        
+
         // Create initial commit
         std::fs::write(temp.path().join("README.md"), "# Test\n").unwrap();
         Command::new("git")
@@ -1150,7 +1143,7 @@ mod tests {
             .current_dir(temp.path())
             .output()
             .unwrap();
-        
+
         let repo = Repository::open(temp.path()).unwrap();
         (temp, repo)
     }
@@ -1158,9 +1151,9 @@ mod tests {
     #[test]
     fn test_list_worktrees_main_only() {
         let (_temp, repo) = init_test_repo();
-        
+
         let worktrees = list_worktrees(&repo).unwrap();
-        
+
         assert_eq!(worktrees.len(), 1);
         assert!(worktrees[0].is_main);
         assert_eq!(worktrees[0].name, "main");
@@ -1171,18 +1164,18 @@ mod tests {
         let (temp, repo) = init_test_repo();
 
         let wt_path = temp.path().join(".sv").join("worktrees").join("test-wt");
-        
+
         // Create worktree
         create_worktree(&repo, "test-wt", &wt_path, "HEAD", None).unwrap();
-        
+
         // Verify it exists
         assert!(wt_path.exists());
-        
+
         // List worktrees
         let worktrees = list_worktrees(&repo).unwrap();
-        
+
         assert_eq!(worktrees.len(), 2);
-        
+
         let linked = worktrees.iter().find(|w| !w.is_main).unwrap();
         assert_eq!(linked.name, "test-wt");
         assert_eq!(linked.branch, Some("sv/ws/test-wt".to_string()));
@@ -1191,19 +1184,19 @@ mod tests {
     #[test]
     fn test_remove_worktree() {
         let (temp, repo) = init_test_repo();
-        
+
         let wt_path = temp.path().join(".sv").join("worktrees").join("to-remove");
-        
+
         // Create worktree
         create_worktree(&repo, "to-remove", &wt_path, "HEAD", None).unwrap();
         assert!(wt_path.exists());
-        
+
         // Remove worktree
         remove_worktree(&repo, "to-remove", false).unwrap();
-        
+
         // Verify it's gone
         assert!(!wt_path.exists());
-        
+
         // Verify not in list
         let worktrees = list_worktrees(&repo).unwrap();
         assert_eq!(worktrees.len(), 1);
@@ -1213,7 +1206,7 @@ mod tests {
     #[test]
     fn test_common_dir() {
         let (_temp, repo) = init_test_repo();
-        
+
         let cdir = common_dir(&repo);
         assert!(cdir.exists());
         assert!(cdir.ends_with(".git"));
@@ -1222,7 +1215,7 @@ mod tests {
     #[test]
     fn test_staged_files() {
         let (temp, repo) = init_test_repo();
-        
+
         // Create and stage a new file
         std::fs::write(temp.path().join("new_file.txt"), "content").unwrap();
         Command::new("git")
@@ -1230,9 +1223,9 @@ mod tests {
             .current_dir(temp.path())
             .output()
             .unwrap();
-        
+
         let staged = staged_files(&repo).unwrap();
-        
+
         assert_eq!(staged.len(), 1);
         assert_eq!(staged[0].path, PathBuf::from("new_file.txt"));
         assert_eq!(staged[0].status, FileStatus::Added);
@@ -1241,12 +1234,12 @@ mod tests {
     #[test]
     fn test_working_tree_changes() {
         let (temp, repo) = init_test_repo();
-        
+
         // Modify an existing file (not staged)
         std::fs::write(temp.path().join("README.md"), "# Modified\n").unwrap();
-        
+
         let changes = working_tree_changes(&repo).unwrap();
-        
+
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].path, PathBuf::from("README.md"));
         assert_eq!(changes[0].status, FileStatus::Modified);
@@ -1255,10 +1248,10 @@ mod tests {
     #[test]
     fn test_diff_files_between_commits() {
         let (temp, repo) = init_test_repo();
-        
+
         // Get first commit
         let first_commit = repo.head().unwrap().target().unwrap().to_string();
-        
+
         // Create a new file and commit
         std::fs::write(temp.path().join("new_file.txt"), "content").unwrap();
         Command::new("git")
@@ -1271,10 +1264,10 @@ mod tests {
             .current_dir(temp.path())
             .output()
             .unwrap();
-        
+
         // Diff between first commit and HEAD
         let changes = diff_files(&repo, &first_commit, Some("HEAD")).unwrap();
-        
+
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].path, PathBuf::from("new_file.txt"));
         assert_eq!(changes[0].status, FileStatus::Added);
@@ -1313,13 +1306,15 @@ mod tests {
     #[test]
     fn test_file_statuses_untracked() {
         let (temp, repo) = init_test_repo();
-        
+
         // Create an untracked file
         std::fs::write(temp.path().join("untracked.txt"), "content").unwrap();
-        
+
         let statuses = file_statuses(&repo).unwrap();
-        
-        let untracked = statuses.iter().find(|s| s.path == PathBuf::from("untracked.txt"));
+
+        let untracked = statuses
+            .iter()
+            .find(|s| s.path == PathBuf::from("untracked.txt"));
         assert!(untracked.is_some());
         assert_eq!(untracked.unwrap().status, FileStatus::Untracked);
     }
@@ -1330,14 +1325,14 @@ mod tests {
         assert!(glob_match("src/**/*.rs", "src/cli/mod.rs"));
         assert!(glob_match("src/**", "src/cli/mod.rs"));
         assert!(!glob_match("test/**", "src/cli/mod.rs"));
-        
+
         // Test * suffix
         assert!(glob_match("*.rs", "mod.rs"));
         assert!(!glob_match("*.rs", "mod.txt"));
-        
+
         // Test * prefix
         assert!(glob_match("src/*", "src/mod.rs"));
-        
+
         // Test exact match
         assert!(glob_match("src/mod.rs", "src/mod.rs"));
         assert!(!glob_match("src/mod.rs", "src/lib.rs"));
@@ -1362,22 +1357,16 @@ mod tests {
                 old_path: None,
             },
         ];
-        
+
         // Filter to only src/**
-        let filtered = filter_changes_by_pathspec(
-            changes.clone(),
-            &["src/**".to_string()],
-        );
-        
+        let filtered = filter_changes_by_pathspec(changes.clone(), &["src/**".to_string()]);
+
         assert_eq!(filtered.len(), 2);
         assert!(filtered.iter().all(|c| c.path.starts_with("src")));
-        
+
         // Filter to specific file
-        let filtered2 = filter_changes_by_pathspec(
-            changes,
-            &["src/main.rs".to_string()],
-        );
-        
+        let filtered2 = filter_changes_by_pathspec(changes, &["src/main.rs".to_string()]);
+
         assert_eq!(filtered2.len(), 1);
         assert_eq!(filtered2[0].path, PathBuf::from("src/main.rs"));
     }
@@ -1462,12 +1451,7 @@ mod tests {
     #[test]
     fn test_commits_ahead() {
         let (temp, repo) = init_test_repo();
-        let base_branch = repo
-            .head()
-            .unwrap()
-            .shorthand()
-            .unwrap()
-            .to_string();
+        let base_branch = repo.head().unwrap().shorthand().unwrap().to_string();
 
         Command::new("git")
             .args(["checkout", "-b", "feature"])
@@ -1523,7 +1507,8 @@ mod tests {
 
     #[test]
     fn test_parse_trailers_multiple() {
-        let msg = "Fix bug\n\nSome description\n\nChange-Id: abc\nSigned-off-by: Test <test@test.com>\n";
+        let msg =
+            "Fix bug\n\nSome description\n\nChange-Id: abc\nSigned-off-by: Test <test@test.com>\n";
         let trailers = parse_trailers(msg);
 
         assert_eq!(trailers.len(), 2);

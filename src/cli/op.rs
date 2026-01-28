@@ -109,9 +109,7 @@ fn parse_timestamp(label: &str, value: Option<&str>) -> Result<Option<DateTime<U
         return Ok(None);
     };
     let parsed = DateTime::parse_from_rfc3339(value).map_err(|err| {
-        Error::InvalidArgument(format!(
-            "invalid {label} timestamp '{value}': {err}"
-        ))
+        Error::InvalidArgument(format!("invalid {label} timestamp '{value}': {err}"))
     })?;
     Ok(Some(parsed.with_timezone(&Utc)))
 }

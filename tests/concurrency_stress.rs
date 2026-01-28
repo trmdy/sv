@@ -108,7 +108,12 @@ fn workspace_registry_handles_parallel_updates() -> Result<(), Box<dyn std::erro
         let repo_path = repo_path.clone();
         let bin = Arc::clone(&bin);
         handles.push(thread::spawn(move || {
-            let args = vec!["ws".to_string(), "here".to_string(), "--name".to_string(), name];
+            let args = vec![
+                "ws".to_string(),
+                "here".to_string(),
+                "--name".to_string(),
+                name,
+            ];
             let status = Command::new(bin.as_ref())
                 .current_dir(&repo_path)
                 .args(args)
@@ -154,7 +159,12 @@ fn oplog_append_under_contention() -> Result<(), Box<dyn std::error::Error>> {
         let repo_path = repo_path.clone();
         let bin = Arc::clone(&bin);
         handles.push(thread::spawn(move || {
-            let args = vec!["ws".to_string(), "here".to_string(), "--name".to_string(), name];
+            let args = vec![
+                "ws".to_string(),
+                "here".to_string(),
+                "--name".to_string(),
+                name,
+            ];
             Command::new(bin.as_ref())
                 .current_dir(&repo_path)
                 .args(args)
@@ -205,7 +215,9 @@ fn lease_release_is_safe_under_parallel_calls() -> Result<(), Box<dyn std::error
         let pathspec = format!("src/lease-{idx}.rs");
         let repo_path = repo_path.clone();
         let args = vec!["release".to_string(), pathspec];
-        handles.push(thread::spawn(move || spawn_sv(&repo_path, &args, Some("alice"))));
+        handles.push(thread::spawn(move || {
+            spawn_sv(&repo_path, &args, Some("alice"))
+        }));
     }
 
     for handle in handles {
@@ -244,7 +256,9 @@ fn lease_creation_is_safe_under_parallel_calls() -> Result<(), Box<dyn std::erro
             "--intent".to_string(),
             "refactor".to_string(),
         ];
-        handles.push(thread::spawn(move || spawn_sv(&repo_path, &args, Some("alice"))));
+        handles.push(thread::spawn(move || {
+            spawn_sv(&repo_path, &args, Some("alice"))
+        }));
     }
 
     for handle in handles {

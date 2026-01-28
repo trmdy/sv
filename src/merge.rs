@@ -52,13 +52,7 @@ pub enum MergeConflictKind {
 pub fn summarize_conflicts(conflicts: &[MergeConflict]) -> Vec<String> {
     conflicts
         .iter()
-        .map(|conflict| {
-            format!(
-                "{} ({})",
-                conflict.path,
-                conflict_kind_label(conflict.kind)
-            )
-        })
+        .map(|conflict| format!("{} ({})", conflict.path, conflict_kind_label(conflict.kind)))
         .collect()
 }
 
@@ -83,12 +77,7 @@ pub fn simulate_merge(
     let mut options = MergeOptions::new();
     options.find_renames(true);
 
-    let index = repo.merge_trees(
-        &base_tree,
-        &ours_tree,
-        &theirs_tree,
-        Some(&mut options),
-    )?;
+    let index = repo.merge_trees(&base_tree, &ours_tree, &theirs_tree, Some(&mut options))?;
 
     let conflicts = collect_conflicts(&index)?;
 
@@ -165,7 +154,9 @@ fn classify_conflict(
     ours: &Option<String>,
     theirs: &Option<String>,
 ) -> MergeConflictKind {
-    let rename = paths_differ(ancestor, ours) || paths_differ(ancestor, theirs) || paths_differ(ours, theirs);
+    let rename = paths_differ(ancestor, ours)
+        || paths_differ(ancestor, theirs)
+        || paths_differ(ours, theirs);
 
     match (ancestor.is_some(), ours.is_some(), theirs.is_some()) {
         (false, true, true) => {

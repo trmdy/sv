@@ -57,9 +57,7 @@ pub fn emit_success<T: Serialize>(
 ) -> Result<()> {
     if options.json {
         let warnings = human.map(|h| h.warnings.clone()).unwrap_or_default();
-        let next_steps = human
-            .map(|h| h.next_steps.clone())
-            .unwrap_or_default();
+        let next_steps = human.map(|h| h.next_steps.clone()).unwrap_or_default();
 
         #[derive(Serialize)]
         struct Envelope<'a, T: Serialize> {
@@ -177,7 +175,10 @@ pub fn infer_command_name_from_args() -> String {
         None => return "sv".to_string(),
     };
 
-    if matches!(command.as_str(), "ws" | "lease" | "protect" | "op" | "actor" | "task") {
+    if matches!(
+        command.as_str(),
+        "ws" | "lease" | "protect" | "op" | "actor" | "task"
+    ) {
         while let Some(arg) = args.next() {
             if arg.starts_with('-') {
                 continue;
@@ -207,10 +208,9 @@ fn error_next_steps(err: &crate::error::Error) -> Vec<String> {
 
     match err {
         Error::ProtectedPath(_) => vec!["sv protect status".to_string()],
-        Error::LeaseConflict { path, .. } => vec![format!(
-            "sv lease who {}",
-            path.to_string_lossy()
-        )],
+        Error::LeaseConflict { path, .. } => {
+            vec![format!("sv lease who {}", path.to_string_lossy())]
+        }
         Error::NoteRequired(_) => vec!["sv take <path> --note \"...\"".to_string()],
         Error::RepoNotFound(_) | Error::NotARepo(_) => vec!["sv init".to_string()],
         Error::InvalidConfig(_) => vec!["fix .sv.toml then retry".to_string()],

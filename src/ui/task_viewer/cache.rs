@@ -39,12 +39,16 @@ mod tests {
     #[test]
     fn invalidate_on_resize_clears_entries() {
         let mut cache = RenderCache::new();
-        cache.list_rows.insert(("sv-1".to_string(), 10, false), "row".to_string());
+        cache
+            .list_rows
+            .insert(("sv-1".to_string(), 10, false), "row".to_string());
         cache.detail.insert(
             ("sv-1".to_string(), 40),
             vec![ratatui::text::Line::from("detail")],
         );
-        cache.markdown.insert(("sv-1".to_string(), 40), vec!["md".to_string()]);
+        cache
+            .markdown
+            .insert(("sv-1".to_string(), 40), vec!["md".to_string()]);
         cache.invalidate_on_resize();
         assert!(cache.list_rows.is_empty());
         assert!(cache.detail.is_empty());

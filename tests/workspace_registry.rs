@@ -105,10 +105,7 @@ fn update_workspace_mutates_fields() {
         .unwrap();
 
     let updated = storage.find_workspace("ws2").unwrap().unwrap();
-    assert_eq!(
-        updated.last_active.as_deref(),
-        Some("2024-02-01T00:00:00Z")
-    );
+    assert_eq!(updated.last_active.as_deref(), Some("2024-02-01T00:00:00Z"));
 }
 
 #[test]

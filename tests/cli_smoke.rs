@@ -13,16 +13,7 @@ fn sv_help_works() {
 #[test]
 fn subcommand_help_works() {
     let subcommands = [
-        "ws",
-        "lease",
-        "protect",
-        "commit",
-        "risk",
-        "op",
-        "undo",
-        "actor",
-        "init",
-        "status",
+        "ws", "lease", "protect", "commit", "risk", "op", "undo", "actor", "init", "status",
     ];
 
     for cmd in subcommands {

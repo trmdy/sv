@@ -51,54 +51,53 @@ struct LsReport {
 /// Run the lease ls command
 pub fn run_ls(options: LsOptions) -> Result<()> {
     // Discover repository
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
-    
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
-    
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
+
     let workdir = repository
         .workdir()
         .ok_or_else(|| Error::NotARepo(start.clone()))?
         .to_path_buf();
-    
+
     // Resolve common dir for worktree support
     let common_dir = resolve_common_dir(&repository)?;
-    
+
     // Initialize storage
     let storage = Storage::new(workdir.clone(), common_dir.clone(), workdir.clone());
-    
+
     // Check if sv is initialized
     if !storage.is_initialized() {
         return Err(Error::OperationFailed(
-            "sv not initialized. Run 'sv init' first.".to_string()
+            "sv not initialized. Run 'sv init' first.".to_string(),
         ));
     }
-    
+
     // Load config
     let config = Config::load_from_repo(&workdir);
 
     // Load existing leases
     let existing_leases: Vec<Lease> = storage.read_jsonl(&storage.leases_file())?;
     let mut store = LeaseStore::from_vec(existing_leases);
-    
+
     // Expire stale leases (updates status but keeps them in store)
     store.expire_stale();
     let grace = parse_duration(&config.leases.expiration_grace)?;
     let _expired = store.cleanup_expired(grace);
-    
+
     // Get all leases and filter
     let total = store.all().len();
     let mut leases: Vec<&Lease> = store.active().collect();
-    
+
     // Filter by actor if specified
     if let Some(ref actor_filter) = options.actor {
-        leases.retain(|l| {
-            l.actor.as_ref().map(|a| a == actor_filter).unwrap_or(false)
-        });
+        leases.retain(|l| l.actor.as_ref().map(|a| a == actor_filter).unwrap_or(false));
     }
-    
+
     // TODO: Apply selector filter when selector language is implemented
     if options.selector.is_some() {
         // For now, selector is a stub - just log it
@@ -106,9 +105,9 @@ pub fn run_ls(options: LsOptions) -> Result<()> {
             eprintln!("Note: selector filtering not yet implemented");
         }
     }
-    
+
     let active_count = leases.len();
-    
+
     // Convert to display format
     let entries: Vec<LeaseEntry> = leases
         .iter()
@@ -125,14 +124,14 @@ pub fn run_ls(options: LsOptions) -> Result<()> {
             created_at: l.created_at.to_rfc3339(),
         })
         .collect();
-    
+
     // Output results
     let report = LsReport {
         leases: entries,
         total,
         active: active_count,
     };
-    
+
     if options.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else if !options.quiet {
@@ -146,7 +145,7 @@ pub fn run_ls(options: LsOptions) -> Result<()> {
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -168,46 +167,47 @@ struct WhoReport {
 /// Run the lease who command
 pub fn run_who(options: WhoOptions) -> Result<()> {
     // Discover repository
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
-    
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
-    
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
+
     let workdir = repository
         .workdir()
         .ok_or_else(|| Error::NotARepo(start.clone()))?
         .to_path_buf();
-    
+
     // Resolve common dir for worktree support
     let common_dir = resolve_common_dir(&repository)?;
-    
+
     // Initialize storage
     let storage = Storage::new(workdir.clone(), common_dir.clone(), workdir.clone());
-    
+
     // Check if sv is initialized
     if !storage.is_initialized() {
         return Err(Error::OperationFailed(
-            "sv not initialized. Run 'sv init' first.".to_string()
+            "sv not initialized. Run 'sv init' first.".to_string(),
         ));
     }
-    
+
     // Load config
     let config = Config::load_from_repo(&workdir);
 
     // Load existing leases
     let existing_leases: Vec<Lease> = storage.read_jsonl(&storage.leases_file())?;
     let mut store = LeaseStore::from_vec(existing_leases);
-    
+
     // Expire stale leases
     store.expire_stale();
     let grace = parse_duration(&config.leases.expiration_grace)?;
     let _expired = store.cleanup_expired(grace);
-    
+
     // Find leases overlapping with the given path
     let leases: Vec<&Lease> = store.overlapping_path(&options.path).collect();
-    
+
     // Convert to display format
     let entries: Vec<LeaseEntry> = leases
         .iter()
@@ -224,13 +224,13 @@ pub fn run_who(options: WhoOptions) -> Result<()> {
             created_at: l.created_at.to_rfc3339(),
         })
         .collect();
-    
+
     // Output results
     let report = WhoReport {
         path: options.path.clone(),
         leases: entries,
     };
-    
+
     if options.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else if !options.quiet {
@@ -244,7 +244,7 @@ pub fn run_who(options: WhoOptions) -> Result<()> {
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -283,7 +283,7 @@ fn format_status(status: &LeaseStatus) -> String {
 fn format_relative_time(dt: &chrono::DateTime<chrono::Utc>) -> String {
     let now = chrono::Utc::now();
     let diff = *dt - now;
-    
+
     if diff.num_hours() > 0 {
         format!("in {}h {}m", diff.num_hours(), diff.num_minutes() % 60)
     } else if diff.num_minutes() > 0 {
@@ -300,22 +300,18 @@ fn print_lease(lease: &LeaseEntry) {
     let expires_relative = chrono::DateTime::parse_from_rfc3339(&lease.expires_at)
         .map(|dt| format_relative_time(&dt.with_timezone(&chrono::Utc)))
         .unwrap_or_else(|_| lease.expires_at.clone());
-    
+
     // Short ID (first segment of UUID)
     let short_id = lease.id.split('-').next().unwrap_or(&lease.id);
-    
+
     // Actor display
     let actor_display = lease.actor.as_deref().unwrap_or("(ownerless)");
-    
+
     println!(
         "  {} {} [{}] by {} (expires {})",
-        short_id,
-        lease.pathspec,
-        lease.strength,
-        actor_display,
-        expires_relative,
+        short_id, lease.pathspec, lease.strength, actor_display, expires_relative,
     );
-    
+
     // Show note if present (indented)
     if let Some(ref note) = lease.note {
         println!("       └─ {}", note);
@@ -373,18 +369,17 @@ struct RenewReport {
 pub fn run_renew(options: RenewOptions) -> Result<()> {
     if let Some(ttl) = options.ttl.as_deref() {
         if ttl.trim().is_empty() {
-            return Err(Error::InvalidArgument(
-                "--ttl cannot be empty".to_string()
-            ));
+            return Err(Error::InvalidArgument("--ttl cannot be empty".to_string()));
         }
     }
 
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
 
     let workdir = repository
         .workdir()
@@ -396,20 +391,18 @@ pub fn run_renew(options: RenewOptions) -> Result<()> {
 
     if !storage.is_initialized() {
         return Err(Error::OperationFailed(
-            "sv not initialized. Run 'sv init' first.".to_string()
+            "sv not initialized. Run 'sv init' first.".to_string(),
         ));
     }
 
     let config = Config::load_from_repo(&workdir);
-    let current_actor = options.actor
-        .or_else(|| storage.read_actor())
-        .or_else(|| {
-            if config.actor.default != "unknown" {
-                Some(config.actor.default.clone())
-            } else {
-                None
-            }
-        });
+    let current_actor = options.actor.or_else(|| storage.read_actor()).or_else(|| {
+        if config.actor.default != "unknown" {
+            Some(config.actor.default.clone())
+        } else {
+            None
+        }
+    });
 
     let leases_file = storage.leases_file();
     let lock_path = leases_file.with_extension("lock");
@@ -597,50 +590,51 @@ pub fn run_break(options: BreakOptions) -> Result<()> {
     // Validate reason is provided and not empty
     if options.reason.trim().is_empty() {
         return Err(Error::InvalidArgument(
-            "--reason is required and cannot be empty".to_string()
+            "--reason is required and cannot be empty".to_string(),
         ));
     }
 
     // Discover repository
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
-    
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
-    
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
+
     let workdir = repository
         .workdir()
         .ok_or_else(|| Error::NotARepo(start.clone()))?
         .to_path_buf();
-    
+
     // Resolve common dir for worktree support
     let common_dir = git::common_dir(&repository);
-    
+
     // Initialize storage
     let storage = Storage::new(workdir.clone(), common_dir.clone(), workdir.clone());
-    
+
     // Check if sv is initialized
     if !storage.is_initialized() {
         return Err(Error::OperationFailed(
-            "sv not initialized. Run 'sv init' first.".to_string()
+            "sv not initialized. Run 'sv init' first.".to_string(),
         ));
     }
-    
+
     // Load existing leases
     let existing_leases: Vec<Lease> = storage.read_jsonl(&storage.leases_file())?;
     let mut store = LeaseStore::from_vec(existing_leases);
-    
+
     // Expire stale leases first
     store.expire_stale();
-    
+
     let mut broken = Vec::new();
     let mut not_found = Vec::new();
-    
+
     for id_str in &options.ids {
         // Try to parse as UUID (full or prefix)
         let lease = find_lease_by_id(&store, id_str);
-        
+
         match lease {
             Some(lease_ref) => {
                 // Clone info before mutating
@@ -651,13 +645,13 @@ pub fn run_break(options: BreakOptions) -> Result<()> {
                     strength: lease_ref.strength.to_string(),
                     reason: options.reason.clone(),
                 };
-                
+
                 // Find and break the lease
                 let lease_id = lease_ref.id;
                 if let Some(lease_mut) = store.find_mut(&lease_id) {
                     lease_mut.break_lease(&options.reason);
                 }
-                
+
                 broken.push(info);
             }
             None => {
@@ -665,31 +659,34 @@ pub fn run_break(options: BreakOptions) -> Result<()> {
             }
         }
     }
-    
+
     // Save updated leases - rewrite all leases since we modified in-place
     if !broken.is_empty() {
         write_leases_jsonl(&storage.leases_file(), store.all())?;
-        
+
         // Record in oplog
         let oplog = OpLog::for_storage(&storage);
         let mut record = OpRecord::new("lease break", options.actor.clone());
         record.outcome = OpOutcome::success();
         record.undo_data = Some(UndoData {
-            lease_changes: broken.iter().map(|b| LeaseChange {
-                lease_id: b.id.clone(),
-                action: format!("break: {}", b.reason),
-            }).collect(),
+            lease_changes: broken
+                .iter()
+                .map(|b| LeaseChange {
+                    lease_id: b.id.clone(),
+                    action: format!("break: {}", b.reason),
+                })
+                .collect(),
             ..Default::default()
         });
         oplog.append(&record)?;
     }
-    
+
     // Output results
     let report = BreakReport {
         broken: broken.clone(),
         not_found: not_found.clone(),
     };
-    
+
     if options.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else if !options.quiet {
@@ -698,7 +695,10 @@ pub fn run_break(options: BreakOptions) -> Result<()> {
             for info in &broken {
                 let short_id = info.id.split('-').next().unwrap_or(&info.id);
                 let actor_display = info.actor.as_deref().unwrap_or("(ownerless)");
-                println!("  {} {} (was held by {})", short_id, info.pathspec, actor_display);
+                println!(
+                    "  {} {} (was held by {})",
+                    short_id, info.pathspec, actor_display
+                );
             }
             println!("\nReason: {}", options.reason);
         }
@@ -709,12 +709,12 @@ pub fn run_break(options: BreakOptions) -> Result<()> {
             }
         }
     }
-    
+
     // Return error if nothing was broken
     if broken.is_empty() && !not_found.is_empty() {
         return Err(Error::LeaseNotFound(not_found.join(", ")));
     }
-    
+
     Ok(())
 }
 
@@ -764,12 +764,13 @@ pub fn run_wait(options: WaitOptions) -> Result<()> {
     };
 
     // Discover repository
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
 
     let workdir = repository
         .workdir()
@@ -902,21 +903,17 @@ fn wait_target_statuses(
 fn parse_positive_duration(label: &str, value: &str) -> Result<StdDuration> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(Error::InvalidArgument(format!(
-            "{label} cannot be empty"
-        )));
+        return Err(Error::InvalidArgument(format!("{label} cannot be empty")));
     }
 
     let duration = parse_duration(trimmed)?;
     if duration <= chrono::Duration::zero() {
-        return Err(Error::InvalidArgument(format!(
-            "{label} must be positive"
-        )));
+        return Err(Error::InvalidArgument(format!("{label} must be positive")));
     }
 
-    duration.to_std().map_err(|_| {
-        Error::InvalidArgument(format!("{label} must be positive"))
-    })
+    duration
+        .to_std()
+        .map_err(|_| Error::InvalidArgument(format!("{label} must be positive")))
 }
 
 fn format_elapsed(duration: StdDuration) -> String {
@@ -934,11 +931,7 @@ fn format_elapsed(duration: StdDuration) -> String {
     }
 }
 
-fn sleep_with_timeout(
-    poll: StdDuration,
-    timeout: Option<StdDuration>,
-    start_time: Instant,
-) {
+fn sleep_with_timeout(poll: StdDuration, timeout: Option<StdDuration>, start_time: Instant) {
     if let Some(limit) = timeout {
         let elapsed = start_time.elapsed();
         if elapsed >= limit {
@@ -960,32 +953,32 @@ fn find_lease_by_id<'a>(store: &'a LeaseStore, id_str: &str) -> Option<&'a Lease
     if let Ok(uuid) = Uuid::parse_str(id_str) {
         return store.find(&uuid);
     }
-    
+
     // Try prefix match
     let normalized = id_str.to_lowercase();
-    store.active().find(|lease| {
-        lease.id.to_string().to_lowercase().starts_with(&normalized)
-    })
+    store
+        .active()
+        .find(|lease| lease.id.to_string().to_lowercase().starts_with(&normalized))
 }
 
 /// Write leases to file in JSONL format (atomic write via temp + rename)
 fn write_leases_jsonl(path: &std::path::Path, leases: &[Lease]) -> Result<()> {
     use std::fs::File;
     use std::io::Write;
-    
+
     // Write to temp file first
     let temp_path = path.with_extension("tmp");
     let mut file = File::create(&temp_path)?;
-    
+
     for lease in leases {
         let json = serde_json::to_string(lease)?;
         writeln!(file, "{}", json)?;
     }
-    
+
     file.sync_all()?;
-    
+
     // Atomic rename
     std::fs::rename(&temp_path, path)?;
-    
+
     Ok(())
 }

@@ -97,25 +97,26 @@ struct RmReport {
 /// Run the protect status command
 pub fn run_status(options: StatusOptions) -> Result<()> {
     // Discover repository
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
-    
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
-    
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
+
     let workdir = repository
         .workdir()
         .ok_or_else(|| Error::NotARepo(start.clone()))?
         .to_path_buf();
-    
+
     // Load config
     let config = Config::load_from_repo(&workdir);
-    
+
     // Resolve common dir for worktree support
     let common_dir = resolve_common_dir(&repository)?;
     let storage = Storage::new(workdir.clone(), common_dir.clone(), workdir.clone());
-    
+
     // Load overrides
     let override_data = load_override(&storage).ok();
 
@@ -204,25 +205,26 @@ pub fn run_status(options: StatusOptions) -> Result<()> {
         &report,
         Some(&human),
     )?;
-    
+
     Ok(())
 }
 
 /// Run the protect add command
 pub fn run_add(options: AddOptions) -> Result<()> {
     // Discover repository
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
-    
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
-    
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
+
     let workdir = repository
         .workdir()
         .ok_or_else(|| Error::NotARepo(start.clone()))?
         .to_path_buf();
-    
+
     // Load current config
     let config_path = workdir.join(".sv.toml");
     let mut config = if config_path.exists() {
@@ -230,7 +232,7 @@ pub fn run_add(options: AddOptions) -> Result<()> {
     } else {
         Config::default()
     };
-    
+
     // Validate mode
     if !["guard", "readonly", "warn"].contains(&options.mode.as_str()) {
         return Err(Error::InvalidArgument(format!(
@@ -238,17 +240,22 @@ pub fn run_add(options: AddOptions) -> Result<()> {
             options.mode
         )));
     }
-    
+
     let mut added = Vec::new();
     let mut already_exists = Vec::new();
     let mut invalid = Vec::new();
-    
+
     // Get existing patterns
-    let existing_patterns: Vec<String> = config.protect.paths.iter().map(|p| match p {
-        ProtectPath::Simple(s) => s.clone(),
-        ProtectPath::WithMode { pattern, .. } => pattern.clone(),
-    }).collect();
-    
+    let existing_patterns: Vec<String> = config
+        .protect
+        .paths
+        .iter()
+        .map(|p| match p {
+            ProtectPath::Simple(s) => s.clone(),
+            ProtectPath::WithMode { pattern, .. } => pattern.clone(),
+        })
+        .collect();
+
     // Process each pattern
     for pattern in &options.patterns {
         // Validate pattern syntax
@@ -259,13 +266,13 @@ pub fn run_add(options: AddOptions) -> Result<()> {
             });
             continue;
         }
-        
+
         // Check for duplicates
         if existing_patterns.contains(pattern) {
             already_exists.push(pattern.clone());
             continue;
         }
-        
+
         // Add the pattern
         let entry = if options.mode == config.protect.mode {
             // Use simple form if mode matches default
@@ -277,20 +284,21 @@ pub fn run_add(options: AddOptions) -> Result<()> {
                 mode: options.mode.clone(),
             }
         };
-        
+
         config.protect.paths.push(entry);
         added.push(pattern.clone());
     }
-    
+
     // Save config if we added anything
     if !added.is_empty() {
         config.save(&config_path)?;
     }
-    
+
     // Return error if all patterns were invalid
     if added.is_empty() && !options.patterns.is_empty() && !invalid.is_empty() {
         return Err(Error::InvalidArgument(format!(
-            "Invalid pattern: {}", invalid[0].error
+            "Invalid pattern: {}",
+            invalid[0].error
         )));
     }
 
@@ -336,19 +344,20 @@ pub fn run_add(options: AddOptions) -> Result<()> {
         &report,
         Some(&human),
     )?;
-    
+
     Ok(())
 }
 
 /// Run the protect off command
 pub fn run_off(options: OffOptions) -> Result<()> {
     // Discover repository
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
 
     let workdir = repository
         .workdir()
@@ -477,18 +486,19 @@ pub fn run_off(options: OffOptions) -> Result<()> {
 /// Run the protect rm command
 pub fn run_rm(options: RmOptions) -> Result<()> {
     // Discover repository
-    let start = options.repo.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
-    
-    let repository = git2::Repository::discover(&start)
-        .map_err(|_| Error::RepoNotFound(start.clone()))?;
-    
+    let start = options
+        .repo
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let repository =
+        git2::Repository::discover(&start).map_err(|_| Error::RepoNotFound(start.clone()))?;
+
     let workdir = repository
         .workdir()
         .ok_or_else(|| Error::NotARepo(start.clone()))?
         .to_path_buf();
-    
+
     // Load current config
     let config_path = workdir.join(".sv.toml");
     if !config_path.exists() {
@@ -516,17 +526,19 @@ pub fn run_rm(options: RmOptions) -> Result<()> {
             )?;
             return Ok(());
         }
-        return Err(Error::OperationFailed("No .sv.toml config file.".to_string()));
+        return Err(Error::OperationFailed(
+            "No .sv.toml config file.".to_string(),
+        ));
     }
-    
+
     let mut config = Config::load(&config_path)?;
-    
+
     let mut removed = Vec::new();
     let mut not_found = Vec::new();
-    
+
     for pattern in &options.patterns {
         let initial_len = config.protect.paths.len();
-        
+
         config.protect.paths.retain(|p| {
             let p_pattern = match p {
                 ProtectPath::Simple(s) => s,
@@ -534,23 +546,24 @@ pub fn run_rm(options: RmOptions) -> Result<()> {
             };
             p_pattern != pattern
         });
-        
+
         if config.protect.paths.len() < initial_len {
             removed.push(pattern.clone());
         } else {
             not_found.push(pattern.clone());
         }
     }
-    
+
     // Save config if we removed anything
     if !removed.is_empty() {
         config.save(&config_path)?;
     }
-    
+
     // Return error if patterns not found (unless --force)
     if !not_found.is_empty() && !options.force {
         return Err(Error::OperationFailed(format!(
-            "Pattern not found: {}", not_found[0]
+            "Pattern not found: {}",
+            not_found[0]
         )));
     }
 
@@ -593,7 +606,7 @@ pub fn run_rm(options: RmOptions) -> Result<()> {
         &report,
         Some(&human),
     )?;
-    
+
     Ok(())
 }
 

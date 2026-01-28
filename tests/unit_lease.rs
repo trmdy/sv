@@ -1,4 +1,4 @@
-use sv::lease::{Lease, LeaseStrength, LeaseStore};
+use sv::lease::{Lease, LeaseStore, LeaseStrength};
 
 #[test]
 fn lease_matches_path_with_exact_and_glob() {
@@ -33,35 +33,18 @@ fn lease_store_conflicts_respect_actor_and_overlap_policy() {
         .expect("lease");
     store.add(existing);
 
-    let conflicts = store.check_conflicts(
-        "src/lib.rs",
-        LeaseStrength::Cooperative,
-        Some("bob"),
-        false,
-    );
+    let conflicts =
+        store.check_conflicts("src/lib.rs", LeaseStrength::Cooperative, Some("bob"), false);
     assert_eq!(conflicts.len(), 1);
 
-    let allow_overlap = store.check_conflicts(
-        "src/lib.rs",
-        LeaseStrength::Cooperative,
-        Some("bob"),
-        true,
-    );
+    let allow_overlap =
+        store.check_conflicts("src/lib.rs", LeaseStrength::Cooperative, Some("bob"), true);
     assert!(allow_overlap.is_empty());
 
-    let same_actor = store.check_conflicts(
-        "src/lib.rs",
-        LeaseStrength::Strong,
-        Some("alice"),
-        false,
-    );
+    let same_actor =
+        store.check_conflicts("src/lib.rs", LeaseStrength::Strong, Some("alice"), false);
     assert!(same_actor.is_empty());
 
-    let ownerless = store.check_conflicts(
-        "src/lib.rs",
-        LeaseStrength::Strong,
-        None,
-        false,
-    );
+    let ownerless = store.check_conflicts("src/lib.rs", LeaseStrength::Strong, None, false);
     assert!(ownerless.is_empty());
 }

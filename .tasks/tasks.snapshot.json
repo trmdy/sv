@@ -1,7 +1,51 @@
 {
   "schema_version": "sv.tasks.v1",
-  "generated_at": "2026-01-28T14:57:23.028466Z",
+  "generated_at": "2026-01-28T15:37:17.008897Z",
   "tasks": [
+    {
+      "id": "sv-ppw",
+      "title": "Improve shared edit/add task editor",
+      "status": "open",
+      "priority": "P1",
+      "created_at": "2026-01-28T15:30:46.732488Z",
+      "updated_at": "2026-01-28T15:37:16.998157Z",
+      "body": "Body should be possible to write and edit as if it were a vim editor. I need to be able to seethe multiple lines and full text while writing. ",
+      "comments_count": 0
+    },
+    {
+      "id": "sv-adj",
+      "title": "Fix inline editor select options",
+      "status": "open",
+      "priority": "P0",
+      "created_at": "2026-01-28T15:34:44.135069Z",
+      "updated_at": "2026-01-28T15:37:08.344593Z",
+      "body": "All of Priority, Parent, and Children aren't focused when selected inside the inline editor. So we can select choices until we close out of the inline editor, defeating the purpose of them. Only the topmost inline shoild have focus and catch all keystrokes.",
+      "comments_count": 0
+    },
+    {
+      "id": "sv-cwe",
+      "title": "Add 'ctrl+enter' option in inline editor",
+      "status": "open",
+      "priority": "P2",
+      "created_at": "2026-01-28T15:36:29.584933Z",
+      "updated_at": "2026-01-28T15:36:29.584933Z",
+      "body": "When in inline editor, if all feilds look okay, we should be able to always use 'ctrl+enter' to go to the confirmation scren, as if we just pressed enter on the last field.",
+      "comments_count": 0
+    },
+    {
+      "id": "sv-p9f",
+      "title": "Inline editor improvements (epic)",
+      "status": "closed",
+      "priority": "P0",
+      "created_at": "2026-01-28T13:59:14.918532Z",
+      "updated_at": "2026-01-28T15:25:41.830476Z",
+      "body": "Epic to track inline editor UX improvements. Child tasks cover: inner-field key handling, priority select styling, parent lookup/autocomplete, rename Relates->Children behavior, remove relate note, rename Description->Body, and edit mode fields (sv-j5a).",
+      "workspace_id": "4365f497-2aae-41bb-9bb8-24b1daab916b",
+      "workspace": "sv",
+      "branch": "main",
+      "closed_at": "2026-01-28T15:25:41.830476Z",
+      "comments_count": 0
+    },
     {
       "id": "sv-ay8",
       "title": "Fix parallel sv take lease creation JSON parse error",
@@ -15,20 +59,6 @@
       "branch": "main",
       "started_at": "2026-01-28T14:55:20.906354Z",
       "closed_at": "2026-01-28T14:57:23.018349Z",
-      "comments_count": 0
-    },
-    {
-      "id": "sv-p9f",
-      "title": "Inline editor improvements (epic)",
-      "status": "closed",
-      "priority": "P0",
-      "created_at": "2026-01-28T13:59:14.918532Z",
-      "updated_at": "2026-01-28T14:52:14.657103Z",
-      "body": "Epic to track inline editor UX improvements. Child tasks cover: inner-field key handling, priority select styling, parent lookup/autocomplete, rename Relates->Children behavior, remove relate note, rename Description->Body, and edit mode fields (sv-j5a).",
-      "workspace_id": "4365f497-2aae-41bb-9bb8-24b1daab916b",
-      "workspace": "sv",
-      "branch": "main",
-      "closed_at": "2026-01-28T14:52:14.657103Z",
       "comments_count": 0
     },
     {

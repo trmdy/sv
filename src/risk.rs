@@ -269,7 +269,8 @@ fn suggestions_for(path: &str, workspaces: &[String], severity: RiskSeverity) ->
         "rebase_onto",
         Suggestion {
             action: "rebase_onto".to_string(),
-            reason: "Rebase onto an overlapping workspace to resolve conflicts earlier.".to_string(),
+            reason: "Rebase onto an overlapping workspace to resolve conflicts earlier."
+                .to_string(),
             command: Some(format!("sv onto {onto_target}")),
         },
     );
@@ -318,12 +319,8 @@ fn suggestions_for(path: &str, workspaces: &[String], severity: RiskSeverity) ->
 }
 
 fn touched_files(repo: &Repository, base_ref: &str, branch_ref: &str) -> Result<Vec<String>> {
-    let base_commit = repo
-        .revparse_single(base_ref)?
-        .peel_to_commit()?;
-    let branch_commit = repo
-        .revparse_single(branch_ref)?
-        .peel_to_commit()?;
+    let base_commit = repo.revparse_single(base_ref)?.peel_to_commit()?;
+    let branch_commit = repo.revparse_single(branch_ref)?.peel_to_commit()?;
 
     let base_tree = base_commit.tree()?;
     let branch_tree = branch_commit.tree()?;
@@ -451,7 +448,11 @@ mod tests {
 
     #[test]
     fn suggestions_include_expected_actions() {
-        let suggestions = suggestions_for("src/lib.rs", &["ws-a".to_string(), "ws-b".to_string()], RiskSeverity::Medium);
+        let suggestions = suggestions_for(
+            "src/lib.rs",
+            &["ws-a".to_string(), "ws-b".to_string()],
+            RiskSeverity::Medium,
+        );
         let actions: Vec<&str> = suggestions.iter().map(|s| s.action.as_str()).collect();
         assert!(actions.contains(&"take_lease"));
         assert!(actions.contains(&"inspect_leases"));
@@ -461,7 +462,11 @@ mod tests {
 
     #[test]
     fn high_severity_includes_pick_another_task() {
-        let suggestions = suggestions_for("src/lib.rs", &["ws-a".to_string(), "ws-b".to_string()], RiskSeverity::Critical);
+        let suggestions = suggestions_for(
+            "src/lib.rs",
+            &["ws-a".to_string(), "ws-b".to_string()],
+            RiskSeverity::Critical,
+        );
         let actions: Vec<&str> = suggestions.iter().map(|s| s.action.as_str()).collect();
         assert!(actions.contains(&"pick_another_task"));
     }

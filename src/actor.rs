@@ -52,9 +52,8 @@ pub fn resolve_actor_optional(
 
 /// Persist the actor identity in `.sv/actor`.
 pub fn persist_actor(repo_root: &Path, actor: &str) -> Result<()> {
-    let actor = non_empty(Some(actor)).ok_or_else(|| {
-        Error::InvalidArgument("actor name cannot be empty".to_string())
-    })?;
+    let actor = non_empty(Some(actor))
+        .ok_or_else(|| Error::InvalidArgument("actor name cannot be empty".to_string()))?;
 
     let sv_dir = repo_root.join(".sv");
     std::fs::create_dir_all(&sv_dir)?;

@@ -17,8 +17,8 @@ mod protect;
 mod release;
 mod status;
 mod switch;
-mod task;
 mod take;
+mod task;
 mod ws;
 
 const ROBOT_HELP: &str = r#"sv --robot-help
@@ -447,14 +447,16 @@ Examples:
     },
 
     /// Commit with sv checks (protected paths, lease conflicts, Change-Id)
-    #[command(long_about = r#"Commit with sv checks for protected paths and lease conflicts.
+    #[command(
+        long_about = r#"Commit with sv checks for protected paths and lease conflicts.
 
 Examples:
   sv commit -m "Fix refresh edge case"
   sv commit --amend --no-edit
   sv commit --allow-protected
   sv commit --force-lease
-"#)]
+"#
+    )]
     Commit {
         /// Commit message
         #[arg(short, long)]
@@ -593,14 +595,16 @@ Examples:
     },
 
     /// Reposition current workspace onto another workspace's branch
-    #[command(long_about = r#"Rebase or merge current workspace onto target workspace.
+    #[command(
+        long_about = r#"Rebase or merge current workspace onto target workspace.
 
 Examples:
   sv onto agent5
   sv onto agent5 --strategy merge
   sv onto agent5 --base main
   sv onto agent5 --preflight
-"#)]
+"#
+    )]
     Onto {
         /// Target workspace name to rebase onto
         target: String,
@@ -716,12 +720,15 @@ Examples:
     },
 
     /// List workspaces
-    #[command(alias = "ls", long_about = r#"List registered workspaces.
+    #[command(
+        alias = "ls",
+        long_about = r#"List registered workspaces.
 
 Examples:
   sv ws list
   sv ws list -s "agent*"
-"#)]
+"#
+    )]
     List {
         /// Selector to filter workspaces
         #[arg(short, long)]
@@ -1359,14 +1366,12 @@ fn run_risk(opts: RiskOptions) -> Result<()> {
     let config = Config::load_from_repo(&workdir);
 
     // Determine base ref
-    let base_ref = opts
-        .base
-        .unwrap_or_else(|| config.base.clone());
+    let base_ref = opts.base.unwrap_or_else(|| config.base.clone());
 
     if opts.simulate {
         // Run virtual merge simulation
         let report = risk::simulate_conflicts(&repo, &base_ref)?;
-        
+
         if opts.json {
             println!("{}", serde_json::to_string_pretty(&report)?);
         } else if !opts.quiet {
@@ -1375,7 +1380,7 @@ fn run_risk(opts: RiskOptions) -> Result<()> {
     } else {
         // Run basic overlap detection
         let report = risk::compute_risk(&repo, &base_ref)?;
-        
+
         if opts.json {
             println!("{}", serde_json::to_string_pretty(&report)?);
         } else if !opts.quiet {
@@ -1397,7 +1402,12 @@ fn print_risk_report(report: &crate::risk::RiskReport) {
 
     println!("Workspaces analyzed: {}", report.workspaces.len());
     for ws in &report.workspaces {
-        println!("  {} ({}) - {} files touched", ws.name, ws.branch, ws.files.len());
+        println!(
+            "  {} ({}) - {} files touched",
+            ws.name,
+            ws.branch,
+            ws.files.len()
+        );
     }
     println!();
 
@@ -1449,7 +1459,10 @@ fn print_simulation_report(report: &crate::risk::SimulationReport) {
     let mut has_conflicts = false;
     for pair in &report.workspace_pairs {
         if pair.conflicts.is_empty() {
-            println!("  {} vs {} - no conflicts", pair.workspace_a, pair.workspace_b);
+            println!(
+                "  {} vs {} - no conflicts",
+                pair.workspace_a, pair.workspace_b
+            );
         } else {
             has_conflicts = true;
             println!(
@@ -1690,13 +1703,13 @@ fn workspace_touches(
 
 /// Run hoist command
 fn run_hoist(opts: HoistOptions) -> Result<()> {
+    use crate::actor;
+    use crate::config::Config;
+    use crate::git;
+    use crate::storage::{HoistCommit, HoistState, HoistStatus, Storage};
+    use crate::task::{TaskEvent, TaskEventType, TaskStore};
     use chrono::Utc;
     use uuid::Uuid;
-    use crate::git;
-    use crate::storage::{Storage, HoistState, HoistStatus, HoistCommit};
-    use crate::config::Config;
-    use crate::task::{TaskEvent, TaskEventType, TaskStore};
-    use crate::actor;
 
     // Parse and validate strategy
     let strategy: HoistStrategy = opts.strategy.parse()?;
@@ -1721,10 +1734,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
 
     // Validate dest ref exists
     repo.revparse_single(&dest).map_err(|_| {
-        crate::error::Error::InvalidArgument(format!(
-            "destination ref '{}' does not exist",
-            dest
-        ))
+        crate::error::Error::InvalidArgument(format!("destination ref '{}' does not exist", dest))
     })?;
 
     // Get workspaces matching selector
@@ -1749,7 +1759,8 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         .collect();
     let mut task_warnings: Vec<HoistTaskWarning> = Vec::new();
 
-    let has_task_logs = task_store.tracked_log_path().exists() || task_store.shared_log_path().exists();
+    let has_task_logs =
+        task_store.tracked_log_path().exists() || task_store.shared_log_path().exists();
     if has_task_logs {
         let active_tasks = if opts.dry_run {
             let snapshot = task_store.snapshot_readonly()?;
@@ -1818,7 +1829,11 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
 
     if !task_warnings.is_empty() && !opts.json && !opts.quiet {
         if opts.close_tasks {
-            let verb = if opts.dry_run { "Would close" } else { "Closed" };
+            let verb = if opts.dry_run {
+                "Would close"
+            } else {
+                "Closed"
+            };
             println!("{verb} {} task(s):", task_warnings.len());
         } else {
             println!("Active tasks for selected workspaces:");
@@ -1879,7 +1894,11 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
             workspaces: matching_workspaces.iter().map(|w| w.name.clone()).collect(),
             status: "dry_run".to_string(),
             applied: false,
-            continue_on_conflict: if opts.continue_on_conflict { Some(true) } else { None },
+            continue_on_conflict: if opts.continue_on_conflict {
+                Some(true)
+            } else {
+                None
+            },
             task_warnings: task_warnings.clone(),
             conflicts: Vec::new(),
             workspace_cleanup,
@@ -1917,14 +1936,18 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
 
     // Create or reset integration branch to dest ref
     let dest_commit = repo.revparse_single(&dest)?.peel_to_commit()?;
-    
+
     // Check if integration branch exists
-    let branch_exists = repo.find_branch(&integration_ref, git2::BranchType::Local).is_ok();
-    
+    let branch_exists = repo
+        .find_branch(&integration_ref, git2::BranchType::Local)
+        .is_ok();
+
     if branch_exists {
         // Reset existing branch to dest
         let mut branch = repo.find_branch(&integration_ref, git2::BranchType::Local)?;
-        branch.get_mut().set_target(dest_commit.id(), &format!("sv hoist: reset to {}", dest))?;
+        branch
+            .get_mut()
+            .set_target(dest_commit.id(), &format!("sv hoist: reset to {}", dest))?;
     } else {
         // Create new branch at dest
         repo.branch(&integration_ref, &dest_commit, false)?;
@@ -1940,12 +1963,8 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         continue_on_conflict: opts.continue_on_conflict,
         propagate_conflicts,
     };
-    let replay_outcome = crate::hoist::replay_commits(
-        &repo,
-        &integration_ref,
-        &commit_oids,
-        &replay_options,
-    )?;
+    let replay_outcome =
+        crate::hoist::replay_commits(&repo, &integration_ref, &commit_oids, &replay_options)?;
 
     // Build final hoist commits from replay outcome
     let final_commits: Vec<HoistCommit> = replay_outcome
@@ -2031,7 +2050,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
     let applied = if !opts.no_apply && replay_summary.conflicts == 0 && total_applied > 0 {
         // Get the current tip of the integration branch
         let integration_commit = repo.revparse_single(&integration_ref)?.peel_to_commit()?;
-        
+
         // Update the dest ref to point to the integration branch tip
         repo.reference(
             &refname,
@@ -2039,7 +2058,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
             true,
             &format!("sv hoist: fast-forward {} to {}", dest, integration_ref),
         )?;
-        
+
         true
     } else {
         false
@@ -2055,8 +2074,7 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
                     let mut checkout = git2::build::CheckoutBuilder::new();
                     checkout.safe();
                     if let Err(err) = repo.checkout_head(Some(&mut checkout)) {
-                        worktree_update_warning =
-                            Some(format!("worktree update failed: {}", err));
+                        worktree_update_warning = Some(format!("worktree update failed: {}", err));
                     } else {
                         worktree_updated = true;
                     }
@@ -2141,7 +2159,11 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         workspaces: matching_workspaces.iter().map(|w| w.name.clone()).collect(),
         status: status_str.to_string(),
         applied,
-        continue_on_conflict: if opts.continue_on_conflict { Some(true) } else { None },
+        continue_on_conflict: if opts.continue_on_conflict {
+            Some(true)
+        } else {
+            None
+        },
         task_warnings: task_warnings.clone(),
         conflicts: conflict_output.clone(),
         workspace_cleanup: workspace_cleanup.clone(),
@@ -2167,7 +2189,10 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
         println!("Replay summary:");
         println!("  Applied: {}", replay_summary.applied);
         if replay_summary.in_conflict > 0 {
-            println!("  In-conflict: {} (committed with markers)", replay_summary.in_conflict);
+            println!(
+                "  In-conflict: {} (committed with markers)",
+                replay_summary.in_conflict
+            );
         }
         if replay_summary.conflicts > 0 {
             println!("  Conflicts: {} (stopped)", replay_summary.conflicts);
@@ -2183,14 +2208,21 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
                 println!("Conflicts:");
             }
             for conflict in &conflict_output {
-                println!("  {} - files: {}", &conflict.commit_id[..8], conflict.files.join(", "));
+                println!(
+                    "  {} - files: {}",
+                    &conflict.commit_id[..8],
+                    conflict.files.join(", ")
+                );
             }
         }
         println!();
         if applied {
             let commit_count = replay_summary.applied + replay_summary.in_conflict;
             if replay_summary.in_conflict > 0 {
-                println!("{} updated to include {} commit(s) ({} with conflicts)", dest, commit_count, replay_summary.in_conflict);
+                println!(
+                    "{} updated to include {} commit(s) ({} with conflicts)",
+                    dest, commit_count, replay_summary.in_conflict
+                );
             } else {
                 println!("{} updated to include {} commit(s)", dest, commit_count);
             }
@@ -2202,7 +2234,10 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
                 }
             }
         } else if opts.no_apply {
-            println!("Skipped apply (--no-apply). To apply: git checkout {} && git merge --ff-only {}", dest, integration_ref);
+            println!(
+                "Skipped apply (--no-apply). To apply: git checkout {} && git merge --ff-only {}",
+                dest, integration_ref
+            );
         } else if replay_summary.conflicts > 0 {
             println!("Apply skipped due to conflicts. Resolve conflicts and retry.");
         } else if total_applied == 0 {
@@ -2220,7 +2255,11 @@ fn run_hoist(opts: HoistOptions) -> Result<()> {
             println!("  Skipped: {}", cleanup.skipped.len());
             println!("  Failed: {}", cleanup.failed.len());
             if !cleanup.removed.is_empty() {
-                let label = if cleanup.dry_run { "Would remove" } else { "Removed" };
+                let label = if cleanup.dry_run {
+                    "Would remove"
+                } else {
+                    "Removed"
+                };
                 println!("{label}: {}", cleanup.removed.join(", "));
             }
             if !cleanup.skipped.is_empty() {
@@ -2298,190 +2337,181 @@ impl Cli {
 
         match command {
             Commands::Init => init::run(repo, json, quiet),
-            Commands::Status => {
-                status::run(status::StatusOptions {
-                    repo,
-                    actor,
-                    json,
-                    quiet,
-                })
-            }
-            Commands::Switch { name, path } => {
-                switch::run(switch::SwitchOptions {
-                    name,
-                    path_only: path,
-                    repo,
-                    json,
-                    quiet,
-                })
-            }
-            Commands::Onto { target, strategy, base, preflight } => {
-                onto::run(onto::OntoOptions {
-                    target_workspace: target,
-                    strategy,
-                    base,
-                    preflight,
-                    actor,
-                    repo,
-                    json,
-                    quiet,
-                })
-            }
+            Commands::Status => status::run(status::StatusOptions {
+                repo,
+                actor,
+                json,
+                quiet,
+            }),
+            Commands::Switch { name, path } => switch::run(switch::SwitchOptions {
+                name,
+                path_only: path,
+                repo,
+                json,
+                quiet,
+            }),
+            Commands::Onto {
+                target,
+                strategy,
+                base,
+                preflight,
+            } => onto::run(onto::OntoOptions {
+                target_workspace: target,
+                strategy,
+                base,
+                preflight,
+                actor,
+                repo,
+                json,
+                quiet,
+            }),
             Commands::Ws { command } => match command {
                 Some(cmd) => match cmd {
-                    WsCommands::New { name, base, dir, branch, sparse } => {
-                        ws::run_new(ws::NewOptions {
-                            name,
-                            base,
-                            dir,
-                            branch,
-                            sparse,
-                            actor,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    WsCommands::Here { name } => {
-                        ws::run_here(ws::HereOptions {
-                            name,
-                            actor,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    WsCommands::List { selector } => {
-                        ws::run_list(ws::ListOptions {
-                            selector,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    WsCommands::Info { name } => {
-                        ws::run_info(ws::InfoOptions {
-                            name,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    WsCommands::Rm { name, force } => {
-                        ws::run_rm(ws::RmOptions {
-                            name,
-                            force,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    WsCommands::Clean { selector, dest, force, dry_run } => {
-                        ws::run_clean(ws::CleanOptions {
-                            selector,
-                            dest,
-                            force,
-                            dry_run,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
+                    WsCommands::New {
+                        name,
+                        base,
+                        dir,
+                        branch,
+                        sparse,
+                    } => ws::run_new(ws::NewOptions {
+                        name,
+                        base,
+                        dir,
+                        branch,
+                        sparse,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    WsCommands::Here { name } => ws::run_here(ws::HereOptions {
+                        name,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    WsCommands::List { selector } => ws::run_list(ws::ListOptions {
+                        selector,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    WsCommands::Info { name } => ws::run_info(ws::InfoOptions {
+                        name,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    WsCommands::Rm { name, force } => ws::run_rm(ws::RmOptions {
+                        name,
+                        force,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    WsCommands::Clean {
+                        selector,
+                        dest,
+                        force,
+                        dry_run,
+                    } => ws::run_clean(ws::CleanOptions {
+                        selector,
+                        dest,
+                        force,
+                        dry_run,
+                        repo,
+                        json,
+                        quiet,
+                    }),
                 },
                 None => {
                     print_subcommand_help("ws")?;
                     return Err(Error::InvalidArgument("missing ws command".to_string()));
                 }
-            }
-            Commands::Take { paths, strength, intent, scope, ttl, note } => {
-                take::run(take::TakeOptions {
-                    paths,
-                    strength,
-                    intent,
-                    scope,
-                    ttl,
-                    note,
-                    actor,
-                    events: events.clone(),
-                    repo,
-                    json,
-                    quiet,
-                })
-            }
-            Commands::Release { targets, force } => {
-                release::run(release::ReleaseOptions {
-                    targets,
-                    actor,
-                    events: events.clone(),
-                    repo,
-                    force,
-                    json,
-                    quiet,
-                })
-            }
+            },
+            Commands::Take {
+                paths,
+                strength,
+                intent,
+                scope,
+                ttl,
+                note,
+            } => take::run(take::TakeOptions {
+                paths,
+                strength,
+                intent,
+                scope,
+                ttl,
+                note,
+                actor,
+                events: events.clone(),
+                repo,
+                json,
+                quiet,
+            }),
+            Commands::Release { targets, force } => release::run(release::ReleaseOptions {
+                targets,
+                actor,
+                events: events.clone(),
+                repo,
+                force,
+                json,
+                quiet,
+            }),
             Commands::Lease { command } => match command {
                 Some(cmd) => match cmd {
-                    LeaseCommands::Ls { selector, actor } => {
-                        lease::run_ls(lease::LsOptions {
-                            selector,
-                            actor,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    LeaseCommands::Who { path } => {
-                        lease::run_who(lease::WhoOptions {
-                            path,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    LeaseCommands::Renew { ids, ttl } => {
-                        lease::run_renew(lease::RenewOptions {
-                            ids,
-                            ttl,
-                            actor,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    LeaseCommands::Break { ids, reason } => {
-                        lease::run_break(lease::BreakOptions {
-                            ids,
-                            reason,
-                            actor,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    LeaseCommands::Wait { targets, timeout, poll } => {
-                        lease::run_wait(lease::WaitOptions {
-                            targets,
-                            timeout,
-                            poll,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
+                    LeaseCommands::Ls { selector, actor } => lease::run_ls(lease::LsOptions {
+                        selector,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    LeaseCommands::Who { path } => lease::run_who(lease::WhoOptions {
+                        path,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    LeaseCommands::Renew { ids, ttl } => lease::run_renew(lease::RenewOptions {
+                        ids,
+                        ttl,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    LeaseCommands::Break { ids, reason } => lease::run_break(lease::BreakOptions {
+                        ids,
+                        reason,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    LeaseCommands::Wait {
+                        targets,
+                        timeout,
+                        poll,
+                    } => lease::run_wait(lease::WaitOptions {
+                        targets,
+                        timeout,
+                        poll,
+                        repo,
+                        json,
+                        quiet,
+                    }),
                 },
                 None => {
                     print_subcommand_help("lease")?;
                     return Err(Error::InvalidArgument("missing lease command".to_string()));
                 }
-            }
+            },
             Commands::Protect { command } => match command {
                 Some(cmd) => match cmd {
                     ProtectCommands::Status => {
-                        protect::run_status(protect::StatusOptions {
-                            repo,
-                            json,
-                            quiet,
-                        })
+                        protect::run_status(protect::StatusOptions { repo, json, quiet })
                     }
                     ProtectCommands::Add { patterns, mode } => {
                         protect::run_add(protect::AddOptions {
@@ -2492,14 +2522,12 @@ impl Cli {
                             quiet,
                         })
                     }
-                    ProtectCommands::Off { patterns } => {
-                        protect::run_off(protect::OffOptions {
-                            patterns,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
+                    ProtectCommands::Off { patterns } => protect::run_off(protect::OffOptions {
+                        patterns,
+                        repo,
+                        json,
+                        quiet,
+                    }),
                     ProtectCommands::Rm { patterns, force } => {
                         protect::run_rm(protect::RmOptions {
                             patterns,
@@ -2512,93 +2540,107 @@ impl Cli {
                 },
                 None => {
                     print_subcommand_help("protect")?;
-                    return Err(Error::InvalidArgument("missing protect command".to_string()));
+                    return Err(Error::InvalidArgument(
+                        "missing protect command".to_string(),
+                    ));
                 }
-            }
-            Commands::Commit { message, file, amend, all, no_edit, allow_protected, force_lease } => {
-                commit::run(commit::CommitOptions {
-                    message,
-                    file,
-                    amend,
-                    all,
-                    no_edit,
-                    allow_protected,
-                    force_lease,
-                    actor,
-                    repo,
-                    json,
-                    quiet,
-                })
-            }
+            },
+            Commands::Commit {
+                message,
+                file,
+                amend,
+                all,
+                no_edit,
+                allow_protected,
+                force_lease,
+            } => commit::run(commit::CommitOptions {
+                message,
+                file,
+                amend,
+                all,
+                no_edit,
+                allow_protected,
+                force_lease,
+                actor,
+                repo,
+                json,
+                quiet,
+            }),
             Commands::Task { command } => match command {
                 Some(cmd) => match cmd {
-                    TaskCommands::New { title, status, priority, body } => {
-                        task::run_new(task::NewOptions {
-                            title,
-                            status,
-                            priority,
-                            body,
-                            actor,
-                            events: events.clone(),
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    TaskCommands::List { status, priority, workspace, actor: list_actor, updated_since, limit } => {
-                        task::run_list(task::ListOptions {
-                            status,
-                            priority,
-                            workspace,
-                            actor: list_actor,
-                            updated_since,
-                            limit,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    TaskCommands::Ready { priority, workspace, actor: list_actor, updated_since, limit } => {
-                        task::run_ready(task::ReadyOptions {
-                            priority,
-                            workspace,
-                            actor: list_actor,
-                            updated_since,
-                            limit,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    TaskCommands::Show { id } => {
-                        task::run_show(task::ShowOptions {
-                            id,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    TaskCommands::Start { id } => {
-                        task::run_start(task::StartOptions {
-                            id,
-                            actor,
-                            events: events.clone(),
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    TaskCommands::Status { id, status } => {
-                        task::run_status(task::StatusOptions {
-                            id,
-                            status,
-                            actor,
-                            events: events.clone(),
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
+                    TaskCommands::New {
+                        title,
+                        status,
+                        priority,
+                        body,
+                    } => task::run_new(task::NewOptions {
+                        title,
+                        status,
+                        priority,
+                        body,
+                        actor,
+                        events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    TaskCommands::List {
+                        status,
+                        priority,
+                        workspace,
+                        actor: list_actor,
+                        updated_since,
+                        limit,
+                    } => task::run_list(task::ListOptions {
+                        status,
+                        priority,
+                        workspace,
+                        actor: list_actor,
+                        updated_since,
+                        limit,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    TaskCommands::Ready {
+                        priority,
+                        workspace,
+                        actor: list_actor,
+                        updated_since,
+                        limit,
+                    } => task::run_ready(task::ReadyOptions {
+                        priority,
+                        workspace,
+                        actor: list_actor,
+                        updated_since,
+                        limit,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    TaskCommands::Show { id } => task::run_show(task::ShowOptions {
+                        id,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    TaskCommands::Start { id } => task::run_start(task::StartOptions {
+                        id,
+                        actor,
+                        events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    TaskCommands::Status { id, status } => task::run_status(task::StatusOptions {
+                        id,
+                        status,
+                        actor,
+                        events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    }),
                     TaskCommands::Priority { id, priority } => {
                         task::run_priority(task::PriorityOptions {
                             id,
@@ -2610,50 +2652,42 @@ impl Cli {
                             quiet,
                         })
                     }
-                    TaskCommands::Edit { id, title, body } => {
-                        task::run_edit(task::EditOptions {
-                            id,
-                            title,
-                            body,
-                            actor,
-                            events: events.clone(),
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    TaskCommands::Close { id, status } => {
-                        task::run_close(task::CloseOptions {
-                            id,
-                            status,
-                            actor,
-                            events: events.clone(),
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    TaskCommands::Delete { id } => {
-                        task::run_delete(task::DeleteOptions {
-                            id,
-                            actor,
-                            events: events.clone(),
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    TaskCommands::Comment { id, text } => {
-                        task::run_comment(task::CommentOptions {
-                            id,
-                            text,
-                            actor,
-                            events: events.clone(),
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
+                    TaskCommands::Edit { id, title, body } => task::run_edit(task::EditOptions {
+                        id,
+                        title,
+                        body,
+                        actor,
+                        events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    TaskCommands::Close { id, status } => task::run_close(task::CloseOptions {
+                        id,
+                        status,
+                        actor,
+                        events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    TaskCommands::Delete { id } => task::run_delete(task::DeleteOptions {
+                        id,
+                        actor,
+                        events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    TaskCommands::Comment { id, text } => task::run_comment(task::CommentOptions {
+                        id,
+                        text,
+                        actor,
+                        events: events.clone(),
+                        repo,
+                        json,
+                        quiet,
+                    }),
                     TaskCommands::Parent { command } => match command {
                         ParentCommands::Set { child, parent } => {
                             task::run_parent_set(task::ParentSetOptions {
@@ -2722,70 +2756,64 @@ impl Cli {
                             quiet,
                         })
                     }
-                    TaskCommands::Relations { id } => {
-                        task::run_relations(task::RelationsOptions {
-                            id,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    TaskCommands::Sync => {
-                        task::run_sync(task::SyncOptions {
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    TaskCommands::Compact { older_than, max_log_mb, dry_run } => {
-                        task::run_compact(task::CompactOptions {
-                            older_than,
-                            max_log_mb,
-                            dry_run,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    TaskCommands::Prefix { prefix } => {
-                        task::run_prefix(task::PrefixOptions {
-                            prefix,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
+                    TaskCommands::Relations { id } => task::run_relations(task::RelationsOptions {
+                        id,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    TaskCommands::Sync => task::run_sync(task::SyncOptions { repo, json, quiet }),
+                    TaskCommands::Compact {
+                        older_than,
+                        max_log_mb,
+                        dry_run,
+                    } => task::run_compact(task::CompactOptions {
+                        older_than,
+                        max_log_mb,
+                        dry_run,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    TaskCommands::Prefix { prefix } => task::run_prefix(task::PrefixOptions {
+                        prefix,
+                        repo,
+                        json,
+                        quiet,
+                    }),
                 },
-                None => task::run_tui(task::TuiOptions {
-                    repo,
-                    json,
-                    quiet,
-                }),
-            }
-            Commands::Risk { selector, base, simulate } => {
-                run_risk(RiskOptions {
-                    selector,
-                    base,
-                    simulate,
-                    repo,
-                    json,
-                    quiet,
-                })
-            }
+                None => task::run_tui(task::TuiOptions { repo, json, quiet }),
+            },
+            Commands::Risk {
+                selector,
+                base,
+                simulate,
+            } => run_risk(RiskOptions {
+                selector,
+                base,
+                simulate,
+                repo,
+                json,
+                quiet,
+            }),
             Commands::Op { command } => match command {
                 Some(cmd) => match cmd {
-                    OpCommands::Log { limit, actor, operation, since, until } => {
-                        op::run_log(op::LogOptions {
-                            limit,
-                            actor,
-                            operation,
-                            since,
-                            until,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
+                    OpCommands::Log {
+                        limit,
+                        actor,
+                        operation,
+                        since,
+                        until,
+                    } => op::run_log(op::LogOptions {
+                        limit,
+                        actor,
+                        operation,
+                        since,
+                        until,
+                        repo,
+                        json,
+                        quiet,
+                    }),
                 },
                 None => {
                     print_subcommand_help("op")?;
@@ -2800,47 +2828,53 @@ impl Cli {
             }
             Commands::Actor { command } => match command {
                 Some(cmd) => match cmd {
-                    ActorCommands::Set { name } => {
-                        actor::run_set(actor::SetOptions {
-                            name,
-                            repo,
-                            json,
-                            quiet,
-                        })
-                    }
-                    ActorCommands::Show => {
-                        actor::run_show(actor::ShowOptions {
-                            repo,
-                            actor,
-                            json,
-                            quiet,
-                        })
-                    }
+                    ActorCommands::Set { name } => actor::run_set(actor::SetOptions {
+                        name,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    ActorCommands::Show => actor::run_show(actor::ShowOptions {
+                        repo,
+                        actor,
+                        json,
+                        quiet,
+                    }),
                 },
                 None => {
                     print_subcommand_help("actor")?;
                     return Err(Error::InvalidArgument("missing actor command".to_string()));
                 }
-            }
-            Commands::Hoist { selector, dest, strategy, order, dry_run, continue_on_conflict, no_propagate_conflicts, no_apply, close_tasks, rm, rm_force } => {
-                run_hoist(HoistOptions {
-                    selector,
-                    dest,
-                    strategy,
-                    order,
-                    dry_run,
-                    continue_on_conflict,
-                    no_propagate_conflicts,
-                    no_apply,
-                    close_tasks,
-                    rm,
-                    rm_force,
-                    actor,
-                    repo,
-                    json,
-                    quiet,
-                })
-            }
+            },
+            Commands::Hoist {
+                selector,
+                dest,
+                strategy,
+                order,
+                dry_run,
+                continue_on_conflict,
+                no_propagate_conflicts,
+                no_apply,
+                close_tasks,
+                rm,
+                rm_force,
+            } => run_hoist(HoistOptions {
+                selector,
+                dest,
+                strategy,
+                order,
+                dry_run,
+                continue_on_conflict,
+                no_propagate_conflicts,
+                no_apply,
+                close_tasks,
+                rm,
+                rm_force,
+                actor,
+                repo,
+                json,
+                quiet,
+            }),
         }
     }
 }

@@ -255,14 +255,14 @@ pub fn replay_commits(
                 let tree = repo.find_tree(tree_id)?;
                 let author = commit.author();
                 let committer = commit.committer();
-                
+
                 // Add a note to the commit message indicating it has conflicts
                 let conflict_message = format!(
                     "{}\n\nSv-Conflict: true\nSv-Conflict-Files: {}",
                     message.trim_end(),
                     files.join(", ")
                 );
-                
+
                 let new_oid = repo.commit(
                     Some(&refname),
                     &author,
@@ -568,15 +568,18 @@ fn order_by_time(repo: &Repository, candidates: &[HoistCandidate]) -> Result<Vec
 
     indexed.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
 
-    Ok(indexed.into_iter().map(|(_, _, candidate)| candidate).collect())
+    Ok(indexed
+        .into_iter()
+        .map(|(_, _, candidate)| candidate)
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use std::path::Path;
     use std::process::Command;
-    use chrono::TimeZone;
     use tempfile::TempDir;
 
     fn git(repo: &Path, args: &[&str]) {
@@ -688,23 +691,13 @@ mod tests {
         let (temp, repo, base_branch) = init_test_repo();
 
         git(temp.path(), &["checkout", "-b", "branch-a"]);
-        let commit_a = commit_with_change_id(
-            temp.path(),
-            "file.txt",
-            "hello\n",
-            "Add file",
-            "change-1",
-        );
+        let commit_a =
+            commit_with_change_id(temp.path(), "file.txt", "hello\n", "Add file", "change-1");
 
         git(temp.path(), &["checkout", &base_branch]);
         git(temp.path(), &["checkout", "-b", "branch-b"]);
-        let commit_b = commit_with_change_id(
-            temp.path(),
-            "file.txt",
-            "hello\n",
-            "Add file",
-            "change-1",
-        );
+        let commit_b =
+            commit_with_change_id(temp.path(), "file.txt", "hello\n", "Add file", "change-1");
 
         let outcome =
             dedupe_change_ids(&repo, &[commit_a, commit_b], &DedupOptions::default()).unwrap();
@@ -718,13 +711,8 @@ mod tests {
         let (temp, repo, base_branch) = init_test_repo();
 
         git(temp.path(), &["checkout", "-b", "branch-a"]);
-        let commit_a = commit_with_change_id(
-            temp.path(),
-            "file.txt",
-            "hello\n",
-            "Add file",
-            "change-2",
-        );
+        let commit_a =
+            commit_with_change_id(temp.path(), "file.txt", "hello\n", "Add file", "change-2");
 
         git(temp.path(), &["checkout", &base_branch]);
         git(temp.path(), &["checkout", "-b", "branch-b"]);
@@ -748,13 +736,8 @@ mod tests {
         let (temp, repo, base_branch) = init_test_repo();
 
         git(temp.path(), &["checkout", "-b", "branch-a"]);
-        let commit_a = commit_with_change_id(
-            temp.path(),
-            "file.txt",
-            "hello\n",
-            "Add file",
-            "change-3",
-        );
+        let commit_a =
+            commit_with_change_id(temp.path(), "file.txt", "hello\n", "Add file", "change-3");
 
         git(temp.path(), &["checkout", &base_branch]);
         git(temp.path(), &["checkout", "-b", "branch-b"]);
@@ -827,11 +810,14 @@ mod tests {
         ];
 
         let ordered = order_by_explicit(&candidates, &["bravo".to_string()]);
-        let ordered_workspaces: Vec<String> =
-            ordered.into_iter().map(|c| c.workspace).collect();
+        let ordered_workspaces: Vec<String> = ordered.into_iter().map(|c| c.workspace).collect();
         assert_eq!(
             ordered_workspaces,
-            vec!["bravo".to_string(), "bravo".to_string(), "alpha".to_string()]
+            vec![
+                "bravo".to_string(),
+                "bravo".to_string(),
+                "alpha".to_string()
+            ]
         );
     }
 
@@ -893,8 +879,7 @@ mod tests {
             },
         ];
 
-        let results =
-            collect_workspace_commits(&repo, &base_branch, &workspaces).expect("collect");
+        let results = collect_workspace_commits(&repo, &base_branch, &workspaces).expect("collect");
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].commits, vec![alpha_a, alpha_b]);
@@ -923,9 +908,8 @@ mod tests {
             },
         ];
 
-        let ordered =
-            select_hoist_commits(&repo, &base_branch, &workspaces, &OrderMode::Workspace)
-                .expect("select");
+        let ordered = select_hoist_commits(&repo, &base_branch, &workspaces, &OrderMode::Workspace)
+            .expect("select");
         let ordered_oids: Vec<Oid> = ordered.into_iter().map(|c| c.oid).collect();
         assert_eq!(ordered_oids, vec![alpha, bravo]);
     }

@@ -157,41 +157,41 @@ impl Storage {
     /// Initialize the workspace-local `.sv/` directory structure
     pub fn init_local(&self) -> Result<()> {
         let local = self.local_dir();
-        
+
         // Create main directory
         fs::create_dir_all(&local)?;
-        
+
         // Create overrides subdirectory
         fs::create_dir_all(self.overrides_dir())?;
-        
+
         Ok(())
     }
 
     /// Initialize the shared `.git/sv/` directory structure
     pub fn init_shared(&self) -> Result<()> {
         let shared = self.shared_dir();
-        
+
         // Create main directory
         fs::create_dir_all(&shared)?;
-        
+
         // Create oplog subdirectory
         fs::create_dir_all(self.oplog_dir())?;
 
         // Create hoist state subdirectory
         fs::create_dir_all(self.hoist_dir())?;
-        
+
         // Initialize empty workspaces registry if it doesn't exist
         let workspaces_file = self.workspaces_file();
         if !workspaces_file.exists() {
             self.write_json(&workspaces_file, &WorkspacesRegistry::default())?;
         }
-        
+
         // Touch leases file if it doesn't exist
         let leases_file = self.leases_file();
         if !leases_file.exists() {
             File::create(&leases_file)?;
         }
-        
+
         Ok(())
     }
 
@@ -238,15 +238,15 @@ impl Storage {
 
         // Create temp file in same directory (for atomic rename)
         let temp_path = path.with_extension("tmp");
-        
+
         // Write to temp file
         let mut file = File::create(&temp_path)?;
         file.write_all(data)?;
         file.sync_all()?; // Ensure data is flushed to disk
-        
+
         // Atomic rename
         fs::rename(&temp_path, path)?;
-        
+
         Ok(())
     }
 
@@ -266,10 +266,10 @@ impl Storage {
             .create(true)
             .append(true)
             .open(path)?;
-        
+
         writeln!(file, "{}", json)?;
         file.sync_all()?;
-        
+
         Ok(())
     }
 
@@ -436,26 +436,26 @@ impl Storage {
     /// Save all leases to the leases file (overwrites)
     pub fn save_leases(&self, store: &crate::lease::LeaseStore) -> Result<()> {
         let path = self.leases_file();
-        
+
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        
+
         // Write to temp file first
         let temp_path = path.with_extension("tmp");
         let mut file = File::create(&temp_path)?;
-        
+
         for lease in store.all() {
             let json = serde_json::to_string(lease)?;
             writeln!(file, "{}", json)?;
         }
-        
+
         file.sync_all()?;
-        
+
         // Atomic rename
         fs::rename(&temp_path, &path)?;
-        
+
         Ok(())
     }
 
@@ -465,7 +465,8 @@ impl Storage {
 
     /// Load all conflict records from the conflicts file into a ConflictStore
     pub fn load_conflicts(&self) -> Result<crate::conflict::ConflictStore> {
-        let records: Vec<crate::conflict::ConflictRecord> = self.read_jsonl(&self.conflicts_file())?;
+        let records: Vec<crate::conflict::ConflictRecord> =
+            self.read_jsonl(&self.conflicts_file())?;
         Ok(crate::conflict::ConflictStore::from_vec(records))
     }
 
@@ -477,26 +478,26 @@ impl Storage {
     /// Save all conflicts to the conflicts file (overwrites)
     pub fn save_conflicts(&self, store: &crate::conflict::ConflictStore) -> Result<()> {
         let path = self.conflicts_file();
-        
+
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        
+
         // Write to temp file first
         let temp_path = path.with_extension("tmp");
         let mut file = File::create(&temp_path)?;
-        
+
         for record in store.all() {
             let json = serde_json::to_string(record)?;
             writeln!(file, "{}", json)?;
         }
-        
+
         file.sync_all()?;
-        
+
         // Atomic rename
         fs::rename(&temp_path, &path)?;
-        
+
         Ok(())
     }
 
@@ -820,36 +821,36 @@ fn hoist_key(dest_ref: &str) -> String {
 pub fn ensure_gitignore(repo_root: &Path) -> io::Result<()> {
     let gitignore_path = repo_root.join(".gitignore");
     let sv_pattern = format!("/{}/", LOCAL_DIR);
-    
+
     // Read existing .gitignore if it exists
     let existing = if gitignore_path.exists() {
         fs::read_to_string(&gitignore_path)?
     } else {
         String::new()
     };
-    
+
     // Check if .sv/ is already ignored
     let already_ignored = existing.lines().any(|line| {
         let trimmed = line.trim();
         trimmed == ".sv" || trimmed == ".sv/" || trimmed == "/.sv" || trimmed == "/.sv/"
     });
-    
+
     if !already_ignored {
         // Append to .gitignore
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&gitignore_path)?;
-        
+
         // Add newline if file doesn't end with one
         if !existing.is_empty() && !existing.ends_with('\n') {
             writeln!(file)?;
         }
-        
+
         writeln!(file, "# sv workspace-local state")?;
         writeln!(file, "{}", sv_pattern)?;
     }
-    
+
     Ok(())
 }
 
@@ -863,11 +864,17 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let repo_root = temp.path().to_path_buf();
         let storage = Storage::for_repo(repo_root.clone());
-        
+
         assert_eq!(storage.local_dir(), repo_root.join(".sv"));
         assert_eq!(storage.shared_dir(), repo_root.join(".git/sv"));
-        assert_eq!(storage.workspaces_file(), repo_root.join(".git/sv/workspaces.json"));
-        assert_eq!(storage.leases_file(), repo_root.join(".git/sv/leases.jsonl"));
+        assert_eq!(
+            storage.workspaces_file(),
+            repo_root.join(".git/sv/workspaces.json")
+        );
+        assert_eq!(
+            storage.leases_file(),
+            repo_root.join(".git/sv/leases.jsonl")
+        );
         assert_eq!(storage.oplog_dir(), repo_root.join(".git/sv/oplog"));
         assert_eq!(storage.hoist_dir(), repo_root.join(".git/sv/hoist"));
     }
@@ -876,20 +883,20 @@ mod tests {
     fn test_init_directories() {
         let temp = TempDir::new().unwrap();
         let repo_root = temp.path().to_path_buf();
-        
+
         // Create a fake .git directory
         fs::create_dir(repo_root.join(".git")).unwrap();
-        
+
         let storage = Storage::for_repo(repo_root.clone());
         storage.init_all().unwrap();
-        
+
         // Check directories exist
         assert!(storage.local_dir().exists());
         assert!(storage.shared_dir().exists());
         assert!(storage.oplog_dir().exists());
         assert!(storage.hoist_dir().exists());
         assert!(storage.overrides_dir().exists());
-        
+
         // Check files exist
         assert!(storage.workspaces_file().exists());
         assert!(storage.leases_file().exists());
@@ -900,26 +907,26 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let repo_root = temp.path().to_path_buf();
         fs::create_dir(repo_root.join(".git")).unwrap();
-        
+
         let storage = Storage::for_repo(repo_root);
         storage.init_all().unwrap();
-        
+
         let test_file = storage.shared_dir().join("test.json");
-        
+
         #[derive(Serialize, serde::Deserialize, PartialEq, Debug)]
         struct TestData {
             name: String,
             value: i32,
         }
-        
+
         let data = TestData {
             name: "test".to_string(),
             value: 42,
         };
-        
+
         storage.write_json(&test_file, &data).unwrap();
         let read_back: TestData = storage.read_json(&test_file).unwrap();
-        
+
         assert_eq!(data, read_back);
     }
 
@@ -928,26 +935,50 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let repo_root = temp.path().to_path_buf();
         fs::create_dir(repo_root.join(".git")).unwrap();
-        
+
         let storage = Storage::for_repo(repo_root);
         storage.init_all().unwrap();
-        
+
         #[derive(Serialize, serde::Deserialize, PartialEq, Debug)]
         struct Record {
             id: u32,
             message: String,
         }
-        
+
         let file = storage.shared_dir().join("test.jsonl");
-        
+
         // Append some records
-        storage.append_jsonl(&file, &Record { id: 1, message: "first".to_string() }).unwrap();
-        storage.append_jsonl(&file, &Record { id: 2, message: "second".to_string() }).unwrap();
-        storage.append_jsonl(&file, &Record { id: 3, message: "third".to_string() }).unwrap();
-        
+        storage
+            .append_jsonl(
+                &file,
+                &Record {
+                    id: 1,
+                    message: "first".to_string(),
+                },
+            )
+            .unwrap();
+        storage
+            .append_jsonl(
+                &file,
+                &Record {
+                    id: 2,
+                    message: "second".to_string(),
+                },
+            )
+            .unwrap();
+        storage
+            .append_jsonl(
+                &file,
+                &Record {
+                    id: 3,
+                    message: "third".to_string(),
+                },
+            )
+            .unwrap();
+
         // Read them back
         let records: Vec<Record> = storage.read_jsonl(&file).unwrap();
-        
+
         assert_eq!(records.len(), 3);
         assert_eq!(records[0].id, 1);
         assert_eq!(records[1].id, 2);
@@ -959,15 +990,15 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let repo_root = temp.path().to_path_buf();
         fs::create_dir(repo_root.join(".git")).unwrap();
-        
+
         let storage = Storage::for_repo(repo_root);
-        
+
         // Initially no actor
         assert!(storage.read_actor().is_none());
-        
+
         // Write actor
         storage.write_actor("agent1").unwrap();
-        
+
         // Read back
         assert_eq!(storage.read_actor(), Some("agent1".to_string()));
     }
@@ -977,13 +1008,13 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let repo_root = temp.path().to_path_buf();
         fs::create_dir(repo_root.join(".git")).unwrap();
-        
+
         let storage = Storage::for_repo(repo_root.clone());
         storage.init_all().unwrap();
-        
+
         let mut registry = storage.read_workspaces().unwrap();
         assert!(registry.workspaces.is_empty());
-        
+
         let workspace_path = repo_root.join(".sv/worktrees/ws1");
         fs::create_dir_all(&workspace_path).unwrap();
 
@@ -999,9 +1030,9 @@ mod tests {
                 None,
             ))
             .unwrap();
-        
+
         storage.write_workspaces(&registry).unwrap();
-        
+
         // Read back
         let registry2 = storage.read_workspaces().unwrap();
         assert_eq!(registry2.workspaces.len(), 1);
@@ -1012,17 +1043,20 @@ mod tests {
     fn test_ensure_gitignore() {
         let temp = TempDir::new().unwrap();
         let repo_root = temp.path().to_path_buf();
-        
+
         // No existing .gitignore
         ensure_gitignore(&repo_root).unwrap();
-        
+
         let content = fs::read_to_string(repo_root.join(".gitignore")).unwrap();
         assert!(content.contains("/.sv/"));
-        
+
         // Running again should not duplicate
         ensure_gitignore(&repo_root).unwrap();
-        
+
         let content2 = fs::read_to_string(repo_root.join(".gitignore")).unwrap();
-        assert_eq!(content.matches("/.sv/").count(), content2.matches("/.sv/").count());
+        assert_eq!(
+            content.matches("/.sv/").count(),
+            content2.matches("/.sv/").count()
+        );
     }
 }

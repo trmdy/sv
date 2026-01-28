@@ -187,11 +187,7 @@ fn lease_break_marks_inactive() {
         .success();
 
     let leases = repo.read_leases().expect("read leases");
-    let lease_id = leases
-        .first()
-        .expect("lease exists")
-        .id
-        .to_string();
+    let lease_id = leases.first().expect("lease exists").id.to_string();
 
     sv_cmd(&repo)
         .env("SV_ACTOR", "alice")

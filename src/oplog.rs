@@ -201,7 +201,11 @@ impl OpLog {
     }
 
     /// Read operation records filtered and sorted by timestamp desc
-    pub fn read_filtered(&self, filter: &OpLogFilter, limit: Option<usize>) -> Result<Vec<OpRecord>> {
+    pub fn read_filtered(
+        &self,
+        filter: &OpLogFilter,
+        limit: Option<usize>,
+    ) -> Result<Vec<OpRecord>> {
         let mut records = self.read_all()?;
         records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
@@ -289,7 +293,11 @@ pub fn format_record(record: &OpRecord) -> String {
 
 /// Format multiple records as lines
 pub fn format_records(records: &[OpRecord]) -> String {
-    records.iter().map(format_record).collect::<Vec<_>>().join("\n")
+    records
+        .iter()
+        .map(format_record)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn format_details(record: &OpRecord) -> String {

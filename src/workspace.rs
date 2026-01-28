@@ -39,9 +39,9 @@ pub fn resolve_worktree_path(repo: &Repository, path: &Path) -> Result<PathBuf> 
         return Ok(path.to_path_buf());
     }
 
-    let workdir = repo.workdir().ok_or_else(|| {
-        Error::OperationFailed("repository has no working directory".to_string())
-    })?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| Error::OperationFailed("repository has no working directory".to_string()))?;
     Ok(workdir.join(path))
 }
 

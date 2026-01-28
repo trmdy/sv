@@ -271,20 +271,14 @@ mod tests {
         std::fs::write(&file_path, content).expect("write file");
 
         let mut index = repo.index().expect("index");
-        index
-            .add_path(Path::new(path))
-            .expect("add path to index");
+        index.add_path(Path::new(path)).expect("add path to index");
         index.write().expect("write index");
         let tree_id = index.write_tree().expect("write tree");
         let tree = repo.find_tree(tree_id).expect("tree");
         let base_signature = repo.signature().expect("signature");
         let signature = git2::Signature::new(
-            base_signature
-                .name()
-                .unwrap_or("Tester"),
-            base_signature
-                .email()
-                .unwrap_or("tester@example.com"),
+            base_signature.name().unwrap_or("Tester"),
+            base_signature.email().unwrap_or("tester@example.com"),
             &unique_signature_time(),
         )
         .expect("signature");
@@ -331,14 +325,7 @@ mod tests {
     #[test]
     fn dedup_collapses_identical_patch_ids() {
         let (_dir, repo) = init_repo();
-        let base = commit_on_ref(
-            &repo,
-            "HEAD",
-            None,
-            "file.txt",
-            "base",
-            "Base\n",
-        );
+        let base = commit_on_ref(&repo, "HEAD", None, "file.txt", "base", "Base\n");
         let msg = "Change\n\nChange-Id: CID-1";
         let commit_a = commit_on_ref(
             &repo,
@@ -368,14 +355,7 @@ mod tests {
     #[test]
     fn dedup_diverged_requires_prefer() {
         let (_dir, repo) = init_repo();
-        let base = commit_on_ref(
-            &repo,
-            "HEAD",
-            None,
-            "file.txt",
-            "base",
-            "Base\n",
-        );
+        let base = commit_on_ref(&repo, "HEAD", None, "file.txt", "base", "Base\n");
         let msg = "Change\n\nChange-Id: CID-2";
         let commit_a = commit_on_ref(
             &repo,
@@ -399,8 +379,7 @@ mod tests {
         assert_eq!(result.conflicts.len(), 1);
 
         let resolved =
-            dedup_commits_by_change_id(&repo, &[commit_a, commit_b], Some(Prefer::Last))
-                .unwrap();
+            dedup_commits_by_change_id(&repo, &[commit_a, commit_b], Some(Prefer::Last)).unwrap();
         assert_eq!(resolved.selected, vec![commit_b]);
         assert_eq!(resolved.warnings.len(), 1);
         assert!(resolved.conflicts.is_empty());

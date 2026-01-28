@@ -17,7 +17,8 @@ fn simulate_merge_detects_content_conflict() {
     repo.commit_all("ours").expect("commit ours");
 
     repo.checkout_branch("theirs").expect("checkout theirs");
-    repo.write_file("file.txt", "theirs\n").expect("write theirs");
+    repo.write_file("file.txt", "theirs\n")
+        .expect("write theirs");
     repo.commit_all("theirs").expect("commit theirs");
 
     let simulation = simulate_merge(repo.repo(), "refs/heads/ours", "refs/heads/theirs", None)
@@ -45,7 +46,8 @@ fn simulate_merge_returns_no_conflicts_for_disjoint_changes() {
     repo.commit_all("ours").expect("commit ours");
 
     repo.checkout_branch("theirs").expect("checkout theirs");
-    repo.write_file("file2.txt", "theirs\n").expect("write theirs");
+    repo.write_file("file2.txt", "theirs\n")
+        .expect("write theirs");
     repo.commit_all("theirs").expect("commit theirs");
 
     let simulation = simulate_merge(repo.repo(), "refs/heads/ours", "refs/heads/theirs", None)

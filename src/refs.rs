@@ -42,11 +42,9 @@ pub fn move_branch_ref(repo: &Repository, name: &str, target: Oid) -> Result<()>
 /// List local branches, optionally filtered by a glob pattern.
 pub fn list_branches(repo: &Repository, pattern: Option<&str>) -> Result<Vec<String>> {
     let matcher = if let Some(pattern) = pattern {
-        Some(
-            glob::Pattern::new(pattern).map_err(|err| {
-                Error::InvalidArgument(format!("invalid branch pattern '{pattern}': {err}"))
-            })?,
-        )
+        Some(glob::Pattern::new(pattern).map_err(|err| {
+            Error::InvalidArgument(format!("invalid branch pattern '{pattern}': {err}"))
+        })?)
     } else {
         None
     };

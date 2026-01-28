@@ -245,7 +245,11 @@ pub struct TasksCompactionConfig {
 }
 
 fn default_task_statuses() -> Vec<String> {
-    vec!["open".to_string(), "in_progress".to_string(), "closed".to_string()]
+    vec![
+        "open".to_string(),
+        "in_progress".to_string(),
+        "closed".to_string(),
+    ]
 }
 
 fn default_task_id_prefix() -> String {
@@ -510,7 +514,11 @@ mod tests {
         assert!(cfg.protect.paths.is_empty());
         assert_eq!(
             cfg.tasks.statuses,
-            vec!["open".to_string(), "in_progress".to_string(), "closed".to_string()]
+            vec![
+                "open".to_string(),
+                "in_progress".to_string(),
+                "closed".to_string()
+            ]
         );
         assert_eq!(cfg.tasks.id_prefix, "sv");
         assert_eq!(cfg.tasks.id_min_len, 3);
@@ -586,7 +594,11 @@ older_than = "90d"
         );
         assert_eq!(
             cfg.tasks.statuses,
-            vec!["open".to_string(), "review".to_string(), "closed".to_string()]
+            vec![
+                "open".to_string(),
+                "review".to_string(),
+                "closed".to_string()
+            ]
         );
         assert_eq!(cfg.tasks.id_prefix, "proj");
         assert_eq!(cfg.tasks.id_min_len, 4);
