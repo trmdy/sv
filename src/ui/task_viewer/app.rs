@@ -20,8 +20,9 @@ use crate::task::{TaskDetails, TaskRecord, TaskStore};
 use super::actions::{self, ActionOutcome, EditTaskInput, NewTaskInput};
 use super::cache::RenderCache;
 use super::editor::{
-    EditorAction, EditorFieldId, EditorKind, EditorMode, EditorState, PriorityAction,
-    PriorityPicker, StatusPicker, StatusPickerAction, TaskOption, TaskPicker, TaskPickerAction,
+    EditorAction, EditorFieldId, EditorKind, EditorMode, EditorState, MultiTaskPicker,
+    MultiTaskPickerAction, PriorityAction, PriorityPicker, StatusPicker, StatusPickerAction,
+    TaskOption, TaskPicker, TaskPickerAction,
 };
 use super::model;
 use super::view;
@@ -84,6 +85,7 @@ pub struct AppState {
     pub(crate) priority_picker: Option<PriorityPicker>,
     pub(crate) editor_priority_picker: Option<PriorityPicker>,
     pub(crate) parent_picker: Option<TaskPicker>,
+    pub(crate) children_picker: Option<MultiTaskPicker>,
     pub(crate) status_picker: Option<StatusPickerState>,
     pub(crate) info_message: Option<String>,
     detail_cache: HashMap<String, TaskDetails>,
@@ -113,6 +115,7 @@ impl AppState {
             priority_picker: None,
             editor_priority_picker: None,
             parent_picker: None,
+            children_picker: None,
             status_picker: None,
             info_message: None,
             detail_cache: HashMap::new(),
@@ -175,6 +178,9 @@ impl AppState {
         if self.parent_picker.is_some() {
             return "type to filter  j/k move  enter apply  esc cancel".to_string();
         }
+        if self.children_picker.is_some() {
+            return "type to filter  j/k move  space toggle  enter apply  esc cancel".to_string();
+        }
         if self.editor_priority_picker.is_some() {
             return "j/k move  enter apply  esc cancel".to_string();
         }
@@ -204,8 +210,7 @@ impl AppState {
         if self.filter_active {
             return "type filter  backspace delete  tab status  enter done  esc clear".to_string();
         }
-        "j/k move  n new  e edit  p priority  s status  / filter  r reload  q quit"
-            .to_string()
+        "j/k move  n new  e edit  p priority  s status  / filter  r reload  q quit".to_string()
     }
 
     pub(crate) fn task_count_summary(&self) -> String {
@@ -462,14 +467,17 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                         app.queue_detail_load(req_tx);
                     }
                     StatusPickerMode::Change => {
-                        let Some(task_id) = app.selected_task().map(|task| task.id.clone())
-                        else {
+                        let Some(task_id) = app.selected_task().map(|task| task.id.clone()) else {
                             app.set_error("no task selected".to_string());
                             return false;
                         };
                         app.status_picker = None;
-                        match actions::change_status(&app.store, app.actor.clone(), &task_id, &selected)
-                        {
+                        match actions::change_status(
+                            &app.store,
+                            app.actor.clone(),
+                            &task_id,
+                            &selected,
+                        ) {
                             Ok(outcome) => app.apply_outcome(outcome, req_tx),
                             Err(err) => app.set_error(err.to_string()),
                         }
@@ -495,6 +503,27 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                 app.parent_picker = None;
                 if let (Some(editor), Some(value)) = (app.editor.as_mut(), selected) {
                     editor.set_field_value(EditorFieldId::Parent, value);
+                }
+            }
+        }
+        return false;
+    }
+
+    if app.children_picker.is_some() {
+        let mut picker = app.children_picker.take().unwrap();
+        let action = picker.handle_key(key);
+        match action {
+            MultiTaskPickerAction::None => {
+                app.children_picker = Some(picker);
+            }
+            MultiTaskPickerAction::Cancel => {
+                app.children_picker = None;
+            }
+            MultiTaskPickerAction::Confirm => {
+                let selected = picker.selected_ids();
+                app.children_picker = None;
+                if let Some(editor) = app.editor.as_mut() {
+                    editor.set_field_value(EditorFieldId::Children, selected.join(", "));
                 }
             }
         }
@@ -548,6 +577,13 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                     picker.set_query(current.to_string());
                 }
                 app.parent_picker = Some(picker);
+                app.editor = Some(editor);
+            }
+            EditorAction::OpenChildrenPicker => {
+                let exclude = editor.task_id();
+                let selected_ids = parse_task_list(editor.field_value(EditorFieldId::Children));
+                let picker = MultiTaskPicker::new(app.task_picker_options(exclude), &selected_ids);
+                app.children_picker = Some(picker);
                 app.editor = Some(editor);
             }
             EditorAction::Submit => match editor.build_submit() {
@@ -698,6 +734,9 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
         KeyCode::Char('n') => {
             let default_priority = app.store.default_priority();
             app.editor = Some(EditorState::new_task(default_priority));
+            if app.is_narrow() {
+                app.show_detail = true;
+            }
             false
         }
         KeyCode::Char('e') => {
@@ -713,6 +752,9 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                 }
             };
             app.editor = Some(EditorState::edit_task(task, parent));
+            if app.is_narrow() {
+                app.show_detail = true;
+            }
             false
         }
         KeyCode::Char('p') => {
@@ -785,6 +827,23 @@ fn spawn_loader(store: TaskStore, req_rx: Receiver<LoadRequest>, ui_tx: Sender<U
             }
         }
     });
+}
+
+fn parse_task_list(value: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for part in value
+        .split(|ch: char| ch == ',' || ch.is_whitespace())
+        .map(|item| item.trim())
+    {
+        if part.is_empty() {
+            continue;
+        }
+        if seen.insert(part.to_string()) {
+            out.push(part.to_string());
+        }
+    }
+    out
 }
 
 fn spawn_watch(store: TaskStore, req_tx: Sender<LoadRequest>, ui_tx: Sender<UiMsg>) {

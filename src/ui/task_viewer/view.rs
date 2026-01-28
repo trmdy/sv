@@ -8,7 +8,10 @@ use ratatui::Frame;
 use crate::task::{TaskDetails, TaskRecord};
 
 use super::app::{AppState, StatusKind};
-use super::editor::{EditorFieldId, EditorMode, EditorState, PriorityPicker, StatusPicker, TaskPicker};
+use super::editor::{
+    EditorFieldId, EditorMode, EditorState, MultiTaskPicker, PriorityPicker, StatusPicker,
+    TaskPicker,
+};
 
 const STATUS_WIDTH: usize = 7;
 const READY_WIDTH: usize = 1;
@@ -37,14 +40,18 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
 
     render_footer(frame, app, footer);
 
-    if let Some(editor) = app.editor.as_ref() {
-        render_editor_modal(frame, area, editor);
-    }
-    if let Some(picker) = app.editor_priority_picker.as_ref().or(app.priority_picker.as_ref()) {
+    if let Some(picker) = app
+        .editor_priority_picker
+        .as_ref()
+        .or(app.priority_picker.as_ref())
+    {
         render_priority_modal(frame, area, picker);
     }
     if let Some(picker) = app.parent_picker.as_ref() {
         render_task_picker_modal(frame, area, picker);
+    }
+    if let Some(picker) = app.children_picker.as_ref() {
+        render_children_picker_modal(frame, area, picker);
     }
     if let Some(state) = app.status_picker.as_ref() {
         let title = match state.mode {
@@ -117,12 +124,21 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
 }
 
 fn render_detail(frame: &mut Frame, app: &mut AppState, area: Rect) {
-    let content = build_detail_lines(app, area.width.saturating_sub(2) as usize);
+    let content_width = area.width.saturating_sub(2) as usize;
+    let (title, content) = if let Some(editor) = app.editor.as_ref() {
+        let title = match editor.kind() {
+            super::editor::EditorKind::NewTask => "New Task",
+            super::editor::EditorKind::EditTask => "Edit Task",
+        };
+        (title, build_editor_lines(editor, content_width))
+    } else {
+        ("Details", build_detail_lines(app, content_width))
+    };
     let widget = Paragraph::new(content)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Details")
+                .title(title)
                 .border_style(Style::default().fg(Color::LightYellow)),
         )
         .wrap(Wrap { trim: false });
@@ -159,26 +175,6 @@ fn render_footer(frame: &mut Frame, app: &AppState, area: Rect) {
                 .border_style(Style::default().fg(Color::LightBlue)),
         );
     frame.render_widget(widget, area);
-}
-
-fn render_editor_modal(frame: &mut Frame, area: Rect, editor: &EditorState) {
-    let title = match editor.kind() {
-        super::editor::EditorKind::NewTask => "New Task",
-        super::editor::EditorKind::EditTask => "Edit Task",
-    };
-    let content_width = area.width.saturating_sub(8).min(72);
-    let lines = build_editor_lines(editor, content_width as usize);
-    let height = (lines.len() as u16 + 2)
-        .min(area.height.saturating_sub(4))
-        .max(8);
-    let width = content_width.max(40).min(area.width.saturating_sub(4));
-    let modal = centered_rect(width, height, area);
-
-    frame.render_widget(Clear, modal);
-    let widget = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(widget, modal);
 }
 
 fn render_priority_modal(frame: &mut Frame, area: Rect, picker: &PriorityPicker) {
@@ -221,7 +217,9 @@ fn render_status_modal(frame: &mut Frame, area: Rect, picker: &StatusPicker, tit
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (idx, option) in picker.options().iter().enumerate() {
         let base_style = if option.eq_ignore_ascii_case("all") {
-            Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD)
         } else {
             status_style(option).add_modifier(Modifier::BOLD)
         };
@@ -302,6 +300,81 @@ fn render_task_picker_modal(frame: &mut Frame, area: Rect, picker: &TaskPicker) 
     )));
     let widget = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title("Parent"))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(widget, modal);
+}
+
+fn render_children_picker_modal(frame: &mut Frame, area: Rect, picker: &MultiTaskPicker) {
+    let content_width = area.width.saturating_sub(6).min(72);
+    let max_height = area.height.saturating_sub(6).max(8);
+    let list_height = max_height.saturating_sub(6) as usize;
+    let modal = centered_rect(content_width, max_height, area);
+    frame.render_widget(Clear, modal);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let query = if picker.query().is_empty() {
+        "_".to_string()
+    } else {
+        picker.query().to_string()
+    };
+    lines.push(Line::from(vec![
+        Span::styled("search: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(query, Style::default().fg(Color::LightCyan)),
+    ]));
+    lines.push(Line::from(""));
+
+    let filtered = picker.filtered_indices();
+    if filtered.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No matches",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        let selected = Some(picker.selected_index());
+        let (start, end) = list_window(filtered.len(), selected, list_height.max(1));
+        let marker_width = 3usize;
+        let id_width = ID_WIDTH.min((content_width as usize).saturating_sub(marker_width + 6));
+        let title_width = (content_width as usize).saturating_sub(marker_width + id_width + 4);
+        for pos in start..end {
+            let idx = filtered[pos];
+            if let Some(option) = picker.options().get(idx) {
+                let marker = if picker.is_selected(idx) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
+                let marker_style = if picker.is_selected(idx) {
+                    Style::default().fg(Color::LightGreen)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                let mut spans = vec![
+                    Span::styled(marker, marker_style),
+                    Span::raw(" "),
+                    Span::styled(pad_text(&option.id, id_width), id_style()),
+                    Span::raw(" "),
+                    Span::styled(
+                        truncate_text(&option.title, title_width),
+                        Style::default().fg(Color::White),
+                    ),
+                ];
+                if selected == Some(pos) {
+                    for span in &mut spans {
+                        span.style = span.style.add_modifier(Modifier::REVERSED);
+                    }
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "type to filter  space toggle  enter apply  esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    let widget = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title("Children"))
         .wrap(Wrap { trim: true });
     frame.render_widget(widget, modal);
 }
@@ -393,7 +466,9 @@ fn build_editor_lines(editor: &EditorState, width: usize) -> Vec<Line<'static>> 
     lines.push(Line::from(""));
     let body_active = matches!(editor.active_field_id(), Some(EditorFieldId::Body));
     let hint = match editor.mode() {
-        EditorMode::Normal => "enter edit  tab next  shift+tab prev  ctrl+enter confirm  esc cancel",
+        EditorMode::Normal => {
+            "enter edit  tab next  shift+tab prev  ctrl+enter confirm  esc cancel"
+        }
         EditorMode::Insert => {
             if body_active {
                 "enter newline  tab next  ctrl+u clear  ctrl+enter confirm  esc cancel"

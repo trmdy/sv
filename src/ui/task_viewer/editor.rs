@@ -41,6 +41,7 @@ pub enum EditorAction {
     Submit,
     OpenPriorityPicker,
     OpenParentPicker,
+    OpenChildrenPicker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,8 +213,13 @@ impl EditorState {
             EditorMode::Normal => self.handle_normal_key(key),
             EditorMode::Insert => self.handle_insert_key(key),
         };
-        if matches!(action, EditorAction::None | EditorAction::OpenPriorityPicker | EditorAction::OpenParentPicker)
-        {
+        if matches!(
+            action,
+            EditorAction::None
+                | EditorAction::OpenPriorityPicker
+                | EditorAction::OpenParentPicker
+                | EditorAction::OpenChildrenPicker
+        ) {
             self.error = None;
         }
         action
@@ -316,15 +322,14 @@ impl EditorState {
             KeyCode::BackTab | KeyCode::Up | KeyCode::Char('k') => {
                 self.move_active(-1);
             }
-            KeyCode::Enter => {
-                match self.current_field_id() {
-                    Some(EditorFieldId::Priority) => return EditorAction::OpenPriorityPicker,
-                    Some(EditorFieldId::Parent) => return EditorAction::OpenParentPicker,
-                    _ => {
-                        self.mode = EditorMode::Insert;
-                    }
+            KeyCode::Enter => match self.current_field_id() {
+                Some(EditorFieldId::Priority) => return EditorAction::OpenPriorityPicker,
+                Some(EditorFieldId::Parent) => return EditorAction::OpenParentPicker,
+                Some(EditorFieldId::Children) => return EditorAction::OpenChildrenPicker,
+                _ => {
+                    self.mode = EditorMode::Insert;
                 }
-            }
+            },
             _ => {}
         }
         EditorAction::None
@@ -424,6 +429,22 @@ pub struct TaskPicker {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskPickerAction {
+    None,
+    Cancel,
+    Confirm,
+}
+
+#[derive(Debug, Clone)]
+pub struct MultiTaskPicker {
+    options: Vec<TaskOption>,
+    filtered: Vec<usize>,
+    selected: usize,
+    query: String,
+    selected_indices: std::collections::HashSet<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiTaskPickerAction {
     None,
     Cancel,
     Confirm,
@@ -651,6 +672,132 @@ impl TaskPicker {
     }
 }
 
+impl MultiTaskPicker {
+    pub fn new(options: Vec<TaskOption>, selected_ids: &[String]) -> Self {
+        let mut selected_indices = std::collections::HashSet::new();
+        if !selected_ids.is_empty() {
+            for (idx, option) in options.iter().enumerate() {
+                if selected_ids.iter().any(|id| id == &option.id) {
+                    selected_indices.insert(idx);
+                }
+            }
+        }
+        let filtered = (0..options.len()).collect();
+        Self {
+            options,
+            filtered,
+            selected: 0,
+            query: String::new(),
+            selected_indices,
+        }
+    }
+
+    pub fn options(&self) -> &[TaskOption] {
+        &self.options
+    }
+
+    pub fn filtered_indices(&self) -> &[usize] {
+        &self.filtered
+    }
+
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    pub fn is_selected(&self, option_index: usize) -> bool {
+        self.selected_indices.contains(&option_index)
+    }
+
+    pub fn selected_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .options
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, option)| {
+                if self.selected_indices.contains(&idx) {
+                    Some(option.id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent) -> MultiTaskPickerAction {
+        match key.code {
+            KeyCode::Esc => return MultiTaskPickerAction::Cancel,
+            KeyCode::Enter => return MultiTaskPickerAction::Confirm,
+            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+            KeyCode::Backspace => {
+                self.query.pop();
+                self.rebuild_filter();
+            }
+            KeyCode::Char(' ') => {
+                self.toggle_selected();
+            }
+            KeyCode::Char(ch) => {
+                if !ch.is_control() {
+                    self.query.push(ch);
+                    self.rebuild_filter();
+                }
+            }
+            _ => {}
+        }
+        MultiTaskPickerAction::None
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        let len = self.filtered.len() as isize;
+        if len == 0 {
+            self.selected = 0;
+            return;
+        }
+        let next = (self.selected as isize + delta).rem_euclid(len);
+        self.selected = next as usize;
+    }
+
+    fn toggle_selected(&mut self) {
+        if let Some(option_idx) = self.filtered.get(self.selected).copied() {
+            if self.selected_indices.contains(&option_idx) {
+                self.selected_indices.remove(&option_idx);
+            } else {
+                self.selected_indices.insert(option_idx);
+            }
+        }
+    }
+
+    fn rebuild_filter(&mut self) {
+        let query = self.query.trim().to_ascii_lowercase();
+        if query.is_empty() {
+            self.filtered = (0..self.options.len()).collect();
+            self.selected = 0;
+            return;
+        }
+        self.filtered = self
+            .options
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, option)| {
+                let id = option.id.to_ascii_lowercase();
+                let title = option.title.to_ascii_lowercase();
+                if fuzzy_match(&id, &query) || fuzzy_match(&title, &query) {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.selected = 0;
+    }
+}
+
 fn non_empty(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -736,5 +883,41 @@ mod tests {
         editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
         editor.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::empty()));
         assert_eq!(editor.field_value(EditorFieldId::Body), "a\nb");
+    }
+
+    #[test]
+    fn multi_task_picker_toggles_selection() {
+        let options = vec![
+            TaskOption {
+                id: "sv-1".to_string(),
+                title: "One".to_string(),
+            },
+            TaskOption {
+                id: "sv-2".to_string(),
+                title: "Two".to_string(),
+            },
+        ];
+        let mut picker = MultiTaskPicker::new(options, &[]);
+        assert!(picker.selected_ids().is_empty());
+        picker.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::empty()));
+        assert_eq!(picker.selected_ids(), vec!["sv-1".to_string()]);
+        picker.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::empty()));
+        assert!(picker.selected_ids().is_empty());
+    }
+
+    #[test]
+    fn multi_task_picker_seeds_selected_ids() {
+        let options = vec![
+            TaskOption {
+                id: "sv-1".to_string(),
+                title: "One".to_string(),
+            },
+            TaskOption {
+                id: "sv-2".to_string(),
+                title: "Two".to_string(),
+            },
+        ];
+        let picker = MultiTaskPicker::new(options, &["sv-2".to_string()]);
+        assert_eq!(picker.selected_ids(), vec!["sv-2".to_string()]);
     }
 }
