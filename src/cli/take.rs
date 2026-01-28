@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::events::{Event, EventDestination, EventKind};
 use crate::lease::{parse_duration, Lease, LeaseIntent, LeaseScope, LeaseStore, LeaseStrength};
+use crate::lock::{FileLock, DEFAULT_LOCK_TIMEOUT_MS};
 use crate::oplog::{LeaseChange, OpLog, OpRecord, UndoData};
 use crate::output::{emit_success, HumanOutput, OutputOptions};
 use crate::storage::Storage;
@@ -122,12 +123,17 @@ pub fn run(options: TakeOptions) -> Result<()> {
     
     // Parse scope
     let scope: LeaseScope = options.scope.parse()?;
-    
+
     // Determine actor (CLI override, env, persisted, config)
     let actor = actor::resolve_actor_optional(Some(&workdir), options.actor.as_deref())?;
-    
+
+    // Lock leases file to prevent concurrent writers from corrupting JSONL.
+    let leases_file = storage.leases_file();
+    let lock_path = leases_file.with_extension("lock");
+    let _lock = FileLock::acquire(&lock_path, DEFAULT_LOCK_TIMEOUT_MS)?;
+
     // Load existing leases
-    let existing_leases: Vec<Lease> = storage.read_jsonl(&storage.leases_file())?;
+    let existing_leases: Vec<Lease> = storage.read_jsonl(&leases_file)?;
     let mut store = LeaseStore::from_vec(existing_leases);
     
     // Expire stale leases
@@ -206,7 +212,7 @@ pub fn run(options: TakeOptions) -> Result<()> {
         
         created_leases.push(lease);
     }
-    
+
     // Write leases to storage
     if !updated_leases.is_empty() {
         // If we updated any leases, we need to rewrite the entire file
@@ -214,10 +220,10 @@ pub fn run(options: TakeOptions) -> Result<()> {
     } else {
         // Only new leases - can just append
         for lease in &created_leases {
-            storage.append_jsonl(&storage.leases_file(), lease)?;
+            storage.append_jsonl(&leases_file, lease)?;
         }
     }
-    
+
     // Record operation in oplog for undo support
     if !created_leases.is_empty() || !updated_leases.is_empty() {
         let oplog = OpLog::for_storage(&storage);
