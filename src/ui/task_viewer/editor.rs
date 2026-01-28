@@ -11,11 +11,10 @@ pub enum EditorKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorFieldId {
     Title,
+    Body,
     Priority,
     Parent,
-    RelatesId,
-    RelatesDesc,
-    Body,
+    Children,
 }
 
 #[derive(Debug, Clone)]
@@ -27,17 +26,11 @@ pub struct EditorField {
 }
 
 #[derive(Debug, Clone)]
-pub struct RelateInput {
-    pub id: String,
-    pub description: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct EditorSubmit {
     pub title: String,
     pub priority: Option<String>,
     pub parent: Option<String>,
-    pub relates: Option<RelateInput>,
+    pub children: Vec<String>,
     pub body: String,
 }
 
@@ -46,6 +39,14 @@ pub enum EditorAction {
     None,
     Cancel,
     Submit,
+    OpenPriorityPicker,
+    OpenParentPicker,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorMode {
+    Normal,
+    Insert,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +55,7 @@ pub struct EditorState {
     fields: Vec<EditorField>,
     active: usize,
     confirming: bool,
+    mode: EditorMode,
     error: Option<String>,
     default_priority: Option<String>,
     task_id: Option<String>,
@@ -71,6 +73,12 @@ impl EditorState {
                     required: true,
                 },
                 EditorField {
+                    id: EditorFieldId::Body,
+                    label: "Body",
+                    value: String::new(),
+                    required: false,
+                },
+                EditorField {
                     id: EditorFieldId::Priority,
                     label: "Priority",
                     value: String::new(),
@@ -83,33 +91,22 @@ impl EditorState {
                     required: false,
                 },
                 EditorField {
-                    id: EditorFieldId::RelatesId,
-                    label: "Relates",
-                    value: String::new(),
-                    required: false,
-                },
-                EditorField {
-                    id: EditorFieldId::RelatesDesc,
-                    label: "Relate note",
-                    value: String::new(),
-                    required: false,
-                },
-                EditorField {
-                    id: EditorFieldId::Body,
-                    label: "Description",
+                    id: EditorFieldId::Children,
+                    label: "Children",
                     value: String::new(),
                     required: false,
                 },
             ],
             active: 0,
             confirming: false,
+            mode: EditorMode::Normal,
             error: None,
             default_priority: Some(default_priority),
             task_id: None,
         }
     }
 
-    pub fn edit_task(task: &TaskRecord) -> Self {
+    pub fn edit_task(task: &TaskRecord, parent: Option<String>) -> Self {
         Self {
             kind: EditorKind::EditTask,
             fields: vec![
@@ -121,13 +118,32 @@ impl EditorState {
                 },
                 EditorField {
                     id: EditorFieldId::Body,
-                    label: "Description",
+                    label: "Body",
                     value: task.body.clone().unwrap_or_default(),
+                    required: false,
+                },
+                EditorField {
+                    id: EditorFieldId::Priority,
+                    label: "Priority",
+                    value: task.priority.clone(),
+                    required: false,
+                },
+                EditorField {
+                    id: EditorFieldId::Parent,
+                    label: "Parent",
+                    value: parent.unwrap_or_default(),
+                    required: false,
+                },
+                EditorField {
+                    id: EditorFieldId::Children,
+                    label: "Children",
+                    value: String::new(),
                     required: false,
                 },
             ],
             active: 0,
             confirming: false,
+            mode: EditorMode::Normal,
             error: None,
             default_priority: None,
             task_id: Some(task.id.clone()),
@@ -154,12 +170,26 @@ impl EditorState {
         self.confirming
     }
 
+    pub fn mode(&self) -> EditorMode {
+        self.mode
+    }
+
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
 
     pub fn default_priority(&self) -> Option<&str> {
         self.default_priority.as_deref()
+    }
+
+    pub fn field_value(&self, id: EditorFieldId) -> &str {
+        self.field_value_inner(id)
+    }
+
+    pub fn set_field_value(&mut self, id: EditorFieldId, value: String) {
+        if let Some(field) = self.fields.iter_mut().find(|field| field.id == id) {
+            field.value = value;
+        }
     }
 
     pub fn set_error(&mut self, message: String) {
@@ -171,49 +201,15 @@ impl EditorState {
         if self.confirming {
             return self.handle_confirm_key(key);
         }
-
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') {
-            if let Some(field) = self.current_field_mut() {
-                field.value.clear();
-            }
+        let action = match self.mode {
+            EditorMode::Normal => self.handle_normal_key(key),
+            EditorMode::Insert => self.handle_insert_key(key),
+        };
+        if matches!(action, EditorAction::None | EditorAction::OpenPriorityPicker | EditorAction::OpenParentPicker)
+        {
             self.error = None;
-            return EditorAction::None;
         }
-
-        match key.code {
-            KeyCode::Esc => return EditorAction::Cancel,
-            KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => {
-                self.move_active(1);
-            }
-            KeyCode::BackTab | KeyCode::Up | KeyCode::Char('k') => {
-                self.move_active(-1);
-            }
-            KeyCode::Enter => {
-                if self.active + 1 >= self.fields.len() {
-                    return self.attempt_confirm();
-                }
-                self.move_active(1);
-            }
-            KeyCode::Backspace => {
-                if let Some(field) = self.current_field_mut() {
-                    field.value.pop();
-                }
-            }
-            KeyCode::Char(ch) => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    return EditorAction::None;
-                }
-                if !ch.is_control() {
-                    if let Some(field) = self.current_field_mut() {
-                        field.value.push(ch);
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        self.error = None;
-        EditorAction::None
+        action
     }
 
     pub fn build_submit(&self) -> Result<EditorSubmit, String> {
@@ -221,19 +217,14 @@ impl EditorState {
         let title = self.field_value(EditorFieldId::Title).trim().to_string();
         let priority = non_empty(self.field_value(EditorFieldId::Priority));
         let parent = non_empty(self.field_value(EditorFieldId::Parent));
-        let relates_id = non_empty(self.field_value(EditorFieldId::RelatesId));
-        let relates_desc = non_empty(self.field_value(EditorFieldId::RelatesDesc));
-        let relates = match (relates_id, relates_desc) {
-            (Some(id), Some(description)) => Some(RelateInput { id, description }),
-            _ => None,
-        };
+        let children = parse_task_list(self.field_value(EditorFieldId::Children));
         let body = self.field_value(EditorFieldId::Body).to_string();
 
         Ok(EditorSubmit {
             title,
             priority,
             parent,
-            relates,
+            children,
             body,
         })
     }
@@ -280,14 +271,6 @@ impl EditorState {
                 return Err("priority must be P0-P4".to_string());
             }
         }
-        let relates_id = non_empty(self.field_value(EditorFieldId::RelatesId));
-        let relates_desc = non_empty(self.field_value(EditorFieldId::RelatesDesc));
-        if relates_id.is_some() && relates_desc.is_none() {
-            return Err("relation description required".to_string());
-        }
-        if relates_id.is_none() && relates_desc.is_some() {
-            return Err("relation id required".to_string());
-        }
         Ok(())
     }
 
@@ -305,12 +288,79 @@ impl EditorState {
         self.fields.get_mut(self.active)
     }
 
-    fn field_value(&self, id: EditorFieldId) -> &str {
+    fn current_field_id(&self) -> Option<EditorFieldId> {
+        self.fields.get(self.active).map(|field| field.id)
+    }
+
+    fn field_value_inner(&self, id: EditorFieldId) -> &str {
         self.fields
             .iter()
             .find(|field| field.id == id)
             .map(|field| field.value.as_str())
             .unwrap_or("")
+    }
+
+    fn handle_normal_key(&mut self, key: KeyEvent) -> EditorAction {
+        match key.code {
+            KeyCode::Esc => return EditorAction::Cancel,
+            KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => {
+                self.move_active(1);
+            }
+            KeyCode::BackTab | KeyCode::Up | KeyCode::Char('k') => {
+                self.move_active(-1);
+            }
+            KeyCode::Enter => {
+                match self.current_field_id() {
+                    Some(EditorFieldId::Priority) => return EditorAction::OpenPriorityPicker,
+                    Some(EditorFieldId::Parent) => return EditorAction::OpenParentPicker,
+                    _ => {
+                        self.mode = EditorMode::Insert;
+                    }
+                }
+            }
+            _ => {}
+        }
+        EditorAction::None
+    }
+
+    fn handle_insert_key(&mut self, key: KeyEvent) -> EditorAction {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') {
+            if let Some(field) = self.current_field_mut() {
+                field.value.clear();
+            }
+            return EditorAction::None;
+        }
+
+        match key.code {
+            KeyCode::Esc => return EditorAction::Cancel,
+            KeyCode::Enter | KeyCode::Tab => return self.finish_field(),
+            KeyCode::Backspace => {
+                if let Some(field) = self.current_field_mut() {
+                    field.value.pop();
+                }
+            }
+            KeyCode::Char(ch) => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    return EditorAction::None;
+                }
+                if !ch.is_control() {
+                    if let Some(field) = self.current_field_mut() {
+                        field.value.push(ch);
+                    }
+                }
+            }
+            _ => {}
+        }
+        EditorAction::None
+    }
+
+    fn finish_field(&mut self) -> EditorAction {
+        self.mode = EditorMode::Normal;
+        if self.active + 1 >= self.fields.len() {
+            return self.attempt_confirm();
+        }
+        self.move_active(1);
+        EditorAction::None
     }
 }
 
@@ -323,6 +373,40 @@ pub struct PriorityPicker {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PriorityAction {
+    None,
+    Cancel,
+    Confirm,
+}
+
+#[derive(Debug, Clone)]
+pub struct StatusPicker {
+    options: Vec<String>,
+    selected: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusPickerAction {
+    None,
+    Cancel,
+    Confirm,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskOption {
+    pub id: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskPicker {
+    options: Vec<TaskOption>,
+    filtered: Vec<usize>,
+    selected: usize,
+    query: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskPickerAction {
     None,
     Cancel,
     Confirm,
@@ -398,6 +482,158 @@ impl PriorityPicker {
     }
 }
 
+impl StatusPicker {
+    pub fn new(options: Vec<String>, current: Option<&str>) -> Self {
+        let selected = current
+            .and_then(|value| {
+                options
+                    .iter()
+                    .position(|option| option.eq_ignore_ascii_case(value))
+            })
+            .unwrap_or(0);
+        Self { options, selected }
+    }
+
+    pub fn options(&self) -> &[String] {
+        &self.options
+    }
+
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
+    pub fn selected_status(&self) -> &str {
+        self.options
+            .get(self.selected)
+            .map(|value| value.as_str())
+            .unwrap_or("")
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent) -> StatusPickerAction {
+        match key.code {
+            KeyCode::Esc => return StatusPickerAction::Cancel,
+            KeyCode::Enter => return StatusPickerAction::Confirm,
+            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+            _ => {}
+        }
+        StatusPickerAction::None
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        let len = self.options.len() as isize;
+        if len == 0 {
+            self.selected = 0;
+            return;
+        }
+        let next = (self.selected as isize + delta).rem_euclid(len);
+        self.selected = next as usize;
+    }
+}
+
+impl TaskPicker {
+    pub fn new(options: Vec<TaskOption>) -> Self {
+        let filtered: Vec<usize> = (0..options.len()).collect();
+        Self {
+            options,
+            filtered,
+            selected: 0,
+            query: String::new(),
+        }
+    }
+
+    pub fn set_query(&mut self, query: String) {
+        self.query = query;
+        self.rebuild_filter();
+    }
+
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    pub fn filtered_indices(&self) -> &[usize] {
+        &self.filtered
+    }
+
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
+    pub fn selected_option(&self) -> Option<&TaskOption> {
+        self.filtered
+            .get(self.selected)
+            .and_then(|idx| self.options.get(*idx))
+    }
+
+    pub fn options(&self) -> &[TaskOption] {
+        &self.options
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent) -> TaskPickerAction {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') {
+            self.query.clear();
+            self.rebuild_filter();
+            return TaskPickerAction::None;
+        }
+
+        match key.code {
+            KeyCode::Esc => return TaskPickerAction::Cancel,
+            KeyCode::Enter => return TaskPickerAction::Confirm,
+            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+            KeyCode::Backspace => {
+                self.query.pop();
+                self.rebuild_filter();
+            }
+            KeyCode::Char(ch) => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    return TaskPickerAction::None;
+                }
+                if !ch.is_control() {
+                    self.query.push(ch);
+                    self.rebuild_filter();
+                }
+            }
+            _ => {}
+        }
+        TaskPickerAction::None
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        let len = self.filtered.len() as isize;
+        if len == 0 {
+            self.selected = 0;
+            return;
+        }
+        let next = (self.selected as isize + delta).rem_euclid(len);
+        self.selected = next as usize;
+    }
+
+    fn rebuild_filter(&mut self) {
+        let query = self.query.trim().to_ascii_lowercase();
+        if query.is_empty() {
+            self.filtered = (0..self.options.len()).collect();
+            self.selected = 0;
+            return;
+        }
+        self.filtered = self
+            .options
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, option)| {
+                let id = option.id.to_ascii_lowercase();
+                let title = option.title.to_ascii_lowercase();
+                if fuzzy_match(&id, &query) || fuzzy_match(&title, &query) {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.selected = 0;
+    }
+}
+
 fn non_empty(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -405,6 +641,40 @@ fn non_empty(value: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn parse_task_list(value: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for part in value
+        .split(|ch: char| ch == ',' || ch.is_whitespace())
+        .map(|item| item.trim())
+    {
+        if part.is_empty() {
+            continue;
+        }
+        if seen.insert(part.to_string()) {
+            out.push(part.to_string());
+        }
+    }
+    out
+}
+
+fn fuzzy_match(value: &str, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let mut query_chars = query.chars();
+    let mut current = query_chars.next();
+    for ch in value.chars() {
+        if Some(ch) == current {
+            current = query_chars.next();
+            if current.is_none() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn is_valid_priority(value: &str) -> bool {
@@ -420,36 +690,9 @@ mod tests {
 
     #[test]
     fn editor_requires_title() {
-        let mut editor = EditorState::new_task("P2".to_string());
-        for _ in 0..editor.fields().len() {
-            let action = editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-            assert_eq!(action, EditorAction::None);
-        }
-        assert_eq!(editor.error(), Some("title is required"));
-    }
-
-    #[test]
-    fn editor_validates_relates_pair() {
-        let mut editor = EditorState::new_task("P2".to_string());
-        if let Some(field) = editor
-            .fields
-            .iter_mut()
-            .find(|f| f.id == EditorFieldId::Title)
-        {
-            field.value = "Title".to_string();
-        }
-        if let Some(field) = editor
-            .fields
-            .iter_mut()
-            .find(|f| f.id == EditorFieldId::RelatesDesc)
-        {
-            field.value = "needs id".to_string();
-        }
-        for _ in 0..editor.fields().len() {
-            let action = editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-            assert_eq!(action, EditorAction::None);
-        }
-        assert_eq!(editor.error(), Some("relation id required"));
+        let editor = EditorState::new_task("P2".to_string());
+        let err = editor.build_submit().expect_err("should require title");
+        assert_eq!(err, "title is required");
     }
 
     #[test]

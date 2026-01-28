@@ -2,23 +2,20 @@ use crate::error::{Error, Result};
 use crate::task::{TaskEvent, TaskEventType, TaskRecord, TaskStore};
 
 #[derive(Debug, Clone)]
-pub struct RelateInput {
-    pub id: String,
-    pub description: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct NewTaskInput {
     pub title: String,
     pub priority: Option<String>,
     pub parent: Option<String>,
-    pub relates: Option<RelateInput>,
+    pub children: Vec<String>,
     pub body: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct EditTaskInput {
     pub title: String,
+    pub priority: Option<String>,
+    pub parent: Option<String>,
+    pub children: Vec<String>,
     pub body: String,
 }
 
@@ -46,23 +43,7 @@ pub fn create_task(
         .map(|value| store.resolve_task_id(&value))
         .transpose()?;
 
-    let relates = match input.relates {
-        Some(relate) => {
-            let id = relate.id.trim();
-            let description = relate.description.trim();
-            if id.is_empty() || description.is_empty() {
-                return Err(Error::InvalidArgument(
-                    "relation id and description required".to_string(),
-                ));
-            }
-            let resolved = store.resolve_task_id(id)?;
-            Some(RelateInput {
-                id: resolved,
-                description: description.to_string(),
-            })
-        }
-        None => None,
-    };
+    let children = resolve_children(store, &input.children)?;
 
     let normalized_priority = input
         .priority
@@ -90,12 +71,20 @@ pub fn create_task(
         store.append_event(parent_event)?;
     }
 
-    if let Some(relate) = relates {
-        let mut relate_event = TaskEvent::new(TaskEventType::TaskRelated, task_id.clone());
-        relate_event.actor = actor.clone();
-        relate_event.related_task_id = Some(relate.id);
-        relate_event.relation_description = Some(relate.description);
-        store.append_event(relate_event)?;
+    for child in children {
+        if child == task_id {
+            return Err(Error::InvalidArgument(
+                "child cannot match parent".to_string(),
+            ));
+        }
+        let relations = store.relations(&child)?;
+        if relations.parent.as_deref() == Some(task_id.as_str()) {
+            continue;
+        }
+        let mut parent_event = TaskEvent::new(TaskEventType::TaskParentSet, child.clone());
+        parent_event.actor = actor.clone();
+        parent_event.related_task_id = Some(task_id.clone());
+        store.append_event(parent_event)?;
     }
 
     Ok(ActionOutcome {
@@ -120,7 +109,36 @@ pub fn edit_task(
     let title_changed = title != task.title;
     let body_changed = normalized_body != task.body;
 
-    if !title_changed && !body_changed {
+    let normalized_priority = input
+        .priority
+        .as_deref()
+        .and_then(|value| non_empty(value))
+        .map(|value| store.normalize_priority(&value))
+        .transpose()?;
+    let priority_changed = normalized_priority
+        .as_ref()
+        .map(|value| value != &task.priority)
+        .unwrap_or(false);
+
+    let relations = store.relations(task_id)?;
+    let parent_input = input
+        .parent
+        .as_deref()
+        .and_then(|value| non_empty(value))
+        .map(|value| store.resolve_task_id(&value))
+        .transpose()?;
+    let parent_changed = match (relations.parent.as_deref(), parent_input.as_deref()) {
+        (None, None) => false,
+        (Some(existing), Some(next)) => existing != next,
+        (Some(_), None) => true,
+        (None, Some(_)) => true,
+    };
+
+    let children = resolve_children(store, &input.children)?;
+    let children_changed = !children.is_empty();
+
+    if !title_changed && !body_changed && !priority_changed && !parent_changed && !children_changed
+    {
         return Ok(ActionOutcome {
             changed: false,
             message: "no changes".to_string(),
@@ -128,15 +146,69 @@ pub fn edit_task(
         });
     }
 
-    let mut event = TaskEvent::new(TaskEventType::TaskEdited, task_id.to_string());
-    event.actor = actor.clone();
-    if title_changed {
-        event.title = Some(title.to_string());
+    if title_changed || body_changed {
+        let mut event = TaskEvent::new(TaskEventType::TaskEdited, task_id.to_string());
+        event.actor = actor.clone();
+        if title_changed {
+            event.title = Some(title.to_string());
+        }
+        if body_changed {
+            event.body = Some(input.body);
+        }
+        store.append_event(event)?;
     }
-    if body_changed {
-        event.body = Some(input.body);
+
+    if let Some(priority) = normalized_priority {
+        if priority_changed {
+            let mut event =
+                TaskEvent::new(TaskEventType::TaskPriorityChanged, task_id.to_string());
+            event.actor = actor.clone();
+            event.priority = Some(priority);
+            store.append_event(event)?;
+        }
     }
-    store.append_event(event)?;
+
+    if parent_changed {
+        match parent_input {
+            Some(parent) => {
+                if parent == task_id {
+                    return Err(Error::InvalidArgument(
+                        "parent cannot match child".to_string(),
+                    ));
+                }
+                let mut event =
+                    TaskEvent::new(TaskEventType::TaskParentSet, task_id.to_string());
+                event.actor = actor.clone();
+                event.related_task_id = Some(parent);
+                store.append_event(event)?;
+            }
+            None => {
+                if let Some(existing) = relations.parent.as_deref() {
+                    let mut event =
+                        TaskEvent::new(TaskEventType::TaskParentCleared, task_id.to_string());
+                    event.actor = actor.clone();
+                    event.related_task_id = Some(existing.to_string());
+                    store.append_event(event)?;
+                }
+            }
+        }
+    }
+
+    for child in children {
+        if child == task_id {
+            return Err(Error::InvalidArgument(
+                "child cannot match parent".to_string(),
+            ));
+        }
+        let child_relations = store.relations(&child)?;
+        if child_relations.parent.as_deref() == Some(task_id) {
+            continue;
+        }
+        let mut parent_event = TaskEvent::new(TaskEventType::TaskParentSet, child.clone());
+        parent_event.actor = actor.clone();
+        parent_event.related_task_id = Some(task_id.to_string());
+        store.append_event(parent_event)?;
+    }
 
     Ok(ActionOutcome {
         changed: true,
@@ -173,6 +245,34 @@ pub fn change_priority(
     })
 }
 
+pub fn change_status(
+    store: &TaskStore,
+    actor: Option<String>,
+    task_id: &str,
+    status: &str,
+) -> Result<ActionOutcome> {
+    store.validate_status(status)?;
+    let task = load_task(store, task_id)?;
+    if task.status.eq_ignore_ascii_case(status) {
+        return Ok(ActionOutcome {
+            changed: false,
+            message: "status unchanged".to_string(),
+            task_id: Some(task_id.to_string()),
+        });
+    }
+
+    let mut event = TaskEvent::new(TaskEventType::TaskStatusChanged, task_id.to_string());
+    event.actor = actor.clone();
+    event.status = Some(status.to_string());
+    store.append_event(event)?;
+
+    Ok(ActionOutcome {
+        changed: true,
+        message: format!("status set to {status}"),
+        task_id: Some(task_id.to_string()),
+    })
+}
+
 fn load_task(store: &TaskStore, task_id: &str) -> Result<TaskRecord> {
     let tasks = store.list(None)?;
     tasks
@@ -196,6 +296,21 @@ fn non_empty(value: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn resolve_children(store: &TaskStore, children: &[String]) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for child in children {
+        let trimmed = child.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let resolved = store.resolve_task_id(trimmed)?;
+        if !out.iter().any(|existing| existing == &resolved) {
+            out.push(resolved);
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -236,7 +351,7 @@ mod tests {
                 title: "   ".to_string(),
                 priority: None,
                 parent: None,
-                relates: None,
+                children: Vec::new(),
                 body: "".to_string(),
             },
         )
@@ -254,6 +369,9 @@ mod tests {
             &task_id,
             EditTaskInput {
                 title: "Keep".to_string(),
+                priority: None,
+                parent: None,
+                children: Vec::new(),
                 body: "".to_string(),
             },
         )
@@ -271,6 +389,9 @@ mod tests {
             &task_id,
             EditTaskInput {
                 title: "New".to_string(),
+                priority: None,
+                parent: None,
+                children: Vec::new(),
                 body: "Details".to_string(),
             },
         )
@@ -298,5 +419,15 @@ mod tests {
         assert!(outcome.changed);
         let updated = load_task(&store, &task_id).expect("load");
         assert_eq!(updated.priority, "P0");
+    }
+
+    #[test]
+    fn status_change_updates_record() {
+        let (_dir, store) = setup_store();
+        let task_id = seed_task(&store, "Keep");
+        let outcome = change_status(&store, None, &task_id, "in_progress").expect("status");
+        assert!(outcome.changed);
+        let updated = load_task(&store, &task_id).expect("load");
+        assert_eq!(updated.status, "in_progress");
     }
 }

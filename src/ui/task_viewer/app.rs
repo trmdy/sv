@@ -19,7 +19,10 @@ use crate::task::{TaskDetails, TaskRecord, TaskStore};
 
 use super::actions::{self, ActionOutcome, EditTaskInput, NewTaskInput};
 use super::cache::RenderCache;
-use super::editor::{EditorAction, EditorKind, EditorState, PriorityAction, PriorityPicker};
+use super::editor::{
+    EditorAction, EditorFieldId, EditorKind, EditorMode, EditorState, PriorityAction,
+    PriorityPicker, StatusPicker, StatusPickerAction, TaskOption, TaskPicker, TaskPickerAction,
+};
 use super::model;
 use super::view;
 
@@ -51,6 +54,17 @@ pub(crate) enum StatusKind {
     Info,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum StatusPickerMode {
+    Filter,
+    Change,
+}
+
+pub(crate) struct StatusPickerState {
+    pub(crate) picker: StatusPicker,
+    pub(crate) mode: StatusPickerMode,
+}
+
 #[derive(Default, Clone, Copy)]
 struct Viewport {
     width: u16,
@@ -68,6 +82,9 @@ pub struct AppState {
     pub(crate) blocked_ids: HashSet<String>,
     pub(crate) editor: Option<EditorState>,
     pub(crate) priority_picker: Option<PriorityPicker>,
+    pub(crate) editor_priority_picker: Option<PriorityPicker>,
+    pub(crate) parent_picker: Option<TaskPicker>,
+    pub(crate) status_picker: Option<StatusPickerState>,
     pub(crate) info_message: Option<String>,
     detail_cache: HashMap<String, TaskDetails>,
     pending_details: HashSet<String>,
@@ -94,6 +111,9 @@ impl AppState {
             blocked_ids: HashSet::new(),
             editor: None,
             priority_picker: None,
+            editor_priority_picker: None,
+            parent_picker: None,
+            status_picker: None,
             info_message: None,
             detail_cache: HashMap::new(),
             pending_details: HashSet::new(),
@@ -153,15 +173,31 @@ impl AppState {
             if editor.confirming() {
                 return "y confirm  backspace edit  esc cancel".to_string();
             }
-            return "tab next  shift+tab prev  enter next  esc cancel".to_string();
+            return match editor.mode() {
+                EditorMode::Normal => {
+                    "enter edit  tab next  shift+tab prev  esc cancel".to_string()
+                }
+                EditorMode::Insert => {
+                    "enter/tab next  ctrl+u clear  esc cancel".to_string()
+                }
+            };
+        }
+        if self.editor_priority_picker.is_some() {
+            return "j/k move  enter apply  esc cancel".to_string();
+        }
+        if self.parent_picker.is_some() {
+            return "type to filter  j/k move  enter apply  esc cancel".to_string();
+        }
+        if self.status_picker.is_some() {
+            return "j/k move  enter apply  esc cancel".to_string();
         }
         if self.priority_picker.is_some() {
             return "j/k move  enter apply  esc cancel".to_string();
         }
         if self.filter_active {
-            return "esc clear  enter done  j/k move  ctrl+d/u jump  q quit".to_string();
+            return "type filter  backspace delete  tab status  enter done  esc clear".to_string();
         }
-        "j/k move  n new  e edit  p priority  / filter  o/i/c/a status  r reload  q quit"
+        "j/k move  n new  e edit  p priority  s status  / filter  r reload  q quit"
             .to_string()
     }
 
@@ -187,6 +223,29 @@ impl AppState {
 
     pub(crate) fn is_task_ready(&self, task: &TaskRecord) -> bool {
         task.status == self.config.default_status && !self.blocked_ids.contains(&task.id)
+    }
+
+    fn task_picker_options(&self, exclude_id: Option<&str>) -> Vec<TaskOption> {
+        let mut options: Vec<TaskOption> = self
+            .tasks
+            .iter()
+            .filter(|task| Some(task.id.as_str()) != exclude_id)
+            .map(|task| TaskOption {
+                id: task.id.clone(),
+                title: task.title.clone(),
+            })
+            .collect();
+        options.sort_by(|left, right| left.id.cmp(&right.id));
+        options
+    }
+
+    fn status_options(&self, include_all: bool) -> Vec<String> {
+        let mut options = Vec::new();
+        if include_all {
+            options.push("all".to_string());
+        }
+        options.extend(self.config.statuses.iter().cloned());
+        options
     }
 
     fn apply_filter(&mut self, previous_id: Option<String>) {
@@ -372,6 +431,48 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
         return true;
     }
 
+    if let Some(mut state) = app.status_picker.take() {
+        let action = state.picker.handle_key(key);
+        match action {
+            StatusPickerAction::None => {
+                app.status_picker = Some(state);
+            }
+            StatusPickerAction::Cancel => {
+                app.status_picker = None;
+            }
+            StatusPickerAction::Confirm => {
+                let selected = state.picker.selected_status().to_string();
+                match state.mode {
+                    StatusPickerMode::Filter => {
+                        app.status_picker = None;
+                        if selected.eq_ignore_ascii_case("all") {
+                            app.set_status_filter(None);
+                        } else {
+                            app.set_status_filter(Some(selected));
+                        }
+                        let previous = app.selected_task().map(|task| task.id.clone());
+                        app.apply_filter(previous);
+                        app.queue_detail_load(req_tx);
+                    }
+                    StatusPickerMode::Change => {
+                        let Some(task_id) = app.selected_task().map(|task| task.id.clone())
+                        else {
+                            app.set_error("no task selected".to_string());
+                            return false;
+                        };
+                        app.status_picker = None;
+                        match actions::change_status(&app.store, app.actor.clone(), &task_id, &selected)
+                        {
+                            Ok(outcome) => app.apply_outcome(outcome, req_tx),
+                            Err(err) => app.set_error(err.to_string()),
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     if app.editor.is_some() {
         let mut editor = app.editor.take().unwrap();
         let kind = editor.kind();
@@ -385,6 +486,21 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                 app.editor = None;
                 app.set_info("cancelled".to_string());
             }
+            EditorAction::OpenPriorityPicker => {
+                let current = editor.field_value(EditorFieldId::Priority);
+                app.editor_priority_picker = Some(PriorityPicker::new(current));
+                app.editor = Some(editor);
+            }
+            EditorAction::OpenParentPicker => {
+                let exclude = editor.task_id();
+                let mut picker = TaskPicker::new(app.task_picker_options(exclude));
+                let current = editor.field_value(EditorFieldId::Parent).trim();
+                if !current.is_empty() {
+                    picker.set_query(current.to_string());
+                }
+                app.parent_picker = Some(picker);
+                app.editor = Some(editor);
+            }
             EditorAction::Submit => match editor.build_submit() {
                 Ok(submit) => {
                     let outcome = match kind {
@@ -395,10 +511,7 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                                 title: submit.title,
                                 priority: submit.priority,
                                 parent: submit.parent,
-                                relates: submit.relates.map(|relate| actions::RelateInput {
-                                    id: relate.id,
-                                    description: relate.description,
-                                }),
+                                children: submit.children,
                                 body: submit.body,
                             },
                         ),
@@ -410,6 +523,9 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                                     &task_id,
                                     EditTaskInput {
                                         title: submit.title,
+                                        priority: submit.priority,
+                                        parent: submit.parent,
+                                        children: submit.children,
                                         body: submit.body,
                                     },
                                 )
@@ -437,6 +553,48 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                     app.editor = Some(editor);
                 }
             },
+        }
+        return false;
+    }
+
+    if app.editor_priority_picker.is_some() {
+        let mut picker = app.editor_priority_picker.take().unwrap();
+        let action = picker.handle_key(key);
+        match action {
+            PriorityAction::None => {
+                app.editor_priority_picker = Some(picker);
+            }
+            PriorityAction::Cancel => {
+                app.editor_priority_picker = None;
+            }
+            PriorityAction::Confirm => {
+                let selected = picker.selected_priority().to_string();
+                app.editor_priority_picker = None;
+                if let Some(editor) = app.editor.as_mut() {
+                    editor.set_field_value(EditorFieldId::Priority, selected);
+                }
+            }
+        }
+        return false;
+    }
+
+    if app.parent_picker.is_some() {
+        let mut picker = app.parent_picker.take().unwrap();
+        let action = picker.handle_key(key);
+        match action {
+            TaskPickerAction::None => {
+                app.parent_picker = Some(picker);
+            }
+            TaskPickerAction::Cancel => {
+                app.parent_picker = None;
+            }
+            TaskPickerAction::Confirm => {
+                let selected = picker.selected_option().map(|option| option.id.clone());
+                app.parent_picker = None;
+                if let (Some(editor), Some(value)) = (app.editor.as_mut(), selected) {
+                    editor.set_field_value(EditorFieldId::Parent, value);
+                }
+            }
         }
         return false;
     }
@@ -474,6 +632,17 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                 app.filter_active = false;
             }
             KeyCode::Enter => app.filter_active = false,
+            KeyCode::Tab => {
+                let current = app
+                    .status_filter
+                    .clone()
+                    .unwrap_or_else(|| "all".to_string());
+                let picker = StatusPicker::new(app.status_options(true), Some(&current));
+                app.status_picker = Some(StatusPickerState {
+                    picker,
+                    mode: StatusPickerMode::Filter,
+                });
+            }
             KeyCode::Backspace => {
                 app.filter.pop();
             }
@@ -529,7 +698,14 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                 app.set_error("no task selected".to_string());
                 return false;
             };
-            app.editor = Some(EditorState::edit_task(task));
+            let parent = match app.store.relations(&task.id) {
+                Ok(relations) => relations.parent,
+                Err(err) => {
+                    app.set_error(err.to_string());
+                    return false;
+                }
+            };
+            app.editor = Some(EditorState::edit_task(task, parent));
             false
         }
         KeyCode::Char('p') => {
@@ -540,32 +716,17 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
             app.priority_picker = Some(PriorityPicker::new(&task.priority));
             false
         }
-        KeyCode::Char('o') => {
-            app.set_status_filter(Some("open".to_string()));
-            let previous = app.selected_task().map(|task| task.id.clone());
-            app.apply_filter(previous);
-            app.queue_detail_load(req_tx);
-            false
-        }
-        KeyCode::Char('i') => {
-            app.set_status_filter(Some("in_progress".to_string()));
-            let previous = app.selected_task().map(|task| task.id.clone());
-            app.apply_filter(previous);
-            app.queue_detail_load(req_tx);
-            false
-        }
-        KeyCode::Char('c') => {
-            app.set_status_filter(Some("closed".to_string()));
-            let previous = app.selected_task().map(|task| task.id.clone());
-            app.apply_filter(previous);
-            app.queue_detail_load(req_tx);
-            false
-        }
-        KeyCode::Char('a') => {
-            app.set_status_filter(None);
-            let previous = app.selected_task().map(|task| task.id.clone());
-            app.apply_filter(previous);
-            app.queue_detail_load(req_tx);
+        KeyCode::Char('s') => {
+            let Some(task) = app.selected_task() else {
+                app.set_error("no task selected".to_string());
+                return false;
+            };
+            let options = app.status_options(false);
+            let picker = StatusPicker::new(options, Some(task.status.as_str()));
+            app.status_picker = Some(StatusPickerState {
+                picker,
+                mode: StatusPickerMode::Change,
+            });
             false
         }
         KeyCode::Enter => {

@@ -8,7 +8,7 @@ use ratatui::Frame;
 use crate::task::{TaskDetails, TaskRecord};
 
 use super::app::{AppState, StatusKind};
-use super::editor::{EditorFieldId, EditorState, PriorityPicker};
+use super::editor::{EditorFieldId, EditorMode, EditorState, PriorityPicker, StatusPicker, TaskPicker};
 
 const STATUS_WIDTH: usize = 7;
 const READY_WIDTH: usize = 1;
@@ -39,8 +39,19 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
 
     if let Some(editor) = app.editor.as_ref() {
         render_editor_modal(frame, area, editor);
-    } else if let Some(picker) = app.priority_picker.as_ref() {
+    }
+    if let Some(picker) = app.editor_priority_picker.as_ref().or(app.priority_picker.as_ref()) {
         render_priority_modal(frame, area, picker);
+    }
+    if let Some(picker) = app.parent_picker.as_ref() {
+        render_task_picker_modal(frame, area, picker);
+    }
+    if let Some(state) = app.status_picker.as_ref() {
+        let title = match state.mode {
+            super::app::StatusPickerMode::Filter => "Status Filter",
+            super::app::StatusPickerMode::Change => "Status",
+        };
+        render_status_modal(frame, area, &state.picker, title);
     }
 }
 
@@ -178,7 +189,12 @@ fn render_priority_modal(frame: &mut Frame, area: Rect, picker: &PriorityPicker)
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (idx, option) in picker.options().iter().enumerate() {
-        let mut span = Span::styled(option.clone(), Style::default().fg(Color::White));
+        let mut span = Span::styled(
+            option.clone(),
+            Style::default()
+                .fg(priority_color(option))
+                .add_modifier(Modifier::BOLD),
+        );
         if idx == picker.selected_index() {
             span.style = span.style.add_modifier(Modifier::REVERSED);
         }
@@ -192,6 +208,100 @@ fn render_priority_modal(frame: &mut Frame, area: Rect, picker: &PriorityPicker)
 
     let widget = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title("Priority"))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(widget, modal);
+}
+
+fn render_status_modal(frame: &mut Frame, area: Rect, picker: &StatusPicker, title: &str) {
+    let content_width = 26u16.min(area.width.saturating_sub(6));
+    let height = (picker.options().len() as u16 + 4).min(area.height.saturating_sub(4));
+    let modal = centered_rect(content_width, height, area);
+    frame.render_widget(Clear, modal);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (idx, option) in picker.options().iter().enumerate() {
+        let base_style = if option.eq_ignore_ascii_case("all") {
+            Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)
+        } else {
+            status_style(option).add_modifier(Modifier::BOLD)
+        };
+        let mut span = Span::styled(option.clone(), base_style);
+        if idx == picker.selected_index() {
+            span.style = span.style.add_modifier(Modifier::REVERSED);
+        }
+        lines.push(Line::from(span));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "enter apply  esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let widget = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(widget, modal);
+}
+
+fn render_task_picker_modal(frame: &mut Frame, area: Rect, picker: &TaskPicker) {
+    let content_width = area.width.saturating_sub(6).min(72);
+    let max_height = area.height.saturating_sub(6).max(8);
+    let list_height = max_height.saturating_sub(6) as usize;
+    let modal = centered_rect(content_width, max_height, area);
+    frame.render_widget(Clear, modal);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let query = if picker.query().is_empty() {
+        "_".to_string()
+    } else {
+        picker.query().to_string()
+    };
+    lines.push(Line::from(vec![
+        Span::styled("search: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(query, Style::default().fg(Color::LightCyan)),
+    ]));
+    lines.push(Line::from(""));
+
+    let filtered = picker.filtered_indices();
+    if filtered.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No matches",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        let selected = Some(picker.selected_index());
+        let (start, end) = list_window(filtered.len(), selected, list_height.max(1));
+        let id_width = ID_WIDTH.min((content_width as usize).saturating_sub(6));
+        let title_width = (content_width as usize)
+            .saturating_sub(id_width)
+            .saturating_sub(3);
+        for pos in start..end {
+            let idx = filtered[pos];
+            if let Some(option) = picker.options().get(idx) {
+                let id_text = pad_text(&option.id, id_width);
+                let title_text = truncate_text(&option.title, title_width);
+                let mut spans = vec![
+                    Span::styled(id_text, id_style()),
+                    Span::raw(" "),
+                    Span::styled(title_text, Style::default().fg(Color::White)),
+                ];
+                if selected == Some(pos) {
+                    for span in &mut spans {
+                        span.style = span.style.add_modifier(Modifier::REVERSED);
+                    }
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "type to filter  enter apply  esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    let widget = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title("Parent"))
         .wrap(Wrap { trim: true });
     frame.render_widget(widget, modal);
 }
@@ -250,8 +360,12 @@ fn build_editor_lines(editor: &EditorState, width: usize) -> Vec<Line<'static>> 
         )));
     }
     lines.push(Line::from(""));
+    let hint = match editor.mode() {
+        EditorMode::Normal => "enter edit  tab next  shift+tab prev  esc cancel",
+        EditorMode::Insert => "enter/tab next  ctrl+u clear  esc cancel",
+    };
     lines.push(Line::from(Span::styled(
-        "tab next  shift+tab prev  enter next  esc cancel",
+        hint,
         Style::default().fg(Color::DarkGray),
     )));
     lines
@@ -292,26 +406,25 @@ fn build_confirm_lines(editor: &EditorState, width: usize) -> Vec<Line<'static>>
                 Span::styled(truncate_text(parent, width.saturating_sub(9)), id_style()),
             ]));
         }
-        if let Some(relate) = submit.relates.as_ref() {
-            let summary = format!("{} - {}", relate.id, relate.description);
+        if !submit.children.is_empty() {
             lines.push(Line::from(vec![
-                label_span("Relates: "),
+                label_span("Children: "),
                 Span::styled(
-                    truncate_text(&summary, width.saturating_sub(10)),
+                    truncate_text(&submit.children.join(", "), width.saturating_sub(11)),
                     id_style(),
                 ),
             ]));
         }
         if submit.body.trim().is_empty() {
             lines.push(Line::from(vec![
-                label_span("Description: "),
+                label_span("Body: "),
                 Span::styled("(none)".to_string(), Style::default().fg(Color::DarkGray)),
             ]));
         } else {
             lines.push(Line::from(vec![
-                label_span("Description: "),
+                label_span("Body: "),
                 Span::styled(
-                    truncate_text(&submit.body, width.saturating_sub(14)),
+                    truncate_text(&submit.body, width.saturating_sub(8)),
                     Style::default().fg(Color::White),
                 ),
             ]));
@@ -478,7 +591,7 @@ fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
         .as_deref()
         .map(|value| value.trim_end())
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or("No description.");
+        .unwrap_or("No body.");
     for line in body.lines() {
         lines.push(Line::from(Span::styled(
             line.to_string(),
