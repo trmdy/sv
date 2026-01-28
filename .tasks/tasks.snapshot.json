@@ -1,7 +1,80 @@
 {
   "schema_version": "sv.tasks.v1",
-  "generated_at": "2026-01-12T15:28:39.458152Z",
+  "generated_at": "2026-01-28T13:05:40.137660Z",
   "tasks": [
+    {
+      "id": "sv-5xa",
+      "title": "Epic: Additional TUI commands",
+      "status": "open",
+      "priority": "P0",
+      "created_at": "2026-01-28T12:37:05.895744Z",
+      "updated_at": "2026-01-28T13:05:40.130073Z",
+      "body": "Epic to deliver new task creation and editing commands in the TUI.\\n\\nScope\\n- Add 'n' new task wizard (title required; optional priority/relations/description).\\n- Add 'p' change priority for selected task.\\n- Add 'e' inline edit for selected task.\\n- Update keybindings/help so users can discover new commands.\\n- Add reasonable test coverage for the new flows.\\n",
+      "workspace_id": "4365f497-2aae-41bb-9bb8-24b1daab916b",
+      "workspace": "sv",
+      "branch": "main",
+      "comments_count": 0
+    },
+    {
+      "id": "sv-5n3",
+      "title": "TUI: Inline edit selected task ('e')",
+      "status": "open",
+      "priority": "P1",
+      "created_at": "2026-01-28T12:57:21.649220Z",
+      "updated_at": "2026-01-28T13:00:42.817730Z",
+      "body": "Add inline editor for selected task (title and description at minimum). Reuse/new component similar to new task wizard; require confirmation before save. Handle cancel and validation errors.",
+      "comments_count": 0
+    },
+    {
+      "id": "sv-h45",
+      "title": "TUI: Shared editor components",
+      "status": "open",
+      "priority": "P1",
+      "created_at": "2026-01-28T13:00:40.911188Z",
+      "updated_at": "2026-01-28T13:00:42.817730Z",
+      "body": "Extract or build shared TUI components/state for task create/edit flows (fields, validation, navigation, confirm/cancel). Used by new task wizard and inline edit.",
+      "comments_count": 0
+    },
+    {
+      "id": "sv-vnp",
+      "title": "TUI: New task wizard ('n')",
+      "status": "open",
+      "priority": "P1",
+      "created_at": "2026-01-28T12:57:16.989880Z",
+      "updated_at": "2026-01-28T13:00:42.792596Z",
+      "body": "Add a TUI flow for creating a new task. Required field: title. Optional fields: priority, related tasks/epics, description. Support cancel/back and confirm before create. Persist via existing task creation pathway.",
+      "comments_count": 0
+    },
+    {
+      "id": "sv-mw3",
+      "title": "Tests: TUI new/edit/priority flows",
+      "status": "open",
+      "priority": "P2",
+      "created_at": "2026-01-28T12:57:27.099290Z",
+      "updated_at": "2026-01-28T12:57:29.973008Z",
+      "body": "Add or extend tests to cover new task wizard, priority change, and inline edit flows. Focus on validation (title required), cancel/no-op behavior, and persistence.",
+      "comments_count": 0
+    },
+    {
+      "id": "sv-bh4",
+      "title": "TUI: Update keybindings/help for n/p/e",
+      "status": "open",
+      "priority": "P2",
+      "created_at": "2026-01-28T12:57:24.469142Z",
+      "updated_at": "2026-01-28T12:57:29.943214Z",
+      "body": "Expose new commands in the TUI help/command list and any on-screen hints. Keep language short and consistent with existing UX.",
+      "comments_count": 0
+    },
+    {
+      "id": "sv-naq",
+      "title": "TUI: Change priority ('p')",
+      "status": "open",
+      "priority": "P2",
+      "created_at": "2026-01-28T12:57:19.376886Z",
+      "updated_at": "2026-01-28T12:57:29.889428Z",
+      "body": "Add a command to set/change priority for the currently selected task. Provide a small priority picker and persist via sv task update. Handle cancel and no-op when unchanged.",
+      "comments_count": 0
+    },
     {
       "id": "01KERH1G85E4HJDTENYTW6EP6T",
       "title": "Test task",
