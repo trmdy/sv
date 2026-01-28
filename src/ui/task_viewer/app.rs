@@ -169,27 +169,34 @@ impl AppState {
     }
 
     pub(crate) fn footer_hint(&self) -> String {
-        if let Some(editor) = self.editor.as_ref() {
-            if editor.confirming() {
-                return "y confirm  backspace edit  esc cancel".to_string();
-            }
-            return match editor.mode() {
-                EditorMode::Normal => {
-                    "enter edit  tab next  shift+tab prev  esc cancel".to_string()
-                }
-                EditorMode::Insert => {
-                    "enter/tab next  ctrl+u clear  esc cancel".to_string()
-                }
-            };
-        }
-        if self.editor_priority_picker.is_some() {
+        if self.status_picker.is_some() {
             return "j/k move  enter apply  esc cancel".to_string();
         }
         if self.parent_picker.is_some() {
             return "type to filter  j/k move  enter apply  esc cancel".to_string();
         }
-        if self.status_picker.is_some() {
+        if self.editor_priority_picker.is_some() {
             return "j/k move  enter apply  esc cancel".to_string();
+        }
+        if let Some(editor) = self.editor.as_ref() {
+            if editor.confirming() {
+                return "y confirm  backspace edit  esc cancel".to_string();
+            }
+            let body_active = matches!(editor.active_field_id(), Some(EditorFieldId::Body));
+            return match editor.mode() {
+                EditorMode::Normal => {
+                    "enter edit  tab next  shift+tab prev  ctrl+enter confirm  esc cancel"
+                        .to_string()
+                }
+                EditorMode::Insert => {
+                    if body_active {
+                        "enter newline  tab next  ctrl+u clear  ctrl+enter confirm  esc cancel"
+                            .to_string()
+                    } else {
+                        "enter/tab next  ctrl+u clear  ctrl+enter confirm  esc cancel".to_string()
+                    }
+                }
+            };
         }
         if self.priority_picker.is_some() {
             return "j/k move  enter apply  esc cancel".to_string();
@@ -473,6 +480,48 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
         return false;
     }
 
+    if app.parent_picker.is_some() {
+        let mut picker = app.parent_picker.take().unwrap();
+        let action = picker.handle_key(key);
+        match action {
+            TaskPickerAction::None => {
+                app.parent_picker = Some(picker);
+            }
+            TaskPickerAction::Cancel => {
+                app.parent_picker = None;
+            }
+            TaskPickerAction::Confirm => {
+                let selected = picker.selected_option().map(|option| option.id.clone());
+                app.parent_picker = None;
+                if let (Some(editor), Some(value)) = (app.editor.as_mut(), selected) {
+                    editor.set_field_value(EditorFieldId::Parent, value);
+                }
+            }
+        }
+        return false;
+    }
+
+    if app.editor_priority_picker.is_some() {
+        let mut picker = app.editor_priority_picker.take().unwrap();
+        let action = picker.handle_key(key);
+        match action {
+            PriorityAction::None => {
+                app.editor_priority_picker = Some(picker);
+            }
+            PriorityAction::Cancel => {
+                app.editor_priority_picker = None;
+            }
+            PriorityAction::Confirm => {
+                let selected = picker.selected_priority().to_string();
+                app.editor_priority_picker = None;
+                if let Some(editor) = app.editor.as_mut() {
+                    editor.set_field_value(EditorFieldId::Priority, selected);
+                }
+            }
+        }
+        return false;
+    }
+
     if app.editor.is_some() {
         let mut editor = app.editor.take().unwrap();
         let kind = editor.kind();
@@ -553,48 +602,6 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                     app.editor = Some(editor);
                 }
             },
-        }
-        return false;
-    }
-
-    if app.editor_priority_picker.is_some() {
-        let mut picker = app.editor_priority_picker.take().unwrap();
-        let action = picker.handle_key(key);
-        match action {
-            PriorityAction::None => {
-                app.editor_priority_picker = Some(picker);
-            }
-            PriorityAction::Cancel => {
-                app.editor_priority_picker = None;
-            }
-            PriorityAction::Confirm => {
-                let selected = picker.selected_priority().to_string();
-                app.editor_priority_picker = None;
-                if let Some(editor) = app.editor.as_mut() {
-                    editor.set_field_value(EditorFieldId::Priority, selected);
-                }
-            }
-        }
-        return false;
-    }
-
-    if app.parent_picker.is_some() {
-        let mut picker = app.parent_picker.take().unwrap();
-        let action = picker.handle_key(key);
-        match action {
-            TaskPickerAction::None => {
-                app.parent_picker = Some(picker);
-            }
-            TaskPickerAction::Cancel => {
-                app.parent_picker = None;
-            }
-            TaskPickerAction::Confirm => {
-                let selected = picker.selected_option().map(|option| option.id.clone());
-                app.parent_picker = None;
-                if let (Some(editor), Some(value)) = (app.editor.as_mut(), selected) {
-                    editor.set_field_value(EditorFieldId::Parent, value);
-                }
-            }
         }
         return false;
     }

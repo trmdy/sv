@@ -313,6 +313,7 @@ fn build_editor_lines(editor: &EditorState, width: usize) -> Vec<Line<'static>> 
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (idx, field) in editor.fields().iter().enumerate() {
+        let is_body = field.id == EditorFieldId::Body;
         let label = format!("{:<12}", field.label);
         let mut value = field.value.clone();
         let placeholder = if value.trim().is_empty() {
@@ -336,18 +337,48 @@ fn build_editor_lines(editor: &EditorState, width: usize) -> Vec<Line<'static>> 
         if let Some(place) = placeholder {
             value = place;
         }
-        let value = truncate_text(&value, width.saturating_sub(14));
-        let mut spans = vec![
-            Span::styled(label, Style::default().fg(Color::DarkGray)),
-            Span::raw(" "),
-            Span::styled(value, value_style),
-        ];
-        if idx == editor.active_index() {
-            for span in &mut spans {
-                span.style = span.style.add_modifier(Modifier::REVERSED);
+        if is_body {
+            let mut body_lines: Vec<String> = if value.is_empty() {
+                vec![String::new()]
+            } else {
+                value.split('\n').map(|line| line.to_string()).collect()
+            };
+            if body_lines.is_empty() {
+                body_lines.push(String::new());
             }
+            for (line_idx, line) in body_lines.into_iter().enumerate() {
+                let line_value = truncate_text(&line, width.saturating_sub(14));
+                let label_text = if line_idx == 0 {
+                    label.clone()
+                } else {
+                    " ".repeat(12)
+                };
+                let mut spans = vec![
+                    Span::styled(label_text, Style::default().fg(Color::DarkGray)),
+                    Span::raw(" "),
+                    Span::styled(line_value, value_style),
+                ];
+                if idx == editor.active_index() {
+                    for span in &mut spans {
+                        span.style = span.style.add_modifier(Modifier::REVERSED);
+                    }
+                }
+                lines.push(Line::from(spans));
+            }
+        } else {
+            let value = truncate_text(&value, width.saturating_sub(14));
+            let mut spans = vec![
+                Span::styled(label, Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled(value, value_style),
+            ];
+            if idx == editor.active_index() {
+                for span in &mut spans {
+                    span.style = span.style.add_modifier(Modifier::REVERSED);
+                }
+            }
+            lines.push(Line::from(spans));
         }
-        lines.push(Line::from(spans));
     }
 
     if let Some(error) = editor.error() {
@@ -360,9 +391,16 @@ fn build_editor_lines(editor: &EditorState, width: usize) -> Vec<Line<'static>> 
         )));
     }
     lines.push(Line::from(""));
+    let body_active = matches!(editor.active_field_id(), Some(EditorFieldId::Body));
     let hint = match editor.mode() {
-        EditorMode::Normal => "enter edit  tab next  shift+tab prev  esc cancel",
-        EditorMode::Insert => "enter/tab next  ctrl+u clear  esc cancel",
+        EditorMode::Normal => "enter edit  tab next  shift+tab prev  ctrl+enter confirm  esc cancel",
+        EditorMode::Insert => {
+            if body_active {
+                "enter newline  tab next  ctrl+u clear  ctrl+enter confirm  esc cancel"
+            } else {
+                "enter/tab next  ctrl+u clear  ctrl+enter confirm  esc cancel"
+            }
+        }
     };
     lines.push(Line::from(Span::styled(
         hint,
@@ -421,10 +459,11 @@ fn build_confirm_lines(editor: &EditorState, width: usize) -> Vec<Line<'static>>
                 Span::styled("(none)".to_string(), Style::default().fg(Color::DarkGray)),
             ]));
         } else {
+            let body_preview = submit.body.replace('\n', " ");
             lines.push(Line::from(vec![
                 label_span("Body: "),
                 Span::styled(
-                    truncate_text(&submit.body, width.saturating_sub(8)),
+                    truncate_text(&body_preview, width.saturating_sub(8)),
                     Style::default().fg(Color::White),
                 ),
             ]));

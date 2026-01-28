@@ -166,6 +166,10 @@ impl EditorState {
         self.active
     }
 
+    pub fn active_field_id(&self) -> Option<EditorFieldId> {
+        self.fields.get(self.active).map(|field| field.id)
+    }
+
     pub fn confirming(&self) -> bool {
         self.confirming
     }
@@ -200,6 +204,9 @@ impl EditorState {
     pub fn handle_key(&mut self, key: KeyEvent) -> EditorAction {
         if self.confirming {
             return self.handle_confirm_key(key);
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Enter {
+            return self.attempt_confirm();
         }
         let action = match self.mode {
             EditorMode::Normal => self.handle_normal_key(key),
@@ -331,9 +338,19 @@ impl EditorState {
             return EditorAction::None;
         }
 
+        let is_body = matches!(self.current_field_id(), Some(EditorFieldId::Body));
         match key.code {
             KeyCode::Esc => return EditorAction::Cancel,
-            KeyCode::Enter | KeyCode::Tab => return self.finish_field(),
+            KeyCode::Enter => {
+                if is_body {
+                    if let Some(field) = self.current_field_mut() {
+                        field.value.push('\n');
+                    }
+                    return EditorAction::None;
+                }
+                return self.finish_field();
+            }
+            KeyCode::Tab => return self.finish_field(),
             KeyCode::Backspace => {
                 if let Some(field) = self.current_field_mut() {
                     field.value.pop();
@@ -699,5 +716,25 @@ mod tests {
     fn priority_picker_selects_current() {
         let picker = PriorityPicker::new("p3");
         assert_eq!(picker.selected_priority(), "P3");
+    }
+
+    #[test]
+    fn ctrl_enter_confirms_from_editor() {
+        let mut editor = EditorState::new_task("P2".to_string());
+        editor.set_field_value(EditorFieldId::Title, "Ship it".to_string());
+        let action = editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+        assert_eq!(action, EditorAction::None);
+        assert!(editor.confirming());
+    }
+
+    #[test]
+    fn body_accepts_newlines_in_insert_mode() {
+        let mut editor = EditorState::new_task("P2".to_string());
+        editor.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
+        editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+        editor.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()));
+        editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+        editor.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::empty()));
+        assert_eq!(editor.field_value(EditorFieldId::Body), "a\nb");
     }
 }
