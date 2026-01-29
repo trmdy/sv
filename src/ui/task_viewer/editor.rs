@@ -42,6 +42,7 @@ pub enum EditorAction {
     OpenPriorityPicker,
     OpenParentPicker,
     OpenChildrenPicker,
+    OpenBodyEditor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,6 +220,7 @@ impl EditorState {
                 | EditorAction::OpenPriorityPicker
                 | EditorAction::OpenParentPicker
                 | EditorAction::OpenChildrenPicker
+                | EditorAction::OpenBodyEditor
         ) {
             self.error = None;
         }
@@ -316,6 +318,7 @@ impl EditorState {
     fn handle_normal_key(&mut self, key: KeyEvent) -> EditorAction {
         match key.code {
             KeyCode::Esc => return EditorAction::Cancel,
+            KeyCode::Char('c') => return self.attempt_confirm(),
             KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => {
                 self.move_active(1);
             }
@@ -323,6 +326,7 @@ impl EditorState {
                 self.move_active(-1);
             }
             KeyCode::Enter => match self.current_field_id() {
+                Some(EditorFieldId::Body) => return EditorAction::OpenBodyEditor,
                 Some(EditorFieldId::Priority) => return EditorAction::OpenPriorityPicker,
                 Some(EditorFieldId::Parent) => return EditorAction::OpenParentPicker,
                 Some(EditorFieldId::Children) => return EditorAction::OpenChildrenPicker,
@@ -875,14 +879,21 @@ mod tests {
     }
 
     #[test]
-    fn body_accepts_newlines_in_insert_mode() {
+    fn enter_on_body_opens_external_editor() {
         let mut editor = EditorState::new_task("P2".to_string());
         editor.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
-        editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
-        editor.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()));
-        editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
-        editor.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::empty()));
-        assert_eq!(editor.field_value(EditorFieldId::Body), "a\nb");
+        let action = editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+        assert_eq!(action, EditorAction::OpenBodyEditor);
+        assert_eq!(editor.mode(), EditorMode::Normal);
+    }
+
+    #[test]
+    fn c_confirms_from_editor() {
+        let mut editor = EditorState::new_task("P2".to_string());
+        editor.set_field_value(EditorFieldId::Title, "Ship it".to_string());
+        let action = editor.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::empty()));
+        assert_eq!(action, EditorAction::None);
+        assert!(editor.confirming());
     }
 
     #[test]

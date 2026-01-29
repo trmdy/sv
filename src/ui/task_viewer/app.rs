@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::io;
+use std::io::Write;
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -12,6 +15,7 @@ use crossterm::terminal::{
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use tempfile::NamedTempFile;
 
 use crate::actor;
 use crate::error::{Error, Result};
@@ -191,16 +195,16 @@ impl AppState {
             let body_active = matches!(editor.active_field_id(), Some(EditorFieldId::Body));
             return match editor.mode() {
                 EditorMode::Normal => {
-                    "enter edit  tab next  shift+tab prev  ctrl+enter confirm  esc cancel"
-                        .to_string()
-                }
-                EditorMode::Insert => {
                     if body_active {
-                        "enter newline  tab next  ctrl+u clear  ctrl+enter confirm  esc cancel"
+                        "enter edit (external)  c confirm  tab next  shift+tab prev  ctrl+enter confirm  esc cancel"
                             .to_string()
                     } else {
-                        "enter/tab next  ctrl+u clear  ctrl+enter confirm  esc cancel".to_string()
+                        "enter edit  c confirm  tab next  shift+tab prev  ctrl+enter confirm  esc cancel"
+                            .to_string()
                     }
+                }
+                EditorMode::Insert => {
+                    "enter/tab next  ctrl+u clear  ctrl+enter confirm  esc cancel".to_string()
                 }
             };
         }
@@ -388,7 +392,7 @@ fn run_loop(
         if event::poll(Duration::from_millis(EVENT_POLL_MS))? {
             match event::read()? {
                 Event::Key(key) => {
-                    if handle_key(app, key, &req_tx) {
+                    if handle_key(terminal, app, key, &req_tx) {
                         break;
                     }
                     dirty = true;
@@ -402,6 +406,110 @@ fn run_loop(
         }
     }
     Ok(())
+}
+
+fn edit_body_external(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    body: &str,
+) -> std::result::Result<String, String> {
+    let mut temp = NamedTempFile::new()
+        .map_err(|err| format!("failed to create temp file for editor: {err}"))?;
+    temp.write_all(body.as_bytes())
+        .map_err(|err| format!("failed to write body to temp file: {err}"))?;
+    temp.flush()
+        .map_err(|err| format!("failed to flush temp file: {err}"))?;
+    let path = temp.path().to_path_buf();
+
+    suspend_terminal(terminal).map_err(|err| format!("failed to suspend terminal: {err}"))?;
+    let editor_result = launch_editor(&path);
+    let restore_result = resume_terminal(terminal);
+    if let Err(err) = restore_result {
+        return Err(format!("failed to restore terminal: {err}"));
+    }
+
+    let status = editor_result?;
+    if !status.success() {
+        let detail = status
+            .code()
+            .map(|code| format!("exit code {code}"))
+            .unwrap_or_else(|| "signal".to_string());
+        return Err(format!("editor exited with {detail}"));
+    }
+
+    fs::read_to_string(&path)
+        .map_err(|err| format!("failed to read editor buffer: {err}"))
+}
+
+fn suspend_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    Ok(())
+}
+
+fn resume_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    enable_raw_mode()?;
+    terminal.clear()?;
+    Ok(())
+}
+
+fn launch_editor(
+    path: &std::path::Path,
+) -> std::result::Result<std::process::ExitStatus, String> {
+    let candidates = editor_candidates();
+    let mut attempted: Vec<String> = Vec::new();
+    for candidate in candidates {
+        let parts = split_editor_command(&candidate);
+        if parts.is_empty() {
+            continue;
+        }
+        attempted.push(parts[0].clone());
+        let mut command = Command::new(&parts[0]);
+        if parts.len() > 1 {
+            command.args(&parts[1..]);
+        }
+        command.arg(path);
+        match command.status() {
+            Ok(status) => return Ok(status),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                continue;
+            }
+            Err(err) => {
+                return Err(format!("failed to launch editor '{}': {err}", parts[0]));
+            }
+        }
+    }
+    let tried = if attempted.is_empty() {
+        "no editor candidates".to_string()
+    } else {
+        attempted.join(", ")
+    };
+    Err(format!(
+        "no editor found (tried {tried}); set $VISUAL or $EDITOR"
+    ))
+}
+
+fn editor_candidates() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(value) = std::env::var("VISUAL") {
+        if !value.trim().is_empty() {
+            out.push(value);
+        }
+    }
+    if let Ok(value) = std::env::var("EDITOR") {
+        if !value.trim().is_empty() {
+            out.push(value);
+        }
+    }
+    out.push("vi".to_string());
+    out
+}
+
+fn split_editor_command(value: &str) -> Vec<String> {
+    value
+        .split_whitespace()
+        .map(|part| part.to_string())
+        .collect()
 }
 
 fn handle_ui_msg(app: &mut AppState, msg: UiMsg, req_tx: &Sender<LoadRequest>) {
@@ -438,7 +546,12 @@ fn handle_ui_msg(app: &mut AppState, msg: UiMsg, req_tx: &Sender<LoadRequest>) {
     }
 }
 
-fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -> bool {
+fn handle_key(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut AppState,
+    key: KeyEvent,
+    req_tx: &Sender<LoadRequest>,
+) -> bool {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return true;
     }
@@ -584,6 +697,18 @@ fn handle_key(app: &mut AppState, key: KeyEvent, req_tx: &Sender<LoadRequest>) -
                 let selected_ids = parse_task_list(editor.field_value(EditorFieldId::Children));
                 let picker = MultiTaskPicker::new(app.task_picker_options(exclude), &selected_ids);
                 app.children_picker = Some(picker);
+                app.editor = Some(editor);
+            }
+            EditorAction::OpenBodyEditor => {
+                let current = editor.field_value(EditorFieldId::Body).to_string();
+                match edit_body_external(terminal, &current) {
+                    Ok(updated) => {
+                        editor.set_field_value(EditorFieldId::Body, updated);
+                    }
+                    Err(err) => {
+                        editor.set_error(err);
+                    }
+                }
                 app.editor = Some(editor);
             }
             EditorAction::Submit => match editor.build_submit() {

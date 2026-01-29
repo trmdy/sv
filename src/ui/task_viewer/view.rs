@@ -467,15 +467,13 @@ fn build_editor_lines(editor: &EditorState, width: usize) -> Vec<Line<'static>> 
     let body_active = matches!(editor.active_field_id(), Some(EditorFieldId::Body));
     let hint = match editor.mode() {
         EditorMode::Normal => {
-            "enter edit  tab next  shift+tab prev  ctrl+enter confirm  esc cancel"
-        }
-        EditorMode::Insert => {
             if body_active {
-                "enter newline  tab next  ctrl+u clear  ctrl+enter confirm  esc cancel"
+                "enter edit (external)  c confirm  tab next  shift+tab prev  ctrl+enter confirm  esc cancel"
             } else {
-                "enter/tab next  ctrl+u clear  ctrl+enter confirm  esc cancel"
+                "enter edit  c confirm  tab next  shift+tab prev  ctrl+enter confirm  esc cancel"
             }
         }
+        EditorMode::Insert => "enter/tab next  ctrl+u clear  ctrl+enter confirm  esc cancel",
     };
     lines.push(Line::from(Span::styled(
         hint,
