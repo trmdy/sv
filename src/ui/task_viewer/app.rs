@@ -34,6 +34,8 @@ use super::view;
 const NARROW_WIDTH: u16 = 90;
 const EVENT_POLL_MS: u64 = 120;
 const WATCH_DEBOUNCE_MS: u64 = 200;
+const CLEAR_PARENT_ID: &str = "<none>";
+const CLEAR_PARENT_TITLE: &str = "No parent";
 
 enum LoadRequest {
     Reload,
@@ -70,6 +72,11 @@ pub(crate) struct StatusPickerState {
     pub(crate) mode: StatusPickerMode,
 }
 
+pub(crate) struct DeleteConfirmState {
+    pub(crate) task_id: String,
+    pub(crate) title: String,
+}
+
 #[derive(Default, Clone, Copy)]
 struct Viewport {
     width: u16,
@@ -91,6 +98,7 @@ pub struct AppState {
     pub(crate) parent_picker: Option<TaskPicker>,
     pub(crate) children_picker: Option<MultiTaskPicker>,
     pub(crate) status_picker: Option<StatusPickerState>,
+    pub(crate) delete_confirm: Option<DeleteConfirmState>,
     pub(crate) info_message: Option<String>,
     detail_cache: HashMap<String, TaskDetails>,
     pending_details: HashSet<String>,
@@ -121,6 +129,7 @@ impl AppState {
             parent_picker: None,
             children_picker: None,
             status_picker: None,
+            delete_confirm: None,
             info_message: None,
             detail_cache: HashMap::new(),
             pending_details: HashSet::new(),
@@ -179,6 +188,9 @@ impl AppState {
         if self.status_picker.is_some() {
             return "j/k move  enter apply  esc cancel".to_string();
         }
+        if self.delete_confirm.is_some() {
+            return "y confirm delete  esc cancel".to_string();
+        }
         if self.parent_picker.is_some() {
             return "type to filter  j/k move  enter apply  esc cancel".to_string();
         }
@@ -214,7 +226,8 @@ impl AppState {
         if self.filter_active {
             return "type filter  backspace delete  tab status  enter done  esc clear".to_string();
         }
-        "j/k move  n new  e edit  p priority  s status  / filter  r reload  q quit".to_string()
+        "j/k move  n new  e edit  d delete  p priority  s status  / filter  r reload  q quit"
+            .to_string()
     }
 
     pub(crate) fn task_count_summary(&self) -> String {
@@ -252,6 +265,18 @@ impl AppState {
             })
             .collect();
         options.sort_by(|left, right| left.id.cmp(&right.id));
+        options
+    }
+
+    fn parent_picker_options(&self, exclude_id: Option<&str>) -> Vec<TaskOption> {
+        let mut options = self.task_picker_options(exclude_id);
+        options.insert(
+            0,
+            TaskOption {
+                id: CLEAR_PARENT_ID.to_string(),
+                title: CLEAR_PARENT_TITLE.to_string(),
+            },
+        );
         options
     }
 
@@ -556,6 +581,27 @@ fn handle_key(
         return true;
     }
 
+    if app.delete_confirm.is_some() {
+        let confirm = app.delete_confirm.take().unwrap();
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                match actions::delete_task(&app.store, app.actor.clone(), &confirm.task_id) {
+                    Ok(outcome) => app.apply_outcome(outcome, req_tx),
+                    Err(err) => app.set_error(err.to_string()),
+                }
+                app.delete_confirm = None;
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                app.delete_confirm = None;
+                app.set_info("cancelled".to_string());
+            }
+            _ => {
+                app.delete_confirm = Some(confirm);
+            }
+        }
+        return false;
+    }
+
     if let Some(mut state) = app.status_picker.take() {
         let action = state.picker.handle_key(key);
         match action {
@@ -612,10 +658,14 @@ fn handle_key(
                 app.parent_picker = None;
             }
             TaskPickerAction::Confirm => {
-                let selected = picker.selected_option().map(|option| option.id.clone());
                 app.parent_picker = None;
-                if let (Some(editor), Some(value)) = (app.editor.as_mut(), selected) {
-                    editor.set_field_value(EditorFieldId::Parent, value);
+                if let (Some(editor), Some(option)) = (app.editor.as_mut(), picker.selected_option())
+                {
+                    if option.id == CLEAR_PARENT_ID {
+                        editor.set_field_value(EditorFieldId::Parent, String::new());
+                    } else {
+                        editor.set_field_value(EditorFieldId::Parent, option.id.clone());
+                    }
                 }
             }
         }
@@ -684,7 +734,7 @@ fn handle_key(
             }
             EditorAction::OpenParentPicker => {
                 let exclude = editor.task_id();
-                let mut picker = TaskPicker::new(app.task_picker_options(exclude));
+                let mut picker = TaskPicker::new(app.parent_picker_options(exclude));
                 let current = editor.field_value(EditorFieldId::Parent).trim();
                 if !current.is_empty() {
                     picker.set_query(current.to_string());
@@ -869,17 +919,32 @@ fn handle_key(
                 app.set_error("no task selected".to_string());
                 return false;
             };
-            let parent = match app.store.relations(&task.id) {
-                Ok(relations) => relations.parent,
+            let relations = match app.store.relations(&task.id) {
+                Ok(relations) => relations,
                 Err(err) => {
                     app.set_error(err.to_string());
                     return false;
                 }
             };
-            app.editor = Some(EditorState::edit_task(task, parent));
+            app.editor = Some(EditorState::edit_task(
+                task,
+                relations.parent,
+                relations.children,
+            ));
             if app.is_narrow() {
                 app.show_detail = true;
             }
+            false
+        }
+        KeyCode::Char('d') => {
+            let Some(task) = app.selected_task() else {
+                app.set_error("no task selected".to_string());
+                return false;
+            };
+            app.delete_confirm = Some(DeleteConfirmState {
+                task_id: task.id.clone(),
+                title: task.title.clone(),
+            });
             false
         }
         KeyCode::Char('p') => {

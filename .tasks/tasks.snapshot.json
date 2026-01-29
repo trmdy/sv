@@ -1,7 +1,52 @@
 {
   "schema_version": "sv.tasks.v1",
-  "generated_at": "2026-01-29T13:38:45.281375Z",
+  "generated_at": "2026-01-29T17:47:00.834528Z",
   "tasks": [
+    {
+      "id": "sv-xhk",
+      "title": "Epic: Inline editor shared pane layout",
+      "status": "closed",
+      "priority": "P0",
+      "created_at": "2026-01-28T16:33:16.425946Z",
+      "updated_at": "2026-01-29T17:47:00.825002Z",
+      "body": "Use the Details pane as the shared inline editor for New/Edit task flows. Break work into small subtasks (layout, truncation fix, children multi-select).",
+      "workspace_id": "4365f497-2aae-41bb-9bb8-24b1daab916b",
+      "workspace": "sv",
+      "branch": "main",
+      "started_at": "2026-01-28T16:33:56.595993Z",
+      "closed_at": "2026-01-29T17:47:00.825002Z",
+      "comments_count": 0
+    },
+    {
+      "id": "sv-qa5",
+      "title": "Add 'd' command to delete a task",
+      "status": "closed",
+      "priority": "P2",
+      "created_at": "2026-01-29T16:21:06.132609Z",
+      "updated_at": "2026-01-29T17:46:57.301012Z",
+      "body": "Use a confirmation dialogasking the user if they are sure they wnt to delete the task.\nShould unassign all relations, then remove the task\n",
+      "workspace_id": "4365f497-2aae-41bb-9bb8-24b1daab916b",
+      "workspace": "sv",
+      "branch": "main",
+      "started_at": "2026-01-29T17:42:19.543476Z",
+      "closed_at": "2026-01-29T17:46:57.301012Z",
+      "comments_count": 0
+    },
+    {
+      "id": "sv-k11",
+      "title": "Fix issue with parent and children relations",
+      "status": "closed",
+      "priority": "P1",
+      "created_at": "2026-01-29T16:19:07.643107Z",
+      "updated_at": "2026-01-29T17:46:55.066493Z",
+      "body": "There is no way in new/edit mode to unassign a parent to a task. Unsure if the `sv task unrelate` is working or not\nThe Children selection doesn't preselct previously selected tasks.\nThe Children selection doesn't clear out relations if no task is selected and we press 'enter'. It should. We need a way to unassign relations.\n",
+      "workspace_id": "4365f497-2aae-41bb-9bb8-24b1daab916b",
+      "workspace": "sv",
+      "branch": "main",
+      "started_at": "2026-01-29T16:22:34.113701Z",
+      "closed_at": "2026-01-29T17:46:55.066493Z",
+      "comments_count": 0
+    },
     {
       "id": "sv-a36",
       "title": "EPIC: Add vim-like editing experience to text editing/insertion",
@@ -75,21 +120,6 @@
       "branch": "main",
       "started_at": "2026-01-29T13:28:56.714554Z",
       "closed_at": "2026-01-29T13:38:33.225195Z",
-      "comments_count": 0
-    },
-    {
-      "id": "sv-xhk",
-      "title": "Epic: Inline editor shared pane layout",
-      "status": "closed",
-      "priority": "P0",
-      "created_at": "2026-01-28T16:33:16.425946Z",
-      "updated_at": "2026-01-28T16:48:12.864291Z",
-      "body": "Use the Details pane as the shared inline editor for New/Edit task flows. Break work into small subtasks (layout, truncation fix, children multi-select).",
-      "workspace_id": "4365f497-2aae-41bb-9bb8-24b1daab916b",
-      "workspace": "sv",
-      "branch": "main",
-      "started_at": "2026-01-28T16:33:56.595993Z",
-      "closed_at": "2026-01-28T16:48:12.864291Z",
       "comments_count": 0
     },
     {

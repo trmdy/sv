@@ -7,7 +7,7 @@ use ratatui::Frame;
 
 use crate::task::{TaskDetails, TaskRecord};
 
-use super::app::{AppState, StatusKind};
+use super::app::{AppState, DeleteConfirmState, StatusKind};
 use super::editor::{
     EditorFieldId, EditorMode, EditorState, MultiTaskPicker, PriorityPicker, StatusPicker,
     TaskPicker,
@@ -59,6 +59,9 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
             super::app::StatusPickerMode::Change => "Status",
         };
         render_status_modal(frame, area, &state.picker, title);
+    }
+    if let Some(state) = app.delete_confirm.as_ref() {
+        render_delete_confirm_modal(frame, area, state);
     }
 }
 
@@ -375,6 +378,51 @@ fn render_children_picker_modal(frame: &mut Frame, area: Rect, picker: &MultiTas
     )));
     let widget = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title("Children"))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(widget, modal);
+}
+
+fn render_delete_confirm_modal(frame: &mut Frame, area: Rect, state: &DeleteConfirmState) {
+    let content_width = area.width.saturating_sub(8).min(64);
+    let height = 9u16.min(area.height.saturating_sub(6).max(8));
+    let modal = centered_rect(content_width, height, area);
+    frame.render_widget(Clear, modal);
+
+    let title_width = (content_width as usize).saturating_sub(8);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        "Delete task?",
+        Style::default()
+            .fg(Color::LightRed)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("ID: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(state.task_id.clone(), id_style()),
+    ]));
+    if !state.title.trim().is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("Title: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                truncate_text(&state.title, title_width),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "This will remove all relations.",
+        Style::default().fg(Color::Yellow),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "y confirm  esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let widget = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title("Delete Task"))
         .wrap(Wrap { trim: true });
     frame.render_widget(widget, modal);
 }

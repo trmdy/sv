@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::error::{Error, Result};
 use crate::task::{TaskEvent, TaskEventType, TaskRecord, TaskStore};
 
@@ -135,7 +137,19 @@ pub fn edit_task(
     };
 
     let children = resolve_children(store, &input.children)?;
-    let children_changed = !children.is_empty();
+    let current_children: HashSet<String> = relations.children.iter().cloned().collect();
+    let desired_children: HashSet<String> = children.iter().cloned().collect();
+    let mut children_to_add: Vec<String> = desired_children
+        .difference(&current_children)
+        .cloned()
+        .collect();
+    let mut children_to_remove: Vec<String> = current_children
+        .difference(&desired_children)
+        .cloned()
+        .collect();
+    children_to_add.sort();
+    children_to_remove.sort();
+    let children_changed = !(children_to_add.is_empty() && children_to_remove.is_empty());
 
     if !title_changed && !body_changed && !priority_changed && !parent_changed && !children_changed
     {
@@ -160,8 +174,7 @@ pub fn edit_task(
 
     if let Some(priority) = normalized_priority {
         if priority_changed {
-            let mut event =
-                TaskEvent::new(TaskEventType::TaskPriorityChanged, task_id.to_string());
+            let mut event = TaskEvent::new(TaskEventType::TaskPriorityChanged, task_id.to_string());
             event.actor = actor.clone();
             event.priority = Some(priority);
             store.append_event(event)?;
@@ -176,8 +189,7 @@ pub fn edit_task(
                         "parent cannot match child".to_string(),
                     ));
                 }
-                let mut event =
-                    TaskEvent::new(TaskEventType::TaskParentSet, task_id.to_string());
+                let mut event = TaskEvent::new(TaskEventType::TaskParentSet, task_id.to_string());
                 event.actor = actor.clone();
                 event.related_task_id = Some(parent);
                 store.append_event(event)?;
@@ -194,7 +206,7 @@ pub fn edit_task(
         }
     }
 
-    for child in children {
+    for child in children_to_add {
         if child == task_id {
             return Err(Error::InvalidArgument(
                 "child cannot match parent".to_string(),
@@ -210,10 +222,72 @@ pub fn edit_task(
         store.append_event(parent_event)?;
     }
 
+    for child in children_to_remove {
+        let child_relations = store.relations(&child)?;
+        if child_relations.parent.as_deref() != Some(task_id) {
+            continue;
+        }
+        let mut event = TaskEvent::new(TaskEventType::TaskParentCleared, child.clone());
+        event.actor = actor.clone();
+        event.related_task_id = Some(task_id.to_string());
+        store.append_event(event)?;
+    }
+
     Ok(ActionOutcome {
         changed: true,
         message: "task updated".to_string(),
         task_id: Some(task_id.to_string()),
+    })
+}
+
+pub fn delete_task(store: &TaskStore, actor: Option<String>, task_id: &str) -> Result<ActionOutcome> {
+    let resolved = store.resolve_task_id(task_id)?;
+    let details = store.details(&resolved)?;
+    let relations = details.relations;
+
+    if let Some(parent) = relations.parent {
+        let mut event = TaskEvent::new(TaskEventType::TaskParentCleared, resolved.clone());
+        event.actor = actor.clone();
+        event.related_task_id = Some(parent);
+        store.append_event(event)?;
+    }
+
+    for child in relations.children {
+        let mut event = TaskEvent::new(TaskEventType::TaskParentCleared, child);
+        event.actor = actor.clone();
+        event.related_task_id = Some(resolved.clone());
+        store.append_event(event)?;
+    }
+
+    for blocked in relations.blocks {
+        let mut event = TaskEvent::new(TaskEventType::TaskUnblocked, resolved.clone());
+        event.actor = actor.clone();
+        event.related_task_id = Some(blocked);
+        store.append_event(event)?;
+    }
+
+    for blocker in relations.blocked_by {
+        let mut event = TaskEvent::new(TaskEventType::TaskUnblocked, blocker);
+        event.actor = actor.clone();
+        event.related_task_id = Some(resolved.clone());
+        store.append_event(event)?;
+    }
+
+    for related in relations.relates {
+        let mut event = TaskEvent::new(TaskEventType::TaskUnrelated, resolved.clone());
+        event.actor = actor.clone();
+        event.related_task_id = Some(related.id);
+        store.append_event(event)?;
+    }
+
+    let mut event = TaskEvent::new(TaskEventType::TaskDeleted, resolved.clone());
+    event.actor = actor.clone();
+    store.append_event(event)?;
+
+    Ok(ActionOutcome {
+        changed: true,
+        message: format!("deleted {resolved}"),
+        task_id: Some(resolved),
     })
 }
 
@@ -401,6 +475,54 @@ mod tests {
         let updated = load_task(&store, &task_id).expect("load");
         assert_eq!(updated.title, "New");
         assert_eq!(updated.body.as_deref(), Some("Details"));
+    }
+
+    #[test]
+    fn edit_task_clears_children_when_empty() {
+        let (_dir, store) = setup_store();
+        let parent_id = seed_task(&store, "Parent");
+        let child_id = seed_task(&store, "Child");
+        let mut event = TaskEvent::new(TaskEventType::TaskParentSet, child_id.clone());
+        event.related_task_id = Some(parent_id.clone());
+        store.append_event(event).expect("append");
+
+        let outcome = edit_task(
+            &store,
+            None,
+            &parent_id,
+            EditTaskInput {
+                title: "Parent".to_string(),
+                priority: None,
+                parent: None,
+                children: Vec::new(),
+                body: "".to_string(),
+            },
+        )
+        .expect("edit");
+        assert!(outcome.changed);
+
+        let relations = store.relations(&parent_id).expect("relations");
+        assert!(relations.children.is_empty());
+        let child_relations = store.relations(&child_id).expect("child relations");
+        assert!(child_relations.parent.is_none());
+    }
+
+    #[test]
+    fn delete_task_clears_parent_relation() {
+        let (_dir, store) = setup_store();
+        let parent_id = seed_task(&store, "Parent");
+        let child_id = seed_task(&store, "Child");
+        let mut event = TaskEvent::new(TaskEventType::TaskParentSet, child_id.clone());
+        event.related_task_id = Some(parent_id.clone());
+        store.append_event(event).expect("append");
+
+        let outcome = delete_task(&store, None, &parent_id).expect("delete");
+        assert!(outcome.changed);
+
+        let tasks = store.list(None).expect("list");
+        assert!(!tasks.iter().any(|task| task.id == parent_id));
+        let child_relations = store.relations(&child_id).expect("child relations");
+        assert!(child_relations.parent.is_none());
     }
 
     #[test]

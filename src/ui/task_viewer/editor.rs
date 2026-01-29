@@ -108,7 +108,7 @@ impl EditorState {
         }
     }
 
-    pub fn edit_task(task: &TaskRecord, parent: Option<String>) -> Self {
+    pub fn edit_task(task: &TaskRecord, parent: Option<String>, children: Vec<String>) -> Self {
         Self {
             kind: EditorKind::EditTask,
             fields: vec![
@@ -139,7 +139,7 @@ impl EditorState {
                 EditorField {
                     id: EditorFieldId::Children,
                     label: "Children",
-                    value: String::new(),
+                    value: children.join(", "),
                     required: false,
                 },
             ],
