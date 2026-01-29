@@ -240,7 +240,11 @@ pub fn edit_task(
     })
 }
 
-pub fn delete_task(store: &TaskStore, actor: Option<String>, task_id: &str) -> Result<ActionOutcome> {
+pub fn delete_task(
+    store: &TaskStore,
+    actor: Option<String>,
+    task_id: &str,
+) -> Result<ActionOutcome> {
     let resolved = store.resolve_task_id(task_id)?;
     let details = store.details(&resolved)?;
     let relations = details.relations;

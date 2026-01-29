@@ -61,6 +61,13 @@ pub(crate) enum StatusKind {
     Info,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HelpContext {
+    None,
+    List,
+    Editor,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum StatusPickerMode {
     Filter,
@@ -100,6 +107,7 @@ pub struct AppState {
     pub(crate) status_picker: Option<StatusPickerState>,
     pub(crate) delete_confirm: Option<DeleteConfirmState>,
     pub(crate) info_message: Option<String>,
+    pub(crate) help_context: HelpContext,
     detail_cache: HashMap<String, TaskDetails>,
     pending_details: HashSet<String>,
     status_message: Option<String>,
@@ -131,6 +139,7 @@ impl AppState {
             status_picker: None,
             delete_confirm: None,
             info_message: None,
+            help_context: HelpContext::None,
             detail_cache: HashMap::new(),
             pending_details: HashSet::new(),
             status_message: None,
@@ -184,6 +193,14 @@ impl AppState {
         None
     }
 
+    pub(crate) fn toggle_help(&mut self, context: HelpContext) {
+        self.help_context = if self.help_context == context {
+            HelpContext::None
+        } else {
+            context
+        };
+    }
+
     pub(crate) fn footer_hint(&self) -> String {
         if self.status_picker.is_some() {
             return "j/k move  enter apply  esc cancel".to_string();
@@ -202,23 +219,9 @@ impl AppState {
         }
         if let Some(editor) = self.editor.as_ref() {
             if editor.confirming() {
-                return "y confirm  backspace edit  esc cancel".to_string();
+                return "enter confirm  esc/q cancel".to_string();
             }
-            let body_active = matches!(editor.active_field_id(), Some(EditorFieldId::Body));
-            return match editor.mode() {
-                EditorMode::Normal => {
-                    if body_active {
-                        "enter edit (external)  c confirm  tab next  shift+tab prev  ctrl+enter confirm  esc cancel"
-                            .to_string()
-                    } else {
-                        "enter edit  c confirm  tab next  shift+tab prev  ctrl+enter confirm  esc cancel"
-                            .to_string()
-                    }
-                }
-                EditorMode::Insert => {
-                    "enter/tab next  ctrl+u clear  ctrl+enter confirm  esc cancel".to_string()
-                }
-            };
+            return "enter/c confirm  j/k move  tab next  esc/q cancel".to_string();
         }
         if self.priority_picker.is_some() {
             return "j/k move  enter apply  esc cancel".to_string();
@@ -226,8 +229,7 @@ impl AppState {
         if self.filter_active {
             return "type filter  backspace delete  tab status  enter done  esc clear".to_string();
         }
-        "j/k move  n new  e edit  d delete  p priority  s status  / filter  r reload  q quit"
-            .to_string()
+        "j/k move  enter details  esc/q quit".to_string()
     }
 
     pub(crate) fn task_count_summary(&self) -> String {
@@ -461,8 +463,7 @@ fn edit_body_external(
         return Err(format!("editor exited with {detail}"));
     }
 
-    fs::read_to_string(&path)
-        .map_err(|err| format!("failed to read editor buffer: {err}"))
+    fs::read_to_string(&path).map_err(|err| format!("failed to read editor buffer: {err}"))
 }
 
 fn suspend_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
@@ -478,9 +479,7 @@ fn resume_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io:
     Ok(())
 }
 
-fn launch_editor(
-    path: &std::path::Path,
-) -> std::result::Result<std::process::ExitStatus, String> {
+fn launch_editor(path: &std::path::Path) -> std::result::Result<std::process::ExitStatus, String> {
     let candidates = editor_candidates();
     let mut attempted: Vec<String> = Vec::new();
     for candidate in candidates {
@@ -584,14 +583,14 @@ fn handle_key(
     if app.delete_confirm.is_some() {
         let confirm = app.delete_confirm.take().unwrap();
         match key.code {
-            KeyCode::Char('y') | KeyCode::Enter => {
+            KeyCode::Char('c') | KeyCode::Char('y') | KeyCode::Enter => {
                 match actions::delete_task(&app.store, app.actor.clone(), &confirm.task_id) {
                     Ok(outcome) => app.apply_outcome(outcome, req_tx),
                     Err(err) => app.set_error(err.to_string()),
                 }
                 app.delete_confirm = None;
             }
-            KeyCode::Char('n') | KeyCode::Esc => {
+            KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                 app.delete_confirm = None;
                 app.set_info("cancelled".to_string());
             }
@@ -659,7 +658,8 @@ fn handle_key(
             }
             TaskPickerAction::Confirm => {
                 app.parent_picker = None;
-                if let (Some(editor), Some(option)) = (app.editor.as_mut(), picker.selected_option())
+                if let (Some(editor), Some(option)) =
+                    (app.editor.as_mut(), picker.selected_option())
                 {
                     if option.id == CLEAR_PARENT_ID {
                         editor.set_field_value(EditorFieldId::Parent, String::new());
@@ -712,6 +712,24 @@ fn handle_key(
             }
         }
         return false;
+    }
+
+    if key.code == KeyCode::Char('?') && !app.filter_active {
+        if app.editor.is_none()
+            && app.status_picker.is_none()
+            && app.parent_picker.is_none()
+            && app.children_picker.is_none()
+            && app.priority_picker.is_none()
+        {
+            app.toggle_help(HelpContext::List);
+            return false;
+        }
+        if let Some(editor) = app.editor.as_ref() {
+            if editor.mode() != EditorMode::Insert {
+                app.toggle_help(HelpContext::Editor);
+                return false;
+            }
+        }
     }
 
     if app.editor.is_some() {

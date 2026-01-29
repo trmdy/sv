@@ -260,7 +260,7 @@ impl EditorState {
 
     fn handle_confirm_key(&mut self, key: KeyEvent) -> EditorAction {
         match key.code {
-            KeyCode::Esc => EditorAction::Cancel,
+            KeyCode::Esc | KeyCode::Char('q') => EditorAction::Cancel,
             KeyCode::Backspace => {
                 self.confirming = false;
                 self.error = None;
@@ -271,7 +271,7 @@ impl EditorState {
                 self.error = None;
                 EditorAction::None
             }
-            KeyCode::Char('y') | KeyCode::Enter => EditorAction::Submit,
+            KeyCode::Char('c') | KeyCode::Char('y') | KeyCode::Enter => EditorAction::Submit,
             _ => EditorAction::None,
         }
     }
@@ -317,7 +317,7 @@ impl EditorState {
 
     fn handle_normal_key(&mut self, key: KeyEvent) -> EditorAction {
         match key.code {
-            KeyCode::Esc => return EditorAction::Cancel,
+            KeyCode::Esc | KeyCode::Char('q') => return EditorAction::Cancel,
             KeyCode::Char('c') => return self.attempt_confirm(),
             KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => {
                 self.move_active(1);
