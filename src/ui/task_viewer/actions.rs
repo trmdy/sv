@@ -9,6 +9,8 @@ pub struct NewTaskInput {
     pub priority: Option<String>,
     pub parent: Option<String>,
     pub children: Vec<String>,
+    pub blocks: Vec<String>,
+    pub blocked_by: Vec<String>,
     pub body: String,
 }
 
@@ -18,6 +20,8 @@ pub struct EditTaskInput {
     pub priority: Option<String>,
     pub parent: Option<String>,
     pub children: Vec<String>,
+    pub blocks: Vec<String>,
+    pub blocked_by: Vec<String>,
     pub body: String,
 }
 
@@ -46,6 +50,8 @@ pub fn create_task(
         .transpose()?;
 
     let children = resolve_children(store, &input.children)?;
+    let blocks = resolve_task_list(store, &input.blocks)?;
+    let blocked_by = resolve_task_list(store, &input.blocked_by)?;
 
     let normalized_priority = input
         .priority
@@ -87,6 +93,30 @@ pub fn create_task(
         parent_event.actor = actor.clone();
         parent_event.related_task_id = Some(task_id.clone());
         store.append_event(parent_event)?;
+    }
+
+    for blocked in blocks {
+        if blocked == task_id {
+            return Err(Error::InvalidArgument(
+                "task cannot block itself".to_string(),
+            ));
+        }
+        let mut event = TaskEvent::new(TaskEventType::TaskBlocked, task_id.clone());
+        event.actor = actor.clone();
+        event.related_task_id = Some(blocked);
+        store.append_event(event)?;
+    }
+
+    for blocker in blocked_by {
+        if blocker == task_id {
+            return Err(Error::InvalidArgument(
+                "task cannot be blocked by itself".to_string(),
+            ));
+        }
+        let mut event = TaskEvent::new(TaskEventType::TaskBlocked, blocker);
+        event.actor = actor.clone();
+        event.related_task_id = Some(task_id.clone());
+        store.append_event(event)?;
     }
 
     Ok(ActionOutcome {
@@ -151,7 +181,32 @@ pub fn edit_task(
     children_to_remove.sort();
     let children_changed = !(children_to_add.is_empty() && children_to_remove.is_empty());
 
-    if !title_changed && !body_changed && !priority_changed && !parent_changed && !children_changed
+    let blocks = resolve_task_list(store, &input.blocks)?;
+    if blocks.iter().any(|id| id == task_id) {
+        return Err(Error::InvalidArgument(
+            "task cannot block itself".to_string(),
+        ));
+    }
+    let blocked_by = resolve_task_list(store, &input.blocked_by)?;
+    if blocked_by.iter().any(|id| id == task_id) {
+        return Err(Error::InvalidArgument(
+            "task cannot be blocked by itself".to_string(),
+        ));
+    }
+
+    let (blocks_to_add, blocks_to_remove) = diff_relation_sets(&relations.blocks, &blocks);
+    let (blocked_by_to_add, blocked_by_to_remove) =
+        diff_relation_sets(&relations.blocked_by, &blocked_by);
+    let blocks_changed = !(blocks_to_add.is_empty() && blocks_to_remove.is_empty());
+    let blocked_by_changed = !(blocked_by_to_add.is_empty() && blocked_by_to_remove.is_empty());
+
+    if !title_changed
+        && !body_changed
+        && !priority_changed
+        && !parent_changed
+        && !children_changed
+        && !blocks_changed
+        && !blocked_by_changed
     {
         return Ok(ActionOutcome {
             changed: false,
@@ -233,9 +288,80 @@ pub fn edit_task(
         store.append_event(event)?;
     }
 
+    for blocked in blocks_to_add {
+        let mut event = TaskEvent::new(TaskEventType::TaskBlocked, task_id.to_string());
+        event.actor = actor.clone();
+        event.related_task_id = Some(blocked);
+        store.append_event(event)?;
+    }
+
+    for blocked in blocks_to_remove {
+        let mut event = TaskEvent::new(TaskEventType::TaskUnblocked, task_id.to_string());
+        event.actor = actor.clone();
+        event.related_task_id = Some(blocked);
+        store.append_event(event)?;
+    }
+
+    for blocker in blocked_by_to_add {
+        let mut event = TaskEvent::new(TaskEventType::TaskBlocked, blocker);
+        event.actor = actor.clone();
+        event.related_task_id = Some(task_id.to_string());
+        store.append_event(event)?;
+    }
+
+    for blocker in blocked_by_to_remove {
+        let mut event = TaskEvent::new(TaskEventType::TaskUnblocked, blocker);
+        event.actor = actor.clone();
+        event.related_task_id = Some(task_id.to_string());
+        store.append_event(event)?;
+    }
+
     Ok(ActionOutcome {
         changed: true,
         message: "task updated".to_string(),
+        task_id: Some(task_id.to_string()),
+    })
+}
+
+pub fn set_blocked_by(
+    store: &TaskStore,
+    actor: Option<String>,
+    task_id: &str,
+    blocked_by: Vec<String>,
+) -> Result<ActionOutcome> {
+    let relations = store.relations(task_id)?;
+    let resolved = resolve_task_list(store, &blocked_by)?;
+    if resolved.iter().any(|id| id == task_id) {
+        return Err(Error::InvalidArgument(
+            "task cannot be blocked by itself".to_string(),
+        ));
+    }
+    let (to_add, to_remove) = diff_relation_sets(&relations.blocked_by, &resolved);
+    if to_add.is_empty() && to_remove.is_empty() {
+        return Ok(ActionOutcome {
+            changed: false,
+            message: "no changes".to_string(),
+            task_id: Some(task_id.to_string()),
+        });
+    }
+
+    for blocker in to_add {
+        let mut event = TaskEvent::new(TaskEventType::TaskBlocked, blocker);
+        event.actor = actor.clone();
+        event.related_task_id = Some(task_id.to_string());
+        store.append_event(event)?;
+    }
+
+    for blocker in to_remove {
+        let mut event = TaskEvent::new(TaskEventType::TaskUnblocked, blocker);
+        event.actor = actor.clone();
+        event.related_task_id = Some(task_id.to_string());
+        store.append_event(event)?;
+    }
+
+    Ok(ActionOutcome {
+        changed: true,
+        message: "blocked by updated".to_string(),
         task_id: Some(task_id.to_string()),
     })
 }
@@ -377,9 +503,13 @@ fn non_empty(value: &str) -> Option<String> {
 }
 
 fn resolve_children(store: &TaskStore, children: &[String]) -> Result<Vec<String>> {
+    resolve_task_list(store, children)
+}
+
+fn resolve_task_list(store: &TaskStore, values: &[String]) -> Result<Vec<String>> {
     let mut out = Vec::new();
-    for child in children {
-        let trimmed = child.trim();
+    for value in values {
+        let trimmed = value.trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -389,6 +519,16 @@ fn resolve_children(store: &TaskStore, children: &[String]) -> Result<Vec<String
         }
     }
     Ok(out)
+}
+
+fn diff_relation_sets(current: &[String], desired: &[String]) -> (Vec<String>, Vec<String>) {
+    let current_set: HashSet<String> = current.iter().cloned().collect();
+    let desired_set: HashSet<String> = desired.iter().cloned().collect();
+    let mut to_add: Vec<String> = desired_set.difference(&current_set).cloned().collect();
+    let mut to_remove: Vec<String> = current_set.difference(&desired_set).cloned().collect();
+    to_add.sort();
+    to_remove.sort();
+    (to_add, to_remove)
 }
 
 #[cfg(test)]
@@ -430,6 +570,8 @@ mod tests {
                 priority: None,
                 parent: None,
                 children: Vec::new(),
+                blocks: Vec::new(),
+                blocked_by: Vec::new(),
                 body: "".to_string(),
             },
         )
@@ -450,6 +592,8 @@ mod tests {
                 priority: None,
                 parent: None,
                 children: Vec::new(),
+                blocks: Vec::new(),
+                blocked_by: Vec::new(),
                 body: "".to_string(),
             },
         )
@@ -470,6 +614,8 @@ mod tests {
                 priority: None,
                 parent: None,
                 children: Vec::new(),
+                blocks: Vec::new(),
+                blocked_by: Vec::new(),
                 body: "Details".to_string(),
             },
         )
@@ -479,6 +625,49 @@ mod tests {
         let updated = load_task(&store, &task_id).expect("load");
         assert_eq!(updated.title, "New");
         assert_eq!(updated.body.as_deref(), Some("Details"));
+    }
+
+    #[test]
+    fn edit_task_updates_block_relations() {
+        let (_dir, store) = setup_store();
+        let task_id = seed_task(&store, "Target");
+        let blocked_id = seed_task(&store, "Blocked");
+        let blocker_id = seed_task(&store, "Blocker");
+
+        let outcome = edit_task(
+            &store,
+            None,
+            &task_id,
+            EditTaskInput {
+                title: "Target".to_string(),
+                priority: None,
+                parent: None,
+                children: Vec::new(),
+                blocks: vec![blocked_id.clone()],
+                blocked_by: vec![blocker_id.clone()],
+                body: "".to_string(),
+            },
+        )
+        .expect("edit");
+        assert!(outcome.changed);
+
+        let relations = store.relations(&task_id).expect("relations");
+        assert_eq!(relations.blocks, vec![blocked_id]);
+        assert_eq!(relations.blocked_by, vec![blocker_id]);
+    }
+
+    #[test]
+    fn set_blocked_by_updates_relations() {
+        let (_dir, store) = setup_store();
+        let task_id = seed_task(&store, "Target");
+        let blocker_id = seed_task(&store, "Blocker");
+
+        let outcome = set_blocked_by(&store, None, &task_id, vec![blocker_id.clone()])
+            .expect("blocked by");
+        assert!(outcome.changed);
+
+        let relations = store.relations(&task_id).expect("relations");
+        assert_eq!(relations.blocked_by, vec![blocker_id]);
     }
 
     #[test]
@@ -499,6 +688,8 @@ mod tests {
                 priority: None,
                 parent: None,
                 children: Vec::new(),
+                blocks: Vec::new(),
+                blocked_by: Vec::new(),
                 body: "".to_string(),
             },
         )

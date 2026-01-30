@@ -9,7 +9,8 @@ use crate::task::{TaskDetails, TaskRecord};
 
 use super::app::{AppState, DeleteConfirmState, HelpContext, StatusKind};
 use super::editor::{
-    EditorFieldId, EditorState, MultiTaskPicker, PriorityPicker, StatusPicker, TaskPicker,
+    EditorFieldId, EditorMode, EditorState, MultiTaskPicker, PriorityPicker, StatusPicker,
+    TaskPicker,
 };
 
 const STATUS_WIDTH: usize = 7;
@@ -63,7 +64,13 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
         render_task_picker_modal(frame, area, picker);
     }
     if let Some(picker) = app.children_picker.as_ref() {
-        render_children_picker_modal(frame, area, picker);
+        render_multi_picker_modal(frame, area, picker, "Children");
+    }
+    if let Some(picker) = app.blocks_picker.as_ref() {
+        render_multi_picker_modal(frame, area, picker, "Blocking");
+    }
+    if let Some(picker) = app.blocked_by_picker.as_ref() {
+        render_multi_picker_modal(frame, area, picker, "Blocked by");
     }
     if let Some(state) = app.status_picker.as_ref() {
         let title = match state.mode {
@@ -340,7 +347,12 @@ fn render_task_picker_modal(frame: &mut Frame, area: Rect, picker: &TaskPicker) 
     frame.render_widget(widget, modal);
 }
 
-fn render_children_picker_modal(frame: &mut Frame, area: Rect, picker: &MultiTaskPicker) {
+fn render_multi_picker_modal(
+    frame: &mut Frame,
+    area: Rect,
+    picker: &MultiTaskPicker,
+    title: &str,
+) {
     let content_width = area.width.saturating_sub(6).min(72);
     let max_height = area.height.saturating_sub(6).max(8);
     let list_height = max_height.saturating_sub(6) as usize;
@@ -410,7 +422,7 @@ fn render_children_picker_modal(frame: &mut Frame, area: Rect, picker: &MultiTas
         Style::default().fg(COLOR_MUTED_DARK),
     )));
     let widget = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title("Children"))
+        .block(Block::default().borders(Borders::ALL).title(title))
         .wrap(Wrap { trim: true });
     frame.render_widget(widget, modal);
 }
@@ -468,9 +480,11 @@ fn build_editor_lines(editor: &EditorState, width: usize, show_help: bool) -> Ve
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (idx, field) in editor.fields().iter().enumerate() {
         let is_body = field.id == EditorFieldId::Body;
+        let is_active = idx == editor.active_index();
+        let in_insert = is_active && editor.mode() == EditorMode::Insert;
         let label = format!("{:<12}", field.label);
         let mut value = field.value.clone();
-        let placeholder = if value.trim().is_empty() {
+        let placeholder = if !in_insert && value.trim().is_empty() {
             if field.required {
                 Some("<required>".to_string())
             } else if field.id == EditorFieldId::Priority {
@@ -512,7 +526,7 @@ fn build_editor_lines(editor: &EditorState, width: usize, show_help: bool) -> Ve
                     Span::raw(" "),
                     Span::styled(line_value, value_style),
                 ];
-                if idx == editor.active_index() {
+                if is_active {
                     for span in &mut spans {
                         span.style = span.style.add_modifier(Modifier::REVERSED);
                     }
@@ -520,15 +534,25 @@ fn build_editor_lines(editor: &EditorState, width: usize, show_help: bool) -> Ve
                 lines.push(Line::from(spans));
             }
         } else {
-            let value = truncate_text(&value, width.saturating_sub(14));
+            let value_width = width.saturating_sub(14);
             let mut spans = vec![
                 Span::styled(label, Style::default().fg(COLOR_TEXT)),
                 Span::raw(" "),
-                Span::styled(value, value_style),
             ];
-            if idx == editor.active_index() {
-                for span in &mut spans {
-                    span.style = span.style.add_modifier(Modifier::REVERSED);
+            if in_insert {
+                spans.extend(value_with_caret_spans(
+                    &value,
+                    editor.cursor(),
+                    value_width,
+                    Style::default().fg(COLOR_TEXT),
+                ));
+            } else {
+                let value = truncate_text(&value, value_width);
+                spans.push(Span::styled(value, value_style));
+                if is_active {
+                    for span in &mut spans {
+                        span.style = span.style.add_modifier(Modifier::REVERSED);
+                    }
                 }
             }
             lines.push(Line::from(spans));
@@ -596,6 +620,24 @@ fn build_confirm_lines(editor: &EditorState, width: usize, show_help: bool) -> V
                 ),
             ]));
         }
+        if !submit.blocks.is_empty() {
+            lines.push(Line::from(vec![
+                label_span("Blocking: "),
+                Span::styled(
+                    truncate_text(&submit.blocks.join(", "), width.saturating_sub(11)),
+                    id_style(),
+                ),
+            ]));
+        }
+        if !submit.blocked_by.is_empty() {
+            lines.push(Line::from(vec![
+                label_span("Blocked by: "),
+                Span::styled(
+                    truncate_text(&submit.blocked_by.join(", "), width.saturating_sub(13)),
+                    id_style(),
+                ),
+            ]));
+        }
         if submit.body.trim().is_empty() {
             lines.push(Line::from(vec![
                 label_span("Body: "),
@@ -639,11 +681,13 @@ fn build_confirm_lines(editor: &EditorState, width: usize, show_help: bool) -> V
 fn build_list_help_lines(width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     lines.push(help_header("More commands"));
+    lines.push(help_line("j/k or up/down", "move selection", width));
     lines.push(help_line("n", "new task", width));
     lines.push(help_line("e", "edit task", width));
     lines.push(help_line("d", "delete task", width));
     lines.push(help_line("p", "change priority", width));
     lines.push(help_line("s", "change status", width));
+    lines.push(help_line("b", "blocked by", width));
     lines.push(help_line("/", "filter tasks", width));
     lines.push(help_line("tab", "status filter while filtering", width));
     lines.push(help_line("r", "reload tasks", width));
@@ -658,7 +702,7 @@ fn build_editor_help_lines(width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     lines.push(help_header("More commands"));
     lines.push(help_line("enter", "edit field or open picker", width));
-    lines.push(help_line("c", "review details", width));
+    lines.push(help_line("c", "review details / confirm", width));
     lines.push(help_line("ctrl+enter", "confirm from editor", width));
     lines.push(help_line("tab/shift+tab", "next or previous field", width));
     lines.push(help_line("j/k", "move field selection", width));
@@ -691,6 +735,73 @@ fn help_line(keys: &str, desc: &str, width: usize) -> Line<'static> {
         Span::raw(" "),
         Span::styled(desc_text, Style::default().fg(COLOR_MUTED)),
     ])
+}
+
+fn value_with_caret_spans(value: &str, cursor: usize, width: usize, style: Style) -> Vec<Span<'static>> {
+    if width == 0 {
+        return vec![Span::raw("")];
+    }
+    let chars: Vec<char> = value.chars().collect();
+    let len = chars.len();
+    let cursor = cursor.min(len);
+    if len == 0 {
+        return vec![Span::styled(
+            " ".to_string(),
+            style.add_modifier(Modifier::REVERSED),
+        )];
+    }
+
+    let caret_at_end = cursor == len;
+    let available = if caret_at_end {
+        width.saturating_sub(1)
+    } else {
+        width
+    };
+    let mut start = 0usize;
+    if len > available {
+        if cursor > available {
+            start = cursor.saturating_sub(available);
+        }
+        if start + available > len {
+            start = len.saturating_sub(available);
+        }
+    }
+    let end = (start + available).min(len);
+    let window = &chars[start..end];
+
+    if caret_at_end {
+        let text: String = window.iter().collect();
+        let mut spans = Vec::new();
+        if !text.is_empty() {
+            spans.push(Span::styled(text, style));
+        }
+        spans.push(Span::styled(
+            " ".to_string(),
+            style.add_modifier(Modifier::REVERSED),
+        ));
+        return spans;
+    }
+
+    let caret_index = cursor.saturating_sub(start);
+    let before: String = window[..caret_index].iter().collect();
+    let caret_char = window
+        .get(caret_index)
+        .copied()
+        .unwrap_or(' ');
+    let after: String = window[caret_index.saturating_add(1)..].iter().collect();
+
+    let mut spans = Vec::new();
+    if !before.is_empty() {
+        spans.push(Span::styled(before, style));
+    }
+    spans.push(Span::styled(
+        caret_char.to_string(),
+        style.add_modifier(Modifier::REVERSED),
+    ));
+    if !after.is_empty() {
+        spans.push(Span::styled(after, style));
+    }
+    spans
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

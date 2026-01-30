@@ -104,6 +104,8 @@ pub struct AppState {
     pub(crate) editor_priority_picker: Option<PriorityPicker>,
     pub(crate) parent_picker: Option<TaskPicker>,
     pub(crate) children_picker: Option<MultiTaskPicker>,
+    pub(crate) blocks_picker: Option<MultiTaskPicker>,
+    pub(crate) blocked_by_picker: Option<MultiTaskPicker>,
     pub(crate) status_picker: Option<StatusPickerState>,
     pub(crate) delete_confirm: Option<DeleteConfirmState>,
     pub(crate) info_message: Option<String>,
@@ -136,6 +138,8 @@ impl AppState {
             editor_priority_picker: None,
             parent_picker: None,
             children_picker: None,
+            blocks_picker: None,
+            blocked_by_picker: None,
             status_picker: None,
             delete_confirm: None,
             info_message: None,
@@ -211,7 +215,10 @@ impl AppState {
         if self.parent_picker.is_some() {
             return "type to filter  j/k move  enter apply  esc cancel".to_string();
         }
-        if self.children_picker.is_some() {
+        if self.children_picker.is_some()
+            || self.blocks_picker.is_some()
+            || self.blocked_by_picker.is_some()
+        {
             return "type to filter  j/k move  space toggle  enter apply  esc cancel".to_string();
         }
         if self.editor_priority_picker.is_some() {
@@ -219,9 +226,9 @@ impl AppState {
         }
         if let Some(editor) = self.editor.as_ref() {
             if editor.confirming() {
-                return "enter confirm  esc/q cancel".to_string();
+                return "enter/c confirm  ? help  esc/q cancel".to_string();
             }
-            return "enter/c confirm  j/k move  tab next  esc/q cancel".to_string();
+            return "enter/c confirm  j/k move  tab next  ? help  esc/q cancel".to_string();
         }
         if self.priority_picker.is_some() {
             return "j/k move  enter apply  esc cancel".to_string();
@@ -229,7 +236,7 @@ impl AppState {
         if self.filter_active {
             return "type filter  backspace delete  tab status  enter done  esc clear".to_string();
         }
-        "j/k move  enter details  esc/q quit".to_string()
+        "j/k move  enter details  ? help  esc/q quit".to_string()
     }
 
     pub(crate) fn task_count_summary(&self) -> String {
@@ -693,6 +700,60 @@ fn handle_key(
         return false;
     }
 
+    if app.blocks_picker.is_some() {
+        let mut picker = app.blocks_picker.take().unwrap();
+        let action = picker.handle_key(key);
+        match action {
+            MultiTaskPickerAction::None => {
+                app.blocks_picker = Some(picker);
+            }
+            MultiTaskPickerAction::Cancel => {
+                app.blocks_picker = None;
+            }
+            MultiTaskPickerAction::Confirm => {
+                let selected = picker.selected_ids();
+                app.blocks_picker = None;
+                if let Some(editor) = app.editor.as_mut() {
+                    editor.set_field_value(EditorFieldId::Blocks, selected.join(", "));
+                }
+            }
+        }
+        return false;
+    }
+
+    if app.blocked_by_picker.is_some() {
+        let mut picker = app.blocked_by_picker.take().unwrap();
+        let action = picker.handle_key(key);
+        match action {
+            MultiTaskPickerAction::None => {
+                app.blocked_by_picker = Some(picker);
+            }
+            MultiTaskPickerAction::Cancel => {
+                app.blocked_by_picker = None;
+            }
+            MultiTaskPickerAction::Confirm => {
+                let selected = picker.selected_ids();
+                app.blocked_by_picker = None;
+                if let Some(editor) = app.editor.as_mut() {
+                    editor.set_field_value(EditorFieldId::BlockedBy, selected.join(", "));
+                } else if let Some(task_id) = app.selected_task().map(|task| task.id.clone()) {
+                    match actions::set_blocked_by(
+                        &app.store,
+                        app.actor.clone(),
+                        &task_id,
+                        selected,
+                    ) {
+                        Ok(outcome) => app.apply_outcome(outcome, req_tx),
+                        Err(err) => app.set_error(err.to_string()),
+                    }
+                } else {
+                    app.set_error("no task selected".to_string());
+                }
+            }
+        }
+        return false;
+    }
+
     if app.editor_priority_picker.is_some() {
         let mut picker = app.editor_priority_picker.take().unwrap();
         let action = picker.handle_key(key);
@@ -719,6 +780,8 @@ fn handle_key(
             && app.status_picker.is_none()
             && app.parent_picker.is_none()
             && app.children_picker.is_none()
+            && app.blocks_picker.is_none()
+            && app.blocked_by_picker.is_none()
             && app.priority_picker.is_none()
         {
             app.toggle_help(HelpContext::List);
@@ -767,6 +830,20 @@ fn handle_key(
                 app.children_picker = Some(picker);
                 app.editor = Some(editor);
             }
+            EditorAction::OpenBlocksPicker => {
+                let exclude = editor.task_id();
+                let selected_ids = parse_task_list(editor.field_value(EditorFieldId::Blocks));
+                let picker = MultiTaskPicker::new(app.task_picker_options(exclude), &selected_ids);
+                app.blocks_picker = Some(picker);
+                app.editor = Some(editor);
+            }
+            EditorAction::OpenBlockedByPicker => {
+                let exclude = editor.task_id();
+                let selected_ids = parse_task_list(editor.field_value(EditorFieldId::BlockedBy));
+                let picker = MultiTaskPicker::new(app.task_picker_options(exclude), &selected_ids);
+                app.blocked_by_picker = Some(picker);
+                app.editor = Some(editor);
+            }
             EditorAction::OpenBodyEditor => {
                 let current = editor.field_value(EditorFieldId::Body).to_string();
                 match edit_body_external(terminal, &current) {
@@ -790,6 +867,8 @@ fn handle_key(
                                 priority: submit.priority,
                                 parent: submit.parent,
                                 children: submit.children,
+                                blocks: submit.blocks,
+                                blocked_by: submit.blocked_by,
                                 body: submit.body,
                             },
                         ),
@@ -804,6 +883,8 @@ fn handle_key(
                                         priority: submit.priority,
                                         parent: submit.parent,
                                         children: submit.children,
+                                        blocks: submit.blocks,
+                                        blocked_by: submit.blocked_by,
                                         body: submit.body,
                                     },
                                 )
@@ -948,6 +1029,8 @@ fn handle_key(
                 task,
                 relations.parent,
                 relations.children,
+                relations.blocks,
+                relations.blocked_by,
             ));
             if app.is_narrow() {
                 app.show_detail = true;
@@ -984,6 +1067,23 @@ fn handle_key(
                 picker,
                 mode: StatusPickerMode::Change,
             });
+            false
+        }
+        KeyCode::Char('b') => {
+            let Some(task) = app.selected_task() else {
+                app.set_error("no task selected".to_string());
+                return false;
+            };
+            let relations = match app.store.relations(&task.id) {
+                Ok(relations) => relations,
+                Err(err) => {
+                    app.set_error(err.to_string());
+                    return false;
+                }
+            };
+            let picker =
+                MultiTaskPicker::new(app.task_picker_options(Some(task.id.as_str())), &relations.blocked_by);
+            app.blocked_by_picker = Some(picker);
             false
         }
         KeyCode::Enter => {

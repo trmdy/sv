@@ -15,6 +15,8 @@ pub enum EditorFieldId {
     Priority,
     Parent,
     Children,
+    Blocks,
+    BlockedBy,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +33,8 @@ pub struct EditorSubmit {
     pub priority: Option<String>,
     pub parent: Option<String>,
     pub children: Vec<String>,
+    pub blocks: Vec<String>,
+    pub blocked_by: Vec<String>,
     pub body: String,
 }
 
@@ -42,6 +46,8 @@ pub enum EditorAction {
     OpenPriorityPicker,
     OpenParentPicker,
     OpenChildrenPicker,
+    OpenBlocksPicker,
+    OpenBlockedByPicker,
     OpenBodyEditor,
 }
 
@@ -61,6 +67,7 @@ pub struct EditorState {
     error: Option<String>,
     default_priority: Option<String>,
     task_id: Option<String>,
+    cursor: usize,
 }
 
 impl EditorState {
@@ -98,6 +105,18 @@ impl EditorState {
                     value: String::new(),
                     required: false,
                 },
+                EditorField {
+                    id: EditorFieldId::Blocks,
+                    label: "Blocking",
+                    value: String::new(),
+                    required: false,
+                },
+                EditorField {
+                    id: EditorFieldId::BlockedBy,
+                    label: "Blocked by",
+                    value: String::new(),
+                    required: false,
+                },
             ],
             active: 0,
             confirming: false,
@@ -105,10 +124,17 @@ impl EditorState {
             error: None,
             default_priority: Some(default_priority),
             task_id: None,
+            cursor: 0,
         }
     }
 
-    pub fn edit_task(task: &TaskRecord, parent: Option<String>, children: Vec<String>) -> Self {
+    pub fn edit_task(
+        task: &TaskRecord,
+        parent: Option<String>,
+        children: Vec<String>,
+        blocks: Vec<String>,
+        blocked_by: Vec<String>,
+    ) -> Self {
         Self {
             kind: EditorKind::EditTask,
             fields: vec![
@@ -142,6 +168,18 @@ impl EditorState {
                     value: children.join(", "),
                     required: false,
                 },
+                EditorField {
+                    id: EditorFieldId::Blocks,
+                    label: "Blocking",
+                    value: blocks.join(", "),
+                    required: false,
+                },
+                EditorField {
+                    id: EditorFieldId::BlockedBy,
+                    label: "Blocked by",
+                    value: blocked_by.join(", "),
+                    required: false,
+                },
             ],
             active: 0,
             confirming: false,
@@ -149,6 +187,7 @@ impl EditorState {
             error: None,
             default_priority: None,
             task_id: Some(task.id.clone()),
+            cursor: 0,
         }
     }
 
@@ -180,6 +219,10 @@ impl EditorState {
         self.mode
     }
 
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
@@ -195,6 +238,9 @@ impl EditorState {
     pub fn set_field_value(&mut self, id: EditorFieldId, value: String) {
         if let Some(field) = self.fields.iter_mut().find(|field| field.id == id) {
             field.value = value;
+        }
+        if self.active_field_id() == Some(id) {
+            self.clamp_cursor();
         }
     }
 
@@ -220,6 +266,8 @@ impl EditorState {
                 | EditorAction::OpenPriorityPicker
                 | EditorAction::OpenParentPicker
                 | EditorAction::OpenChildrenPicker
+                | EditorAction::OpenBlocksPicker
+                | EditorAction::OpenBlockedByPicker
                 | EditorAction::OpenBodyEditor
         ) {
             self.error = None;
@@ -233,6 +281,8 @@ impl EditorState {
         let priority = non_empty(self.field_value(EditorFieldId::Priority));
         let parent = non_empty(self.field_value(EditorFieldId::Parent));
         let children = parse_task_list(self.field_value(EditorFieldId::Children));
+        let blocks = parse_task_list(self.field_value(EditorFieldId::Blocks));
+        let blocked_by = parse_task_list(self.field_value(EditorFieldId::BlockedBy));
         let body = self.field_value(EditorFieldId::Body).to_string();
 
         Ok(EditorSubmit {
@@ -240,6 +290,8 @@ impl EditorState {
             priority,
             parent,
             children,
+            blocks,
+            blocked_by,
             body,
         })
     }
@@ -330,8 +382,10 @@ impl EditorState {
                 Some(EditorFieldId::Priority) => return EditorAction::OpenPriorityPicker,
                 Some(EditorFieldId::Parent) => return EditorAction::OpenParentPicker,
                 Some(EditorFieldId::Children) => return EditorAction::OpenChildrenPicker,
+                Some(EditorFieldId::Blocks) => return EditorAction::OpenBlocksPicker,
+                Some(EditorFieldId::BlockedBy) => return EditorAction::OpenBlockedByPicker,
                 _ => {
-                    self.mode = EditorMode::Insert;
+                    self.enter_insert_mode();
                 }
             },
             _ => {}
@@ -343,13 +397,23 @@ impl EditorState {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') {
             if let Some(field) = self.current_field_mut() {
                 field.value.clear();
+                self.cursor = 0;
             }
             return EditorAction::None;
         }
 
-        let is_body = matches!(self.current_field_id(), Some(EditorFieldId::Body));
+        let current_id = self.current_field_id();
+        let is_body = matches!(current_id, Some(EditorFieldId::Body));
         match key.code {
             KeyCode::Esc => return EditorAction::Cancel,
+            KeyCode::Left if !is_body => {
+                self.move_cursor_left();
+                return EditorAction::None;
+            }
+            KeyCode::Right if !is_body => {
+                self.move_cursor_right();
+                return EditorAction::None;
+            }
             KeyCode::Enter => {
                 if is_body {
                     if let Some(field) = self.current_field_mut() {
@@ -361,8 +425,19 @@ impl EditorState {
             }
             KeyCode::Tab => return self.finish_field(),
             KeyCode::Backspace => {
+                let mut updated_cursor = None;
+                let cursor = self.cursor;
                 if let Some(field) = self.current_field_mut() {
-                    field.value.pop();
+                    if is_body {
+                        field.value.pop();
+                    } else {
+                        let removed = remove_char_before_cursor(&field.value, cursor);
+                        field.value = removed.value;
+                        updated_cursor = Some(removed.cursor);
+                    }
+                }
+                if let Some(cursor) = updated_cursor {
+                    self.cursor = cursor;
                 }
             }
             KeyCode::Char(ch) => {
@@ -370,8 +445,19 @@ impl EditorState {
                     return EditorAction::None;
                 }
                 if !ch.is_control() {
+                    let mut updated_cursor = None;
+                    let cursor = self.cursor;
                     if let Some(field) = self.current_field_mut() {
-                        field.value.push(ch);
+                        if is_body {
+                            field.value.push(ch);
+                        } else {
+                            let inserted = insert_char_at_cursor(&field.value, cursor, ch);
+                            field.value = inserted.value;
+                            updated_cursor = Some(inserted.cursor);
+                        }
+                    }
+                    if let Some(cursor) = updated_cursor {
+                        self.cursor = cursor;
                     }
                 }
             }
@@ -387,6 +473,41 @@ impl EditorState {
         }
         self.move_active(1);
         EditorAction::None
+    }
+
+    fn enter_insert_mode(&mut self) {
+        self.mode = EditorMode::Insert;
+        self.cursor = self.current_field_char_len();
+    }
+
+    fn current_field_char_len(&self) -> usize {
+        self.current_field()
+            .map(|field| field.value.chars().count())
+            .unwrap_or(0)
+    }
+
+    fn current_field(&self) -> Option<&EditorField> {
+        self.fields.get(self.active)
+    }
+
+    fn clamp_cursor(&mut self) {
+        let len = self.current_field_char_len();
+        if self.cursor > len {
+            self.cursor = len;
+        }
+    }
+
+    fn move_cursor_left(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+
+    fn move_cursor_right(&mut self) {
+        let len = self.current_field_char_len();
+        if self.cursor < len {
+            self.cursor += 1;
+        }
     }
 }
 
@@ -828,6 +949,53 @@ fn parse_task_list(value: &str) -> Vec<String> {
     out
 }
 
+struct CursorEdit {
+    value: String,
+    cursor: usize,
+}
+
+fn insert_char_at_cursor(value: &str, cursor: usize, ch: char) -> CursorEdit {
+    let mut out = value.to_string();
+    let cursor = cursor.min(out.chars().count());
+    let byte_index = byte_index_from_char(&out, cursor);
+    out.insert(byte_index, ch);
+    CursorEdit {
+        value: out,
+        cursor: cursor + 1,
+    }
+}
+
+fn remove_char_before_cursor(value: &str, cursor: usize) -> CursorEdit {
+    let mut out = value.to_string();
+    if cursor == 0 {
+        return CursorEdit {
+            value: out,
+            cursor: 0,
+        };
+    }
+    let cursor = cursor.min(out.chars().count());
+    let start = byte_index_from_char(&out, cursor - 1);
+    let end = byte_index_from_char(&out, cursor);
+    if start < end {
+        out.replace_range(start..end, "");
+    }
+    CursorEdit {
+        value: out,
+        cursor: cursor - 1,
+    }
+}
+
+fn byte_index_from_char(value: &str, cursor: usize) -> usize {
+    if cursor == 0 {
+        return 0;
+    }
+    value
+        .char_indices()
+        .nth(cursor)
+        .map(|(idx, _)| idx)
+        .unwrap_or_else(|| value.len())
+}
+
 fn fuzzy_match(value: &str, query: &str) -> bool {
     if query.is_empty() {
         return true;
@@ -894,6 +1062,18 @@ mod tests {
         let action = editor.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::empty()));
         assert_eq!(action, EditorAction::None);
         assert!(editor.confirming());
+    }
+
+    #[test]
+    fn insert_mode_moves_cursor_left_and_right() {
+        let mut editor = EditorState::new_task("P2".to_string());
+        let action = editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+        assert_eq!(action, EditorAction::None);
+        editor.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()));
+        editor.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::empty()));
+        editor.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()));
+        editor.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::empty()));
+        assert_eq!(editor.field_value(EditorFieldId::Title), "acb");
     }
 
     #[test]
