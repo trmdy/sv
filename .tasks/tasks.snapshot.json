@@ -1,7 +1,37 @@
 {
   "schema_version": "sv.tasks.v1",
-  "generated_at": "2026-01-30T11:31:04.218055Z",
+  "generated_at": "2026-01-30T11:33:03.082075Z",
   "tasks": [
+    {
+      "id": "sv-xhk",
+      "title": "Epic: Inline editor shared pane layout",
+      "status": "closed",
+      "priority": "P0",
+      "created_at": "2026-01-28T16:33:16.425946Z",
+      "updated_at": "2026-01-30T11:33:03.071581Z",
+      "body": "Use the Details pane as the shared inline editor for New/Edit task flows. Break work into small subtasks (layout, truncation fix, children multi-select).",
+      "workspace_id": "4365f497-2aae-41bb-9bb8-24b1daab916b",
+      "workspace": "sv",
+      "branch": "main",
+      "started_at": "2026-01-30T11:32:59.455977Z",
+      "closed_at": "2026-01-30T11:33:03.071581Z",
+      "comments_count": 0
+    },
+    {
+      "id": "sv-5xa",
+      "title": "Epic: Additional TUI commands",
+      "status": "closed",
+      "priority": "P0",
+      "created_at": "2026-01-28T12:37:05.895744Z",
+      "updated_at": "2026-01-30T11:32:57.630827Z",
+      "body": "Epic to deliver new task creation and editing commands in the TUI.\\n\\nScope\\n- Add 'n' new task wizard (title required; optional priority/relations/description).\\n- Add 'p' change priority for selected task.\\n- Add 'e' inline edit for selected task.\\n- Update keybindings/help so users can discover new commands.\\n- Add reasonable test coverage for the new flows.\\n",
+      "workspace_id": "4365f497-2aae-41bb-9bb8-24b1daab916b",
+      "workspace": "sv",
+      "branch": "main",
+      "started_at": "2026-01-30T11:32:55.982821Z",
+      "closed_at": "2026-01-30T11:32:57.630827Z",
+      "comments_count": 0
+    },
     {
       "id": "sv-a38",
       "title": "Improve TUI command help",
@@ -60,33 +90,6 @@
       "branch": "main",
       "started_at": "2026-01-30T11:15:08.216254Z",
       "closed_at": "2026-01-30T11:30:56.033613Z",
-      "comments_count": 0
-    },
-    {
-      "id": "sv-5xa",
-      "title": "Epic: Additional TUI commands",
-      "status": "open",
-      "priority": "P0",
-      "created_at": "2026-01-28T12:37:05.895744Z",
-      "updated_at": "2026-01-30T11:14:18.635215Z",
-      "body": "Epic to deliver new task creation and editing commands in the TUI.\\n\\nScope\\n- Add 'n' new task wizard (title required; optional priority/relations/description).\\n- Add 'p' change priority for selected task.\\n- Add 'e' inline edit for selected task.\\n- Update keybindings/help so users can discover new commands.\\n- Add reasonable test coverage for the new flows.\\n",
-      "workspace_id": "4365f497-2aae-41bb-9bb8-24b1daab916b",
-      "workspace": "sv",
-      "branch": "main",
-      "comments_count": 0
-    },
-    {
-      "id": "sv-xhk",
-      "title": "Epic: Inline editor shared pane layout",
-      "status": "open",
-      "priority": "P0",
-      "created_at": "2026-01-28T16:33:16.425946Z",
-      "updated_at": "2026-01-30T11:11:24.183408Z",
-      "body": "Use the Details pane as the shared inline editor for New/Edit task flows. Break work into small subtasks (layout, truncation fix, children multi-select).",
-      "workspace_id": "4365f497-2aae-41bb-9bb8-24b1daab916b",
-      "workspace": "sv",
-      "branch": "main",
-      "started_at": "2026-01-28T16:33:56.595993Z",
       "comments_count": 0
     },
     {
