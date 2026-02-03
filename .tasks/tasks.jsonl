@@ -199,3 +199,7 @@
 {"event_id":"01KG7AV04YZ9DSP7SQDA8BFP0K","task_id":"sv-5xa","type":"task_closed","timestamp":"2026-01-30T11:32:57.630827Z","status":"closed","workspace_id":"4365f497-2aae-41bb-9bb8-24b1daab916b","workspace":"sv","branch":"main"}
 {"event_id":"01KG7AV1XZ5Q32H668W6666KRH","task_id":"sv-xhk","type":"task_started","timestamp":"2026-01-30T11:32:59.455977Z","status":"in_progress","workspace_id":"4365f497-2aae-41bb-9bb8-24b1daab916b","workspace":"sv","branch":"main"}
 {"event_id":"01KG7AV5EZM9DCNQWE8PHFTTVP","task_id":"sv-xhk","type":"task_closed","timestamp":"2026-01-30T11:33:03.071581Z","status":"closed","workspace_id":"4365f497-2aae-41bb-9bb8-24b1daab916b","workspace":"sv","branch":"main"}
+{"event_id":"01KG7BENT0RE1HZGG3DT1GRCWY","task_id":"sv-7rr","type":"task_created","timestamp":"2026-01-30T11:43:42.400333Z","title":"Test","status":"open","priority":"P2"}
+{"event_id":"01KG7BENTRGGS03VYFEA6XB0CR","task_id":"sv-7rr","type":"task_blocked","timestamp":"2026-01-30T11:43:42.424823Z","related_task_id":"sv-17z"}
+{"event_id":"01KG7BF0P6C1QPZQY7BHT78R2K","task_id":"sv-7rr","type":"task_unblocked","timestamp":"2026-01-30T11:43:53.542161Z","related_task_id":"sv-17z"}
+{"event_id":"01KG7BF0PWCG1VF2PV0WYSFVGX","task_id":"sv-7rr","type":"task_deleted","timestamp":"2026-01-30T11:43:53.564313Z"}

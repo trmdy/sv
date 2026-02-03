@@ -12,7 +12,7 @@ You are implementing the tasks currently in the queue for this repo. Follow thes
 - If new feedback exists, create one task per actionable item using `sv task`, then update the feedback timestamp.
 
 3) $session-protocol
-- Before ending the session, run the git checklist: `git status`, `git add <files>`, `git commit -m "..."`, `git push`.
+- Before ending the session, run the git checklist: `git status`, `git add <files>`, `git commit -m "..."`.
 
 Completion rule
 - If all tasks are closed and all tests pass, write exactly `DONE implementing` in `USER_TODO.md`. Then run `forge stop i2`
