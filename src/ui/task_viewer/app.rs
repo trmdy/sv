@@ -737,12 +737,8 @@ fn handle_key(
                 if let Some(editor) = app.editor.as_mut() {
                     editor.set_field_value(EditorFieldId::BlockedBy, selected.join(", "));
                 } else if let Some(task_id) = app.selected_task().map(|task| task.id.clone()) {
-                    match actions::set_blocked_by(
-                        &app.store,
-                        app.actor.clone(),
-                        &task_id,
-                        selected,
-                    ) {
+                    match actions::set_blocked_by(&app.store, app.actor.clone(), &task_id, selected)
+                    {
                         Ok(outcome) => app.apply_outcome(outcome, req_tx),
                         Err(err) => app.set_error(err.to_string()),
                     }
@@ -1081,8 +1077,10 @@ fn handle_key(
                     return false;
                 }
             };
-            let picker =
-                MultiTaskPicker::new(app.task_picker_options(Some(task.id.as_str())), &relations.blocked_by);
+            let picker = MultiTaskPicker::new(
+                app.task_picker_options(Some(task.id.as_str())),
+                &relations.blocked_by,
+            );
             app.blocked_by_picker = Some(picker);
             false
         }

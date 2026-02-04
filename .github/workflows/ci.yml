@@ -72,6 +72,7 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/sv dist/
           tar -czf dist/sv-${{ matrix.target }}.tar.gz -C dist sv
+          rm dist/sv
 
       - name: Package (windows)
         if: runner.os == 'Windows'
@@ -80,6 +81,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target/${{ matrix.target }}/release/sv.exe dist/
           Compress-Archive -Path dist/sv.exe -DestinationPath ("dist/sv-${{ matrix.target }}.zip") -Force
+          Remove-Item -Force dist/sv.exe
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

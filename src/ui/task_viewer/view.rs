@@ -347,12 +347,7 @@ fn render_task_picker_modal(frame: &mut Frame, area: Rect, picker: &TaskPicker) 
     frame.render_widget(widget, modal);
 }
 
-fn render_multi_picker_modal(
-    frame: &mut Frame,
-    area: Rect,
-    picker: &MultiTaskPicker,
-    title: &str,
-) {
+fn render_multi_picker_modal(frame: &mut Frame, area: Rect, picker: &MultiTaskPicker, title: &str) {
     let content_width = area.width.saturating_sub(6).min(72);
     let max_height = area.height.saturating_sub(6).max(8);
     let list_height = max_height.saturating_sub(6) as usize;
@@ -737,7 +732,12 @@ fn help_line(keys: &str, desc: &str, width: usize) -> Line<'static> {
     ])
 }
 
-fn value_with_caret_spans(value: &str, cursor: usize, width: usize, style: Style) -> Vec<Span<'static>> {
+fn value_with_caret_spans(
+    value: &str,
+    cursor: usize,
+    width: usize,
+    style: Style,
+) -> Vec<Span<'static>> {
     if width == 0 {
         return vec![Span::raw("")];
     }
@@ -784,10 +784,7 @@ fn value_with_caret_spans(value: &str, cursor: usize, width: usize, style: Style
 
     let caret_index = cursor.saturating_sub(start);
     let before: String = window[..caret_index].iter().collect();
-    let caret_char = window
-        .get(caret_index)
-        .copied()
-        .unwrap_or(' ');
+    let caret_char = window.get(caret_index).copied().unwrap_or(' ');
     let after: String = window[caret_index.saturating_add(1)..].iter().collect();
 
     let mut spans = Vec::new();

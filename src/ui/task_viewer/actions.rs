@@ -662,8 +662,8 @@ mod tests {
         let task_id = seed_task(&store, "Target");
         let blocker_id = seed_task(&store, "Blocker");
 
-        let outcome = set_blocked_by(&store, None, &task_id, vec![blocker_id.clone()])
-            .expect("blocked by");
+        let outcome =
+            set_blocked_by(&store, None, &task_id, vec![blocker_id.clone()]).expect("blocked by");
         assert!(outcome.changed);
 
         let relations = store.relations(&task_id).expect("relations");
