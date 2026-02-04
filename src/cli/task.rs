@@ -1536,10 +1536,7 @@ fn emit_task_event(
     kind: EventKind,
     event: &TaskEvent,
 ) -> Option<String> {
-    let sink = match sink.as_mut() {
-        Some(sink) => sink,
-        None => return None,
-    };
+    let sink = sink.as_mut()?;
 
     let mut envelope = Event::new(kind, event.actor.clone());
     envelope.timestamp = event.timestamp;

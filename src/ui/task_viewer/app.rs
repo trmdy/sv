@@ -42,6 +42,7 @@ enum LoadRequest {
     Details(String),
 }
 
+#[allow(clippy::large_enum_variant)]
 enum UiMsg {
     DataLoaded(
         Vec<TaskRecord>,

@@ -32,6 +32,12 @@ impl RenderCache {
     }
 }
 
+impl Default for RenderCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

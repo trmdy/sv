@@ -39,10 +39,7 @@ fn run_sv(repo: &Path, args: &[String], actor: Option<&str>) -> std::io::Result<
         .args(args)
         .status()?;
     if !status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("sv {:?} failed", args),
-        ));
+        return Err(std::io::Error::other(format!("sv {:?} failed", args)));
     }
     Ok(())
 }

@@ -45,7 +45,7 @@ pub fn create_task(
     let parent = input
         .parent
         .as_deref()
-        .and_then(|value| non_empty(value))
+        .and_then(non_empty)
         .map(|value| store.resolve_task_id(&value))
         .transpose()?;
 
@@ -56,7 +56,7 @@ pub fn create_task(
     let normalized_priority = input
         .priority
         .as_deref()
-        .and_then(|value| non_empty(value))
+        .and_then(non_empty)
         .map(|value| store.normalize_priority(&value))
         .transpose()?;
     let priority = normalized_priority.unwrap_or_else(|| store.default_priority());
@@ -144,7 +144,7 @@ pub fn edit_task(
     let normalized_priority = input
         .priority
         .as_deref()
-        .and_then(|value| non_empty(value))
+        .and_then(non_empty)
         .map(|value| store.normalize_priority(&value))
         .transpose()?;
     let priority_changed = normalized_priority
@@ -156,7 +156,7 @@ pub fn edit_task(
     let parent_input = input
         .parent
         .as_deref()
-        .and_then(|value| non_empty(value))
+        .and_then(non_empty)
         .map(|value| store.resolve_task_id(&value))
         .transpose()?;
     let parent_changed = match (relations.parent.as_deref(), parent_input.as_deref()) {

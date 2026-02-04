@@ -16,21 +16,11 @@ pub struct WorktreeInfo {
 }
 
 /// Options for creating a new workspace (worktree).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct WorktreeCreateOptions {
     pub reference: Option<String>,
     pub lock: bool,
     pub checkout_existing: bool,
-}
-
-impl Default for WorktreeCreateOptions {
-    fn default() -> Self {
-        Self {
-            reference: None,
-            lock: false,
-            checkout_existing: false,
-        }
-    }
 }
 
 /// Resolve a workspace (worktree) path relative to the repository workdir.

@@ -5,7 +5,7 @@ use sv::config::{Config, ProtectPath};
 #[test]
 fn config_defaults_when_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let config = Config::load_from_repo(&dir.path().to_path_buf());
+    let config = Config::load_from_repo(dir.path());
 
     assert_eq!(config.base, "main");
     assert_eq!(config.actor.default, "unknown");
@@ -42,7 +42,7 @@ paths = [".beads/**", "Cargo.lock"]
 
     fs::write(&config_path, toml)?;
 
-    let config = Config::load_from_repo(&dir.path().to_path_buf());
+    let config = Config::load_from_repo(dir.path());
 
     assert_eq!(config.base, "develop");
     assert_eq!(config.actor.default, "agent-1");

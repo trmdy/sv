@@ -8,7 +8,7 @@ fn load_from_repo_defaults_on_invalid_config() {
     let path = dir.path().join(".sv.toml");
     fs::write(&path, "base = 123").expect("write invalid config");
 
-    let cfg = Config::load_from_repo(&dir.path().to_path_buf());
+    let cfg = Config::load_from_repo(dir.path());
     assert_eq!(cfg.base, "main");
     assert_eq!(cfg.actor.default, "unknown");
 }
@@ -23,6 +23,6 @@ mode = "bogus"
 "#;
     fs::write(&path, content.trim()).expect("write invalid protect mode");
 
-    let cfg = Config::load_from_repo(&dir.path().to_path_buf());
+    let cfg = Config::load_from_repo(dir.path());
     assert_eq!(cfg.protect.mode, "guard");
 }

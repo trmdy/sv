@@ -262,7 +262,7 @@ fn suggestions_for(path: &str, workspaces: &[String], severity: RiskSeverity) ->
     );
 
     let onto_target = workspaces
-        .get(0)
+        .first()
         .map(|name| name.as_str())
         .unwrap_or("<workspace>");
     suggestions.insert(

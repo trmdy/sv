@@ -959,7 +959,7 @@ fn merge_events(mut a: Vec<TaskEvent>, b: Vec<TaskEvent>) -> Vec<TaskEvent> {
     a
 }
 
-fn sort_events(events: &mut Vec<TaskEvent>) {
+fn sort_events(events: &mut [TaskEvent]) {
     events.sort_by(|a, b| {
         a.timestamp
             .cmp(&b.timestamp)
@@ -1510,7 +1510,7 @@ fn normalize_id(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
-fn suffix_from_id<'a>(id_norm: &'a str) -> &'a str {
+fn suffix_from_id(id_norm: &str) -> &str {
     let mut earliest = None;
     for delim in TASK_ID_DELIMS {
         if let Some(idx) = id_norm.find(delim) {
@@ -1625,7 +1625,7 @@ mod tests {
 
         let delete = TaskEvent::new(TaskEventType::TaskDeleted, "task-1");
         apply_event(&mut map, &delete, &config).expect("delete");
-        assert!(map.get("task-1").is_none());
+        assert!(!map.contains_key("task-1"));
     }
 
     #[test]
@@ -1983,8 +1983,10 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let repo_root = dir.path().to_path_buf();
         let storage = Storage::new(repo_root.clone(), repo_root.join(".git"), repo_root.clone());
-        let mut config = TasksConfig::default();
-        config.id_prefix = "prefix".to_string();
+        let config = TasksConfig {
+            id_prefix: "prefix".to_string(),
+            ..TasksConfig::default()
+        };
         let store = TaskStore::new(storage, config);
 
         let snapshot = TaskSnapshot {

@@ -30,12 +30,13 @@ use crate::error::{Error, Result};
 // =============================================================================
 
 /// Strength level of a lease, determining overlap rules
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LeaseStrength {
     /// Watch mode - overlaps with anything, just observing
     Observe,
     /// Normal collaborative work - overlaps with observe and cooperative
+    #[default]
     Cooperative,
     /// Serious intent - blocks strong/exclusive, cooperative with flag
     Strong,
@@ -113,18 +114,12 @@ impl FromStr for LeaseStrength {
     }
 }
 
-impl Default for LeaseStrength {
-    fn default() -> Self {
-        LeaseStrength::Cooperative
-    }
-}
-
 // =============================================================================
 // Lease Intent
 // =============================================================================
 
 /// Intent of the lease - what kind of work is being done
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LeaseIntent {
     /// Bug fix
@@ -144,6 +139,7 @@ pub enum LeaseIntent {
     /// Investigation/exploration
     Investigation,
     /// Other/unspecified
+    #[default]
     Other,
 }
 
@@ -205,22 +201,17 @@ impl FromStr for LeaseIntent {
     }
 }
 
-impl Default for LeaseIntent {
-    fn default() -> Self {
-        LeaseIntent::Other
-    }
-}
-
 // =============================================================================
 // Lease Scope
 // =============================================================================
 
 /// Scope of the lease - where it applies
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(tag = "type", content = "value")]
 pub enum LeaseScope {
     /// Repository-wide (default)
     #[serde(rename = "repo")]
+    #[default]
     Repo,
     /// Specific branch only
     #[serde(rename = "branch")]
@@ -261,21 +252,16 @@ impl FromStr for LeaseScope {
     }
 }
 
-impl Default for LeaseScope {
-    fn default() -> Self {
-        LeaseScope::Repo
-    }
-}
-
 // =============================================================================
 // Lease Status
 // =============================================================================
 
 /// Current status of a lease
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LeaseStatus {
     /// Lease is active
+    #[default]
     Active,
     /// Lease was explicitly released
     Released,
@@ -283,12 +269,6 @@ pub enum LeaseStatus {
     Expired,
     /// Lease was broken by another actor
     Broken,
-}
-
-impl Default for LeaseStatus {
-    fn default() -> Self {
-        LeaseStatus::Active
-    }
 }
 
 // =============================================================================

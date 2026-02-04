@@ -198,7 +198,7 @@ pub fn run(options: CommitOptions) -> Result<()> {
     }
 
     // Execute git commit
-    let output = cmd.output().map_err(|e| Error::Io(e))?;
+    let output = cmd.output().map_err(Error::Io)?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -298,7 +298,7 @@ fn check_protected_paths(
         .ok_or_else(|| Error::OperationFailed("no working directory".to_string()))?;
 
     // Load config from workspace root
-    let config = Config::load_from_repo(&workdir.to_path_buf());
+    let config = Config::load_from_repo(workdir);
 
     // Get the common git dir (handles worktrees correctly)
     let git_dir = git::common_dir(repo);

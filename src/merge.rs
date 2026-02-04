@@ -77,7 +77,7 @@ pub fn simulate_merge(
     let mut options = MergeOptions::new();
     options.find_renames(true);
 
-    let index = repo.merge_trees(&base_tree, &ours_tree, &theirs_tree, Some(&mut options))?;
+    let index = repo.merge_trees(&base_tree, &ours_tree, &theirs_tree, Some(&options))?;
 
     let conflicts = collect_conflicts(&index)?;
 

@@ -162,7 +162,7 @@ pub fn infer_command_name_from_args() -> String {
     let mut command = None;
     let mut subcommand = None;
 
-    while let Some(arg) = args.next() {
+    for arg in args.by_ref() {
         if arg.starts_with('-') {
             continue;
         }
@@ -179,7 +179,7 @@ pub fn infer_command_name_from_args() -> String {
         command.as_str(),
         "ws" | "lease" | "protect" | "op" | "actor" | "task"
     ) {
-        while let Some(arg) = args.next() {
+        for arg in args {
             if arg.starts_with('-') {
                 continue;
             }

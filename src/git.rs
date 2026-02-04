@@ -575,7 +575,7 @@ pub fn file_statuses(repo: &Repository) -> Result<Vec<FileChange>> {
     let mut changes = Vec::new();
 
     for entry in statuses.iter() {
-        let path = entry.path().map(|p| PathBuf::from(p)).unwrap_or_default();
+        let path = entry.path().map(PathBuf::from).unwrap_or_default();
 
         let status = entry.status();
 
@@ -679,15 +679,13 @@ pub fn create_commit(
     let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
 
     // Check for empty commits
-    if !options.allow_empty && !options.amend {
-        if !parent_refs.is_empty() {
-            let parent_tree = parent_refs[0].tree()?;
-            let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&tree), None)?;
-            if diff.deltas().count() == 0 {
-                return Err(Error::OperationFailed(
-                    "nothing to commit (use --allow-empty to create an empty commit)".to_string(),
-                ));
-            }
+    if !options.allow_empty && !options.amend && !parent_refs.is_empty() {
+        let parent_tree = parent_refs[0].tree()?;
+        let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&tree), None)?;
+        if diff.deltas().count() == 0 {
+            return Err(Error::OperationFailed(
+                "nothing to commit (use --allow-empty to create an empty commit)".to_string(),
+            ));
         }
     }
 
@@ -1314,7 +1312,7 @@ mod tests {
 
         let untracked = statuses
             .iter()
-            .find(|s| s.path == PathBuf::from("untracked.txt"));
+            .find(|s| s.path.as_path() == std::path::Path::new("untracked.txt"));
         assert!(untracked.is_some());
         assert_eq!(untracked.unwrap().status, FileStatus::Untracked);
     }

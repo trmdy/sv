@@ -409,8 +409,8 @@ fn compute_ahead_behind(repo: &git2::Repository, branch: &str, base: &str) -> Op
     let (ahead, behind) = repo.graph_ahead_behind(branch_oid, base_oid).ok()?;
     Some(AheadBehind {
         base: base.to_string(),
-        ahead: ahead as usize,
-        behind: behind as usize,
+        ahead,
+        behind,
     })
 }
 

@@ -30,7 +30,7 @@ pub fn resolve_actor(repo_root: Option<&Path>, cli_actor: Option<&str>) -> Resul
             return Ok(actor);
         }
 
-        let config = Config::load_from_repo(&root.to_path_buf());
+        let config = Config::load_from_repo(root);
         return Ok(config.actor.default);
     }
 

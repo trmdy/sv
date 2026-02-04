@@ -161,7 +161,7 @@ pub fn select_by_id(
             .iter()
             .position(|task| normalize_text(&task.id) == normalized)
         {
-            if filtered.iter().any(|candidate| *candidate == index) {
+            if filtered.contains(&index) {
                 return Some(index);
             }
         }

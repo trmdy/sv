@@ -316,8 +316,8 @@ fn render_task_picker_modal(frame: &mut Frame, area: Rect, picker: &TaskPicker) 
         let title_width = (content_width as usize)
             .saturating_sub(id_width)
             .saturating_sub(3);
-        for pos in start..end {
-            let idx = filtered[pos];
+        for (pos, idx) in filtered.iter().enumerate().take(end).skip(start) {
+            let idx = *idx;
             if let Some(option) = picker.options().get(idx) {
                 let id_text = pad_text(&option.id, id_width);
                 let title_text = truncate_text(&option.title, title_width);
@@ -378,8 +378,8 @@ fn render_multi_picker_modal(frame: &mut Frame, area: Rect, picker: &MultiTaskPi
         let marker_width = 3usize;
         let id_width = ID_WIDTH.min((content_width as usize).saturating_sub(marker_width + 6));
         let title_width = (content_width as usize).saturating_sub(marker_width + id_width + 4);
-        for pos in start..end {
-            let idx = filtered[pos];
+        for (pos, idx) in filtered.iter().enumerate().take(end).skip(start) {
+            let idx = *idx;
             if let Some(option) = picker.options().get(idx) {
                 let marker = if picker.is_selected(idx) {
                     "[x]"
@@ -674,39 +674,39 @@ fn build_confirm_lines(editor: &EditorState, width: usize, show_help: bool) -> V
 }
 
 fn build_list_help_lines(width: usize) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    lines.push(help_header("More commands"));
-    lines.push(help_line("j/k or up/down", "move selection", width));
-    lines.push(help_line("n", "new task", width));
-    lines.push(help_line("e", "edit task", width));
-    lines.push(help_line("d", "delete task", width));
-    lines.push(help_line("p", "change priority", width));
-    lines.push(help_line("s", "change status", width));
-    lines.push(help_line("b", "blocked by", width));
-    lines.push(help_line("/", "filter tasks", width));
-    lines.push(help_line("tab", "status filter while filtering", width));
-    lines.push(help_line("r", "reload tasks", width));
-    lines.push(help_line("ctrl+d/u", "page down/up", width));
-    lines.push(help_line("enter", "toggle details in narrow view", width));
-    lines.push(help_line("q/esc", "quit", width));
-    lines.push(help_line("?", "hide help", width));
-    lines
+    vec![
+        help_header("More commands"),
+        help_line("j/k or up/down", "move selection", width),
+        help_line("n", "new task", width),
+        help_line("e", "edit task", width),
+        help_line("d", "delete task", width),
+        help_line("p", "change priority", width),
+        help_line("s", "change status", width),
+        help_line("b", "blocked by", width),
+        help_line("/", "filter tasks", width),
+        help_line("tab", "status filter while filtering", width),
+        help_line("r", "reload tasks", width),
+        help_line("ctrl+d/u", "page down/up", width),
+        help_line("enter", "toggle details in narrow view", width),
+        help_line("q/esc", "quit", width),
+        help_line("?", "hide help", width),
+    ]
 }
 
 fn build_editor_help_lines(width: usize) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    lines.push(help_header("More commands"));
-    lines.push(help_line("enter", "edit field or open picker", width));
-    lines.push(help_line("c", "review details / confirm", width));
-    lines.push(help_line("ctrl+enter", "confirm from editor", width));
-    lines.push(help_line("tab/shift+tab", "next or previous field", width));
-    lines.push(help_line("j/k", "move field selection", width));
-    lines.push(help_line("ctrl+u", "clear field in insert mode", width));
-    lines.push(help_line("y/enter", "submit on confirm screen", width));
-    lines.push(help_line("backspace", "return to edit screen", width));
-    lines.push(help_line("esc/q", "cancel editor", width));
-    lines.push(help_line("?", "hide help", width));
-    lines
+    vec![
+        help_header("More commands"),
+        help_line("enter", "edit field or open picker", width),
+        help_line("c", "review details / confirm", width),
+        help_line("ctrl+enter", "confirm from editor", width),
+        help_line("tab/shift+tab", "next or previous field", width),
+        help_line("j/k", "move field selection", width),
+        help_line("ctrl+u", "clear field in insert mode", width),
+        help_line("y/enter", "submit on confirm screen", width),
+        help_line("backspace", "return to edit screen", width),
+        help_line("esc/q", "cancel editor", width),
+        help_line("?", "hide help", width),
+    ]
 }
 
 fn help_header(title: &str) -> Line<'static> {

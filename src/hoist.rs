@@ -22,20 +22,15 @@ pub struct HoistCandidate {
 }
 
 /// Ordering modes for hoist replay.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum OrderMode {
     /// Stable sort by workspace name, preserving commit order per workspace.
+    #[default]
     Workspace,
     /// Sort by commit time (oldest first), stable by original order.
     Time,
     /// Prioritize an explicit workspace order, appending remaining workspaces alphabetically.
     Explicit(Vec<String>),
-}
-
-impl Default for OrderMode {
-    fn default() -> Self {
-        OrderMode::Workspace
-    }
 }
 
 /// Workspace reference for hoist selection.
@@ -238,8 +233,8 @@ pub fn replay_commits(
         let summary = commit_summary(message);
         let change_id = find_change_id(message);
 
-        let mut merge_opts = MergeOptions::new();
-        let mut index = repo.cherrypick_commit(&commit, &current, 0, Some(&mut merge_opts))?;
+        let merge_opts = MergeOptions::new();
+        let mut index = repo.cherrypick_commit(&commit, &current, 0, Some(&merge_opts))?;
 
         if index.has_conflicts() {
             let files = conflict_paths(&index)?;
@@ -476,12 +471,13 @@ fn conflict_paths(index: &Index) -> Result<Vec<String>> {
     let conflicts = index.conflicts()?;
     for conflict in conflicts {
         let conflict = conflict?;
-        for entry in [conflict.ancestor, conflict.our, conflict.their] {
-            if let Some(entry) = entry {
-                let path = String::from_utf8_lossy(&entry.path).into_owned();
-                if !path.is_empty() {
-                    paths.insert(path);
-                }
+        for entry in [conflict.ancestor, conflict.our, conflict.their]
+            .into_iter()
+            .flatten()
+        {
+            let path = String::from_utf8_lossy(&entry.path).into_owned();
+            if !path.is_empty() {
+                paths.insert(path);
             }
         }
     }

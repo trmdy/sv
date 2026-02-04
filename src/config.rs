@@ -3,7 +3,7 @@
 //! Handles parsing of `.sv.toml` configuration files.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -373,7 +373,7 @@ impl Config {
     }
 
     /// Load configuration from repo root, or return defaults
-    pub fn load_from_repo(repo_root: &PathBuf) -> Self {
+    pub fn load_from_repo(repo_root: &Path) -> Self {
         let config_path = repo_root.join(".sv.toml");
         if config_path.exists() {
             Self::load(&config_path).unwrap_or_default()
@@ -650,7 +650,7 @@ default_status = "missing"
     #[test]
     fn load_from_repo_defaults_when_missing() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let cfg = Config::load_from_repo(&dir.path().to_path_buf());
+        let cfg = Config::load_from_repo(dir.path());
         assert_eq!(cfg.base, "main");
     }
 
@@ -660,7 +660,7 @@ default_status = "missing"
         let path = dir.path().join(".sv.toml");
         fs::write(&path, "base = \"feature\"").expect("write config");
 
-        let cfg = Config::load_from_repo(&dir.path().to_path_buf());
+        let cfg = Config::load_from_repo(dir.path());
         assert_eq!(cfg.base, "feature");
     }
 

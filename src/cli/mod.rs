@@ -2427,7 +2427,7 @@ impl Cli {
                 },
                 None => {
                     print_subcommand_help("ws")?;
-                    return Err(Error::InvalidArgument("missing ws command".to_string()));
+                    Err(Error::InvalidArgument("missing ws command".to_string()))
                 }
             },
             Commands::Take {
@@ -2505,7 +2505,7 @@ impl Cli {
                 },
                 None => {
                     print_subcommand_help("lease")?;
-                    return Err(Error::InvalidArgument("missing lease command".to_string()));
+                    Err(Error::InvalidArgument("missing lease command".to_string()))
                 }
             },
             Commands::Protect { command } => match command {
@@ -2540,9 +2540,9 @@ impl Cli {
                 },
                 None => {
                     print_subcommand_help("protect")?;
-                    return Err(Error::InvalidArgument(
+                    Err(Error::InvalidArgument(
                         "missing protect command".to_string(),
-                    ));
+                    ))
                 }
             },
             Commands::Commit {
@@ -2817,7 +2817,7 @@ impl Cli {
                 },
                 None => {
                     print_subcommand_help("op")?;
-                    return Err(Error::InvalidArgument("missing op command".to_string()));
+                    Err(Error::InvalidArgument("missing op command".to_string()))
                 }
             },
             Commands::Undo { op } => {
@@ -2843,7 +2843,7 @@ impl Cli {
                 },
                 None => {
                     print_subcommand_help("actor")?;
-                    return Err(Error::InvalidArgument("missing actor command".to_string()));
+                    Err(Error::InvalidArgument("missing actor command".to_string()))
                 }
             },
             Commands::Hoist {

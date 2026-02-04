@@ -126,7 +126,7 @@ impl EventSink {
         let serialized = serde_json::to_vec(event)?;
         self.writer.write_all(&serialized)?;
         self.writer.write_all(b"\n")?;
-        self.writer.flush().map_err(|err| Error::Io(err))?;
+        self.writer.flush().map_err(Error::Io)?;
         Ok(())
     }
 }
