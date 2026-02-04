@@ -166,14 +166,14 @@ jobs:
           x86_sha = os.environ["X86_SHA"]
 
           text = formula.read_text()
-          text, n1 = re.subn(r'version\\s+"[^"]+"', f'version "{version}"', text)
+          text, n1 = re.subn(r'version\s+"[^"]+"', f'version "{version}"', text)
           text, n2 = re.subn(
-              r'(url "[^\\n]*sv-aarch64-apple-darwin\\.tar\\.gz"\\s*\\n\\s*sha256 ")[^"]+(")',
+              r'(url "[^\n]*sv-aarch64-apple-darwin\.tar\.gz"\s*\n\s*sha256 ")[^"]+(")',
               r'\\1' + arm_sha + r'\\2',
               text,
           )
           text, n3 = re.subn(
-              r'(url "[^\\n]*sv-x86_64-apple-darwin\\.tar\\.gz"\\s*\\n\\s*sha256 ")[^"]+(")',
+              r'(url "[^\n]*sv-x86_64-apple-darwin\.tar\.gz"\s*\n\s*sha256 ")[^"]+(")',
               r'\\1' + x86_sha + r'\\2',
               text,
           )
@@ -200,9 +200,9 @@ jobs:
             x86_sha = os.environ["X86_SHA"]
 
             text = cask.read_text()
-            text, n1 = re.subn(r'version\\s+"[^"]+"', f'version "{version}"', text)
+            text, n1 = re.subn(r'version\s+"[^"]+"', f'version "{version}"', text)
             text, n2 = re.subn(
-                r'sha256\\s+arm:\\s*"[^"]+"\\s*,\\s*intel:\\s*"[^"]+"',
+                r'sha256\s+arm:\s*"[^"]+"\s*,\s*intel:\s*"[^"]+"',
                 f'sha256 arm: "{arm_sha}", intel: "{x86_sha}"',
                 text,
             )
