@@ -190,26 +190,26 @@ jobs:
             fi
             export CASK="${cask}"
             python - <<'PY'
-            import os
-            import pathlib
-            import re
+          import os
+          import pathlib
+          import re
 
-            cask = pathlib.Path(os.environ["CASK"])
-            version = os.environ["VERSION"]
-            arm_sha = os.environ["ARM_SHA"]
-            x86_sha = os.environ["X86_SHA"]
+          cask = pathlib.Path(os.environ["CASK"])
+          version = os.environ["VERSION"]
+          arm_sha = os.environ["ARM_SHA"]
+          x86_sha = os.environ["X86_SHA"]
 
-            text = cask.read_text()
-            text, n1 = re.subn(r'version\s+"[^"]+"', f'version "{version}"', text)
-            text, n2 = re.subn(
-                r'sha256\s+arm:\s*"[^"]+"\s*,\s*intel:\s*"[^"]+"',
-                f'sha256 arm: "{arm_sha}", intel: "{x86_sha}"',
-                text,
-            )
-            if n1 == 0 or n2 == 0:
-                raise SystemExit("Pattern update failed; check cask format.")
-            cask.write_text(text)
-            PY
+          text = cask.read_text()
+          text, n1 = re.subn(r'version\s+"[^"]+"', f'version "{version}"', text)
+          text, n2 = re.subn(
+              r'sha256\s+arm:\s*"[^"]+"\s*,\s*intel:\s*"[^"]+"',
+              f'sha256 arm: "{arm_sha}", intel: "{x86_sha}"',
+              text,
+          )
+          if n1 == 0 or n2 == 0:
+              raise SystemExit("Pattern update failed; check cask format.")
+          cask.write_text(text)
+          PY
           fi
 
       - name: Commit and push
