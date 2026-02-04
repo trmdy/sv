@@ -169,12 +169,12 @@ jobs:
           text, n1 = re.subn(r'version\s+"[^"]+"', f'version "{version}"', text)
           text, n2 = re.subn(
               r'(url "[^\n]*sv-aarch64-apple-darwin\.tar\.gz"\s*\n\s*sha256 ")[^"]+(")',
-              r'\\1' + arm_sha + r'\\2',
+              r'\1' + arm_sha + r'\2',
               text,
           )
           text, n3 = re.subn(
               r'(url "[^\n]*sv-x86_64-apple-darwin\.tar\.gz"\s*\n\s*sha256 ")[^"]+(")',
-              r'\\1' + x86_sha + r'\\2',
+              r'\1' + x86_sha + r'\2',
               text,
           )
           if n1 == 0 or n2 == 0 or n3 == 0:
