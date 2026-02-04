@@ -48,7 +48,7 @@ fn commit_all(repo: &Path, message: &str) -> Oid {
 
 fn init_repo() -> (tempfile::TempDir, Repository) {
     let dir = tempfile::tempdir().expect("tempdir");
-    git(dir.path(), &["init"]);
+    git(dir.path(), &["init", "-b", "main"]);
     git(dir.path(), &["config", "user.email", "test@example.com"]);
     git(dir.path(), &["config", "user.name", "Test"]);
     let repo = Repository::open(dir.path()).expect("repo");
