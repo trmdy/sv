@@ -40,10 +40,10 @@ Linux script supports x86_64 only.
 
 macOS Homebrew (tap):
 ```bash
-brew tap tOgg1/sv https://github.com/tOgg1/sv
+brew tap trmdy/homebrew-tap
 brew install sv
 ```
-Note: `Formula/sv.rb` sha256 values must be updated per release.
+Note: Homebrew formula sha256 values are updated automatically on tag releases.
 
 ### From source
 

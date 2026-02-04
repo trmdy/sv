@@ -77,3 +77,155 @@ jobs:
         with:
           files: dist/**/*
           generate_release_notes: true
+
+  homebrew:
+    name: homebrew
+    runs-on: ubuntu-latest
+    needs: publish
+    env:
+      HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO || 'trmdy/homebrew-tap' }}
+      HOMEBREW_FORMULA_PATH: ${{ vars.HOMEBREW_FORMULA_PATH || 'Formula/sv.rb' }}
+      HOMEBREW_CASK_PATH: ${{ vars.HOMEBREW_CASK_PATH }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Validate Homebrew config
+        shell: bash
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOMEBREW_TAP_REPO}" ]; then
+            echo "::error::Missing HOMEBREW_TAP_REPO (repo variable)."
+            exit 1
+          fi
+          if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN}" ]; then
+            echo "::error::Missing HOMEBREW_TAP_GITHUB_TOKEN (secret)."
+            exit 1
+          fi
+
+      - name: Resolve macOS checksums
+        id: checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [ -z "${version}" ] || [ "${version}" = "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag must be in form vX.Y.Z."
+            exit 1
+          fi
+          x86_file=$(find dist -name 'sv-x86_64-apple-darwin.tar.gz' -print -quit)
+          arm_file=$(find dist -name 'sv-aarch64-apple-darwin.tar.gz' -print -quit)
+          if [ -z "${x86_file}" ] || [ -z "${arm_file}" ]; then
+            echo "::error::Missing macOS artifacts in dist."
+            exit 1
+          fi
+          x86_sha=$(sha256sum "${x86_file}" | awk '{print $1}')
+          arm_sha=$(sha256sum "${arm_file}" | awk '{print $1}')
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "x86_sha=${x86_sha}" >> "${GITHUB_OUTPUT}"
+          echo "arm_sha=${arm_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HOMEBREW_TAP_REPO }}
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update formula (and cask if configured)
+        shell: bash
+        env:
+          VERSION: ${{ steps.checksums.outputs.version }}
+          ARM_SHA: ${{ steps.checksums.outputs.arm_sha }}
+          X86_SHA: ${{ steps.checksums.outputs.x86_sha }}
+        run: |
+          set -euo pipefail
+          : "${HOMEBREW_FORMULA_PATH:=Formula/sv.rb}"
+
+          formula="homebrew-tap/${HOMEBREW_FORMULA_PATH}"
+          if [ ! -f "${formula}" ]; then
+            echo "::error::Formula not found: ${formula}"
+            exit 1
+          fi
+
+          export FORMULA="${formula}"
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          formula = pathlib.Path(os.environ["FORMULA"])
+          version = os.environ["VERSION"]
+          arm_sha = os.environ["ARM_SHA"]
+          x86_sha = os.environ["X86_SHA"]
+
+          text = formula.read_text()
+          text, n1 = re.subn(r'version\\s+"[^"]+"', f'version "{version}"', text)
+          text, n2 = re.subn(
+              r'(url "[^\\n]*sv-aarch64-apple-darwin\\.tar\\.gz"\\s*\\n\\s*sha256 ")[^"]+(")',
+              r'\\1' + arm_sha + r'\\2',
+              text,
+          )
+          text, n3 = re.subn(
+              r'(url "[^\\n]*sv-x86_64-apple-darwin\\.tar\\.gz"\\s*\\n\\s*sha256 ")[^"]+(")',
+              r'\\1' + x86_sha + r'\\2',
+              text,
+          )
+          if n1 == 0 or n2 == 0 or n3 == 0:
+              raise SystemExit("Pattern update failed; check formula format.")
+          formula.write_text(text)
+          PY
+
+          if [ -n "${HOMEBREW_CASK_PATH:-}" ]; then
+            cask="homebrew-tap/${HOMEBREW_CASK_PATH}"
+            if [ ! -f "${cask}" ]; then
+              echo "::error::Cask not found: ${cask}"
+              exit 1
+            fi
+            export CASK="${cask}"
+            python - <<'PY'
+            import os
+            import pathlib
+            import re
+
+            cask = pathlib.Path(os.environ["CASK"])
+            version = os.environ["VERSION"]
+            arm_sha = os.environ["ARM_SHA"]
+            x86_sha = os.environ["X86_SHA"]
+
+            text = cask.read_text()
+            text, n1 = re.subn(r'version\\s+"[^"]+"', f'version "{version}"', text)
+            text, n2 = re.subn(
+                r'sha256\\s+arm:\\s*"[^"]+"\\s*,\\s*intel:\\s*"[^"]+"',
+                f'sha256 arm: "{arm_sha}", intel: "{x86_sha}"',
+                text,
+            )
+            if n1 == 0 or n2 == 0:
+                raise SystemExit("Pattern update failed; check cask format.")
+            cask.write_text(text)
+            PY
+          fi
+
+      - name: Commit and push
+        shell: bash
+        env:
+          VERSION: ${{ steps.checksums.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd homebrew-tap
+          if git diff --quiet; then
+            echo "No Homebrew changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${HOMEBREW_FORMULA_PATH}"
+          if [ -n "${HOMEBREW_CASK_PATH:-}" ] && [ -f "${HOMEBREW_CASK_PATH}" ]; then
+            git add "${HOMEBREW_CASK_PATH}"
+          fi
+          git commit -m "sv ${VERSION}"
+          git push
