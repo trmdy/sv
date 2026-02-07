@@ -73,6 +73,7 @@ Commands (high level)
   sv protect status|add|off|rm Protected paths
   sv commit                 Commit with sv checks + Change-Id
   sv task new|list|ready|count|show|start|status|priority|edit|close|delete|comment|parent|epic|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
+  sv forge hooks install     Configure Forge task hooks
   sv risk                   Overlap/conflict analysis
   sv onto                   Rebase/merge current workspace onto another
   sv hoist                  Bulk integrate workspaces into an integration branch

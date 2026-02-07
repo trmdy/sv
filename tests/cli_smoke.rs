@@ -59,3 +59,12 @@ fn forge_robot_help_works() {
         .stdout(contains("sv forge --robot-help"))
         .stdout(contains("sv forge hooks install"));
 }
+
+#[test]
+fn sv_robot_help_mentions_forge() {
+    cargo_bin_cmd!("sv")
+        .arg("--robot-help")
+        .assert()
+        .success()
+        .stdout(contains("sv forge hooks install"));
+}
