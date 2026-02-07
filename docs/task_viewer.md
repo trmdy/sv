@@ -16,6 +16,7 @@
 
 ## CLI entrypoint
 - `sv task` with no subcommand launches the TUI.
+- `sv task --epic <id>` (or `SV_EPIC=<id>`) starts with epic filter applied.
 - All existing subcommands remain unchanged for scripting.
 
 ## Layout
@@ -23,7 +24,9 @@
   - Left: task list.
   - Right: detail panel.
 - Narrow terminals: single pane list, detail opens in place.
-- Footer: key hints + status line (filter, errors, watch state) + task counts (open/ready/closed; ready = open + not blocked).
+- Footer: key hints + status line (filter, epic filter, errors, watch state) + task counts.
+  - Tasks mode counts: open/ready/closed (`ready = open + not blocked`).
+  - Epics mode counts: current/completed epics.
 
 ## Wireframes
 Split view (default):
@@ -71,6 +74,8 @@ Narrow view:
 - `esc`: clear filter or close filter input.
 - `o/i/c/a`: quick filter open / in_progress / closed / all.
 - `r`: manual reload.
+- `x`: epic filter picker.
+- `v`: toggle list mode (tasks/epics).
 - `n`: new task wizard.
 - `e`: inline edit task.
 - `p`: change task priority.
@@ -83,6 +88,8 @@ Narrow view:
 | `↑` / `↓` | Move selection |
 | `enter` | Toggle detail (narrow) |
 | `/` | Focus filter |
+| `x` | Epic filter picker |
+| `v` | Toggle tasks/epics view |
 | `esc` | Clear filter |
 | `o` | Filter open |
 | `i` | Filter in_progress |
@@ -98,7 +105,7 @@ Narrow view:
 - Fuzzy match on id + title (case-insensitive).
 - While filter active, show input line under list header.
 - If filter yields no results, show "No matches".
-- Status filter combines with text filter (AND).
+- Status filter and epic filter combine with text filter (AND).
 - Clear filter resets selection to first visible item.
 
 ## Data sources

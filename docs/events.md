@@ -57,6 +57,8 @@ Fields:
 - `task_closed`: emitted after a task is closed.
 - `task_deleted`: emitted after a task is deleted.
 - `task_commented`: emitted after a task comment is added.
+- `task_epic_set`: emitted after a task epic is set.
+- `task_epic_cleared`: emitted after a task epic is cleared.
 - `task_parent_set`: emitted after a task parent is set.
 - `task_parent_cleared`: emitted after a task parent is cleared.
 - `task_blocked`: emitted after a task is blocked.
