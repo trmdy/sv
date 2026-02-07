@@ -152,35 +152,48 @@ pub fn group_tasks_by_epic(
         })
         .collect();
     epic_order.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    let mut epic_roots_first = Vec::with_capacity(epic_order.len());
+    let mut epic_children = Vec::new();
+    for (_, epic_id) in &epic_order {
+        let has_epic_parent = index_by_id
+            .get(epic_id)
+            .and_then(|idx| tasks.get(*idx))
+            .and_then(|task| task.epic.as_ref())
+            .map(|parent_id| epic_ids.contains(parent_id))
+            .unwrap_or(false);
+        if has_epic_parent {
+            epic_children.push(epic_id.clone());
+        } else {
+            epic_roots_first.push(epic_id.clone());
+        }
+    }
+    epic_roots_first.extend(epic_children);
 
+    let task_ids: Vec<String> = tasks.iter().map(|task| task.id.clone()).collect();
     let mut slots: Vec<Option<TaskRecord>> = tasks.into_iter().map(Some).collect();
     let mut grouped_tasks = Vec::with_capacity(slots.len());
     let mut grouped_depths = Vec::with_capacity(slots.len());
     let mut consumed = HashSet::new();
+    let mut visited_epics = HashSet::new();
 
-    for (_, epic_id) in epic_order {
-        if let Some(&epic_idx) = index_by_id.get(&epic_id) {
-            if consumed.insert(epic_idx) {
-                if let Some(task) = slots[epic_idx].take() {
-                    grouped_tasks.push(task);
-                    grouped_depths.push(0);
-                }
-            }
-        }
-        if let Some(member_indices) = members_by_epic.get(&epic_id) {
-            for idx in member_indices {
-                if !consumed.insert(*idx) {
-                    continue;
-                }
-                if let Some(task) = slots[*idx].take() {
-                    grouped_tasks.push(task);
-                    grouped_depths.push(depths.get(*idx).copied().unwrap_or(0) + 1);
-                }
-            }
-        }
+    for epic_id in epic_roots_first {
+        append_epic_tree(
+            &epic_id,
+            0,
+            &epic_ids,
+            &index_by_id,
+            &task_ids,
+            &members_by_epic,
+            &depths,
+            &mut slots,
+            &mut consumed,
+            &mut visited_epics,
+            &mut grouped_tasks,
+            &mut grouped_depths,
+        );
     }
 
-    for (idx, depth) in depths.into_iter().enumerate() {
+    for (idx, depth) in depths.iter().copied().enumerate() {
         if !consumed.insert(idx) {
             continue;
         }
@@ -191,6 +204,105 @@ pub fn group_tasks_by_epic(
     }
 
     (grouped_tasks, grouped_depths, epic_ids)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_epic_tree(
+    epic_id: &str,
+    depth: usize,
+    epic_ids: &HashSet<String>,
+    index_by_id: &HashMap<String, usize>,
+    task_ids: &[String],
+    members_by_epic: &HashMap<String, Vec<usize>>,
+    original_depths: &[usize],
+    slots: &mut [Option<TaskRecord>],
+    consumed: &mut HashSet<usize>,
+    visited_epics: &mut HashSet<String>,
+    grouped_tasks: &mut Vec<TaskRecord>,
+    grouped_depths: &mut Vec<usize>,
+) {
+    if !visited_epics.insert(epic_id.to_string()) {
+        return;
+    }
+
+    if let Some(&epic_idx) = index_by_id.get(epic_id) {
+        append_task_subtree(
+            epic_idx,
+            depth,
+            original_depths,
+            slots,
+            consumed,
+            grouped_tasks,
+            grouped_depths,
+        );
+    }
+
+    if let Some(member_indices) = members_by_epic.get(epic_id) {
+        for idx in member_indices {
+            let member_depth = depth + 1;
+            append_task_subtree(
+                *idx,
+                member_depth,
+                original_depths,
+                slots,
+                consumed,
+                grouped_tasks,
+                grouped_depths,
+            );
+            if let Some(member_id) = task_ids.get(*idx) {
+                if epic_ids.contains(member_id) {
+                    append_epic_tree(
+                        member_id,
+                        member_depth,
+                        epic_ids,
+                        index_by_id,
+                        task_ids,
+                        members_by_epic,
+                        original_depths,
+                        slots,
+                        consumed,
+                        visited_epics,
+                        grouped_tasks,
+                        grouped_depths,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn append_task_subtree(
+    idx: usize,
+    target_depth: usize,
+    original_depths: &[usize],
+    slots: &mut [Option<TaskRecord>],
+    consumed: &mut HashSet<usize>,
+    grouped_tasks: &mut Vec<TaskRecord>,
+    grouped_depths: &mut Vec<usize>,
+) {
+    if idx >= slots.len() || !consumed.insert(idx) {
+        return;
+    }
+    if let Some(task) = slots[idx].take() {
+        grouped_tasks.push(task);
+        grouped_depths.push(target_depth);
+    }
+
+    let root_depth = original_depths.get(idx).copied().unwrap_or(0);
+    let mut cursor = idx + 1;
+    while cursor < slots.len() {
+        let depth = original_depths.get(cursor).copied().unwrap_or(0);
+        if depth <= root_depth {
+            break;
+        }
+        if consumed.insert(cursor) {
+            if let Some(task) = slots[cursor].take() {
+                grouped_tasks.push(task);
+                grouped_depths.push(target_depth + depth.saturating_sub(root_depth));
+            }
+        }
+        cursor += 1;
+    }
 }
 
 pub fn group_tasks_by_project(
@@ -774,6 +886,39 @@ mod tests {
     }
 
     #[test]
+    fn group_tasks_by_epic_expands_nested_epics_depth_first() {
+        let now = Utc::now();
+        let root = task("sv-root", "Root Epic", "open", "P1", now);
+
+        let mut epic_a = task("sv-epic-a", "Epic A", "open", "P1", now);
+        epic_a.epic = Some("sv-root".to_string());
+        let mut epic_b = task("sv-epic-b", "Epic B", "open", "P1", now);
+        epic_b.epic = Some("sv-root".to_string());
+
+        let mut task_a = task("sv-task-a", "Task A", "open", "P2", now);
+        task_a.epic = Some("sv-epic-a".to_string());
+        let mut task_b = task("sv-task-b", "Task B", "open", "P2", now);
+        task_b.epic = Some("sv-epic-b".to_string());
+
+        let (grouped, depths, _) = group_tasks_by_epic(
+            vec![root, epic_a, epic_b, task_a, task_b],
+            vec![0, 0, 0, 0, 0],
+        );
+        let ids: Vec<&str> = grouped.iter().map(|task| task.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "sv-root",
+                "sv-epic-a",
+                "sv-task-a",
+                "sv-epic-b",
+                "sv-task-b"
+            ]
+        );
+        assert_eq!(depths, vec![0, 1, 2, 1, 2]);
+    }
+
+    #[test]
     fn group_tasks_by_project_places_members_under_project() {
         let now = Utc::now();
         let mut project = task("sv-project", "Project", "open", "P1", now);
@@ -840,6 +985,52 @@ mod tests {
         assert_eq!(ids, vec!["sv-epic", "sv-child"]);
         assert_eq!(depths, vec![0, 1]);
         assert!(project_ids.contains("prj-alpha"));
+    }
+
+    #[test]
+    fn group_tasks_by_project_keeps_epic_members_contiguous_with_legacy_anchor_shape() {
+        let now = Utc::now();
+        let root = task("sv-root", "Root Epic", "open", "P0", now);
+
+        let mut epic_a = task("sv-epic-a", "Epic A", "open", "P0", now);
+        epic_a.epic = Some("sv-root".to_string());
+        epic_a.project = Some("sv-root".to_string());
+
+        let mut epic_b = task("sv-epic-b", "Epic B", "open", "P0", now);
+        epic_b.epic = Some("sv-root".to_string());
+        epic_b.project = Some("sv-root".to_string());
+
+        let mut task_a1 = task("sv-task-a1", "Task A1", "open", "P1", now);
+        task_a1.epic = Some("sv-epic-a".to_string());
+        task_a1.project = Some("sv-root".to_string());
+        let mut task_a2 = task("sv-task-a2", "Task A2", "open", "P1", now);
+        task_a2.epic = Some("sv-epic-a".to_string());
+        task_a2.project = Some("sv-root".to_string());
+
+        let mut task_b1 = task("sv-task-b1", "Task B1", "open", "P1", now);
+        task_b1.epic = Some("sv-epic-b".to_string());
+        task_b1.project = Some("sv-root".to_string());
+
+        let (epic_grouped, epic_depths, _) = group_tasks_by_epic(
+            vec![root, epic_a, epic_b, task_a1, task_a2, task_b1],
+            vec![0, 0, 0, 0, 0, 0],
+        );
+        let (grouped, depths, project_ids) = group_tasks_by_project(epic_grouped, epic_depths);
+
+        let ids: Vec<&str> = grouped.iter().map(|task| task.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "sv-root",
+                "sv-epic-a",
+                "sv-task-a1",
+                "sv-task-a2",
+                "sv-epic-b",
+                "sv-task-b1"
+            ]
+        );
+        assert_eq!(depths, vec![0, 2, 3, 3, 2, 3]);
+        assert!(project_ids.contains("sv-root"));
     }
 
     #[test]
