@@ -36,6 +36,7 @@ pub mod error;
 pub mod events;
 pub mod git;
 pub mod hoist;
+pub mod integrations;
 pub mod lease;
 pub mod lock;
 pub mod merge;
