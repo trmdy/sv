@@ -23,6 +23,23 @@ pub const DEFAULT_LOCK_TIMEOUT_MS: u64 = 5000;
 /// Default retry interval when waiting for a lock
 const LOCK_RETRY_INTERVAL_MS: u64 = 50;
 
+fn is_lock_contended(err: &io::Error) -> bool {
+    if err.kind() == io::ErrorKind::WouldBlock {
+        return true;
+    }
+
+    // On Windows, fs2/libc can surface lock/sharing violations as "Other".
+    // Treat them as contention so callers get Err(LockFailed) after timeout.
+    #[cfg(windows)]
+    {
+        matches!(err.raw_os_error(), Some(32) | Some(33))
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// A file lock guard that releases the lock when dropped
 pub struct FileLock {
     file: File,
@@ -63,7 +80,7 @@ impl FileLock {
                         path: path.to_path_buf(),
                     });
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                Err(e) if is_lock_contended(&e) => {
                     // Lock is held by another process
                     if start.elapsed() >= timeout {
                         return Err(Error::LockFailed(path.to_path_buf()));
@@ -124,7 +141,7 @@ impl FileLock {
                 file,
                 path: path.to_path_buf(),
             })),
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) if is_lock_contended(&e) => Ok(None),
             Err(e) => Err(Error::Io(e)),
         }
     }
