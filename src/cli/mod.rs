@@ -9,6 +9,7 @@ use crate::error::{Error, Result};
 
 mod actor;
 mod commit;
+mod forge;
 mod init;
 mod lease;
 mod onto;
@@ -71,7 +72,7 @@ Commands (high level)
   sv lease ls|who|renew|break|wait Inspect/manage leases
   sv protect status|add|off|rm Protected paths
   sv commit                 Commit with sv checks + Change-Id
-  sv task new|list|ready|show|start|status|priority|edit|close|delete|comment|parent|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
+  sv task new|list|ready|count|show|start|status|priority|edit|close|delete|comment|parent|epic|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
   sv risk                   Overlap/conflict analysis
   sv onto                   Rebase/merge current workspace onto another
   sv hoist                  Bulk integrate workspaces into an integration branch
@@ -104,8 +105,8 @@ Events (JSONL)
   lease_created, lease_released, workspace_created, workspace_removed,
   commit_blocked, commit_created, task_created, task_started,
   task_status_changed, task_priority_changed, task_edited, task_closed, task_deleted,
-  task_commented, task_parent_set, task_parent_cleared, task_blocked, task_unblocked, task_related,
-  task_unrelated
+  task_commented, task_epic_set, task_epic_cleared, task_parent_set, task_parent_cleared, task_blocked,
+  task_unblocked, task_related, task_unrelated
 
 Tips for agent automation
   - Use --json for parsing; prefer --events for continuous monitoring.
@@ -194,10 +195,11 @@ Quickstart
   sv task close 01HZ...
 
 Commands
-  sv task                           Open task TUI
+  sv task [--epic <id>]             Open task TUI
   sv task new "<title>" [--status] [--priority P0-P4] [--body]
-  sv task list [--status] [--priority] [--workspace] [--actor] [--updated-since] [--limit]
-  sv task ready [--priority] [--workspace] [--actor] [--updated-since] [--limit]
+  sv task list [--status] [--priority] [--epic] [--workspace] [--actor] [--updated-since] [--limit]
+  sv task ready [--priority] [--epic] [--workspace] [--actor] [--updated-since] [--limit]
+  sv task count [--ready] [--status] [--priority] [--epic] [--workspace] [--actor] [--updated-since] [--limit]
   sv task show <id>
   sv task start <id>
   sv task status <id> <status>
@@ -208,6 +210,8 @@ Commands
   sv task comment <id> "<text>"
   sv task parent set <child> <parent>
   sv task parent clear <child>
+  sv task epic set <task> <epic>
+  sv task epic clear <task>
   sv task block <blocker> <blocked>
   sv task unblock <blocker> <blocked>
   sv task relate <left> <right> --desc "<text>"
@@ -220,7 +224,19 @@ Commands
 Notes
   list/ready sorted: status -> priority -> readiness -> updated_at -> id
   readiness: default_status and not blocked
+  epic filter via --epic or SV_EPIC
   Use --json for machine output; use --events <path> with --json.
+"#;
+const FORGE_ROBOT_HELP: &str = r#"sv forge --robot-help
+
+Purpose
+  Configure sv -> forge hooks that update Forge loop work context on sv task events.
+
+Commands
+  sv forge hooks install [--loop <loop-ref>] [--status-map open=in_progress,blocked=blocked,closed=done]
+
+Notes
+  Hooks are best-effort: failures never block sv task operations.
 "#;
 const RISK_ROBOT_HELP: &str = r#"sv risk --robot-help
 
@@ -498,8 +514,24 @@ Examples:
   sv task close 01HZ...
 "#)]
     Task {
+        /// Filter tasks by epic ID (or set default via SV_EPIC)
+        #[arg(long, env = "SV_EPIC")]
+        epic: Option<String>,
+
         #[command(subcommand)]
         command: Option<TaskCommands>,
+    },
+
+    /// Forge integration helpers
+    #[command(long_about = r#"Manage Forge integration helpers.
+
+Examples:
+  sv forge hooks install
+  sv forge hooks install --loop review-loop
+"#)]
+    Forge {
+        #[command(subcommand)]
+        command: Option<ForgeCommands>,
     },
 
     /// Risk assessment and conflict prediction
@@ -962,6 +994,7 @@ Examples:
   sv task list
   sv task list --status open
   sv task list --priority P2
+  sv task list --epic sv-abc
   sv task list --workspace agent1
   sv task list --actor alice --updated-since 2025-01-01T00:00:00Z
   sv task list --limit 20
@@ -975,6 +1008,10 @@ Examples:
         /// Filter by priority (P0-P4)
         #[arg(long)]
         priority: Option<String>,
+
+        /// Filter by epic task ID
+        #[arg(long, env = "SV_EPIC")]
+        epic: Option<String>,
 
         /// Filter by workspace (name or id)
         #[arg(long)]
@@ -999,6 +1036,7 @@ Examples:
 Examples:
   sv task ready
   sv task ready --priority P2
+  sv task ready --epic sv-abc
   sv task ready --workspace agent1
   sv task ready --actor alice --updated-since 2025-01-01T00:00:00Z
   sv task ready --limit 20
@@ -1007,6 +1045,10 @@ Examples:
         /// Filter by priority (P0-P4)
         #[arg(long)]
         priority: Option<String>,
+
+        /// Filter by epic task ID
+        #[arg(long, env = "SV_EPIC")]
+        epic: Option<String>,
 
         /// Filter by workspace (name or id)
         #[arg(long)]
@@ -1021,6 +1063,52 @@ Examples:
         updated_since: Option<String>,
 
         /// Limit number of tasks returned
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+
+    /// Count tasks
+    #[command(long_about = r#"Count tasks.
+
+Examples:
+  sv task count
+  sv task count --status open
+  sv task count --priority P2
+  sv task count --ready
+  sv task count --epic sv-abc
+  sv task count --workspace agent1
+  sv task count --actor alice --updated-since 2025-01-01T00:00:00Z
+"#)]
+    Count {
+        /// Count ready tasks only (open and unblocked)
+        #[arg(long)]
+        ready: bool,
+
+        /// Filter by status (not allowed with --ready)
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Filter by priority (P0-P4)
+        #[arg(long)]
+        priority: Option<String>,
+
+        /// Filter by epic task ID
+        #[arg(long, env = "SV_EPIC")]
+        epic: Option<String>,
+
+        /// Filter by workspace (name or id)
+        #[arg(long)]
+        workspace: Option<String>,
+
+        /// Filter by last updated actor
+        #[arg(long)]
+        actor: Option<String>,
+
+        /// Filter by updated timestamp (RFC3339)
+        #[arg(long, value_name = "timestamp")]
+        updated_since: Option<String>,
+
+        /// Limit number of tasks considered (after filtering)
         #[arg(long)]
         limit: Option<usize>,
     },
@@ -1145,6 +1233,18 @@ Examples:
     Parent {
         #[command(subcommand)]
         command: ParentCommands,
+    },
+
+    /// Manage task epic relationships
+    #[command(long_about = r#"Manage task epic relationships.
+
+Examples:
+  sv task epic set 01HZ... 01HZ...
+  sv task epic clear 01HZ...
+"#)]
+    Epic {
+        #[command(subcommand)]
+        command: EpicCommands,
     },
 
     /// Block a task with another task
@@ -1286,6 +1386,65 @@ Examples:
     Clear {
         /// Child task ID
         child: String,
+    },
+}
+
+/// Task epic subcommands
+#[derive(Subcommand, Debug)]
+pub enum EpicCommands {
+    /// Set task epic
+    #[command(long_about = r#"Set task epic.
+
+Examples:
+  sv task epic set 01HZ... 01HZ...
+"#)]
+    Set {
+        /// Task ID
+        task: String,
+
+        /// Epic task ID
+        epic: String,
+    },
+
+    /// Clear task epic
+    #[command(long_about = r#"Clear task epic.
+
+Examples:
+  sv task epic clear 01HZ...
+"#)]
+    Clear {
+        /// Task ID
+        task: String,
+    },
+}
+
+/// Forge subcommands
+#[derive(Subcommand, Debug)]
+pub enum ForgeCommands {
+    /// Manage .sv.toml hooks
+    #[command(long_about = r#"Manage .sv.toml hooks for Forge integration.
+
+Examples:
+  sv forge hooks install
+"#)]
+    Hooks {
+        #[command(subcommand)]
+        command: Option<ForgeHooksCommands>,
+    },
+}
+
+/// Forge hook subcommands
+#[derive(Subcommand, Debug)]
+pub enum ForgeHooksCommands {
+    /// Write/update the [integrations.forge] block
+    Install {
+        /// Forge loop ref (default: "{actor}")
+        #[arg(long = "loop")]
+        loop_ref: Option<String>,
+
+        /// Map sv categories to forge statuses (default: open=in_progress,blocked=blocked,closed=done)
+        #[arg(long = "status-map")]
+        status_map: Option<String>,
     },
 }
 
@@ -2303,6 +2462,7 @@ impl Cli {
                 Some(Commands::Protect { .. }) => PROTECT_ROBOT_HELP,
                 Some(Commands::Commit { .. }) => COMMIT_ROBOT_HELP,
                 Some(Commands::Task { .. }) => TASK_ROBOT_HELP,
+                Some(Commands::Forge { .. }) => FORGE_ROBOT_HELP,
                 Some(Commands::Risk { .. }) => RISK_ROBOT_HELP,
                 Some(Commands::Op { .. }) => OP_ROBOT_HELP,
                 Some(Commands::Undo { .. }) => UNDO_ROBOT_HELP,
@@ -2566,7 +2726,7 @@ impl Cli {
                 json,
                 quiet,
             }),
-            Commands::Task { command } => match command {
+            Commands::Task { epic, command } => match command {
                 Some(cmd) => match cmd {
                     TaskCommands::New {
                         title,
@@ -2587,6 +2747,7 @@ impl Cli {
                     TaskCommands::List {
                         status,
                         priority,
+                        epic: list_epic,
                         workspace,
                         actor: list_actor,
                         updated_since,
@@ -2594,6 +2755,7 @@ impl Cli {
                     } => task::run_list(task::ListOptions {
                         status,
                         priority,
+                        epic: list_epic.or_else(|| epic.clone()),
                         workspace,
                         actor: list_actor,
                         updated_since,
@@ -2604,12 +2766,36 @@ impl Cli {
                     }),
                     TaskCommands::Ready {
                         priority,
+                        epic: list_epic,
                         workspace,
                         actor: list_actor,
                         updated_since,
                         limit,
                     } => task::run_ready(task::ReadyOptions {
                         priority,
+                        epic: list_epic.or_else(|| epic.clone()),
+                        workspace,
+                        actor: list_actor,
+                        updated_since,
+                        limit,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    TaskCommands::Count {
+                        ready,
+                        status,
+                        priority,
+                        epic: list_epic,
+                        workspace,
+                        actor: list_actor,
+                        updated_since,
+                        limit,
+                    } => task::run_count(task::CountOptions {
+                        ready,
+                        status,
+                        priority,
+                        epic: list_epic.or_else(|| epic.clone()),
                         workspace,
                         actor: list_actor,
                         updated_since,
@@ -2711,6 +2897,30 @@ impl Cli {
                             })
                         }
                     },
+                    TaskCommands::Epic { command } => match command {
+                        EpicCommands::Set {
+                            task: task_id,
+                            epic,
+                        } => task::run_epic_set(task::EpicSetOptions {
+                            task: task_id,
+                            epic,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        }),
+                        EpicCommands::Clear { task: task_id } => {
+                            task::run_epic_clear(task::EpicClearOptions {
+                                task: task_id,
+                                actor,
+                                events: events.clone(),
+                                repo,
+                                json,
+                                quiet,
+                            })
+                        }
+                    },
                     TaskCommands::Block { blocker, blocked } => {
                         task::run_block(task::BlockOptions {
                             blocker,
@@ -2782,7 +2992,38 @@ impl Cli {
                         quiet,
                     }),
                 },
-                None => task::run_tui(task::TuiOptions { repo, json, quiet }),
+                None => task::run_tui(task::TuiOptions {
+                    epic,
+                    repo,
+                    json,
+                    quiet,
+                }),
+            },
+            Commands::Forge { command } => match command {
+                Some(cmd) => match cmd {
+                    ForgeCommands::Hooks { command } => match command {
+                        Some(ForgeHooksCommands::Install {
+                            loop_ref,
+                            status_map,
+                        }) => forge::run_hooks_install(forge::HooksInstallOptions {
+                            loop_ref,
+                            status_map,
+                            repo,
+                            json,
+                            quiet,
+                        }),
+                        None => {
+                            print_subcommand_help("forge")?;
+                            Err(Error::InvalidArgument(
+                                "missing forge hooks command".to_string(),
+                            ))
+                        }
+                    },
+                },
+                None => {
+                    print_subcommand_help("forge")?;
+                    Err(Error::InvalidArgument("missing forge command".to_string()))
+                }
             },
             Commands::Risk {
                 selector,

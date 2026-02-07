@@ -10,6 +10,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::events::{Event, EventDestination, EventKind};
 use crate::git;
+use crate::integrations::forge as forge_integration;
 use crate::output::{emit_success, HumanOutput, OutputOptions};
 use crate::storage::{Storage, WorkspaceEntry};
 use crate::task::{
@@ -31,6 +32,7 @@ pub struct NewOptions {
 pub struct ListOptions {
     pub status: Option<String>,
     pub priority: Option<String>,
+    pub epic: Option<String>,
     pub workspace: Option<String>,
     pub actor: Option<String>,
     pub updated_since: Option<String>,
@@ -42,6 +44,21 @@ pub struct ListOptions {
 
 pub struct ReadyOptions {
     pub priority: Option<String>,
+    pub epic: Option<String>,
+    pub workspace: Option<String>,
+    pub actor: Option<String>,
+    pub updated_since: Option<String>,
+    pub limit: Option<usize>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct CountOptions {
+    pub ready: bool,
+    pub status: Option<String>,
+    pub priority: Option<String>,
+    pub epic: Option<String>,
     pub workspace: Option<String>,
     pub actor: Option<String>,
     pub updated_since: Option<String>,
@@ -109,6 +126,25 @@ pub struct ParentSetOptions {
 
 pub struct ParentClearOptions {
     pub child: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct EpicSetOptions {
+    pub task: String,
+    pub epic: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct EpicClearOptions {
+    pub task: String,
     pub actor: Option<String>,
     pub events: Option<String>,
     pub repo: Option<PathBuf>,
@@ -208,6 +244,7 @@ pub struct PrefixOptions {
 }
 
 pub struct TuiOptions {
+    pub epic: Option<String>,
     pub repo: Option<PathBuf>,
     pub json: bool,
     pub quiet: bool,
@@ -226,6 +263,7 @@ struct TaskContext {
     store: TaskStore,
     actor: Option<String>,
     workspace: Option<WorkspaceEntry>,
+    repo_root: PathBuf,
 }
 
 pub fn run_new(options: NewOptions) -> Result<()> {
@@ -285,44 +323,17 @@ pub fn run_list(options: ListOptions) -> Result<()> {
     let ctx = load_context(options.repo, None, false)?;
     let updated_since = parse_timestamp("updated-since", options.updated_since.as_deref())?;
     let mut tasks = ctx.store.list(options.status.as_deref())?;
+    let epic_filter = resolve_epic_filter(&ctx.store, options.epic.as_deref())?;
 
-    if let Some(priority) = options.priority.as_ref() {
-        let normalized = ctx.store.normalize_priority(priority)?;
-        tasks.retain(|task| task.priority == normalized);
-    }
-
-    if let Some(actor) = options.actor.as_ref() {
-        let trimmed = actor.trim();
-        if trimmed.is_empty() {
-            return Err(Error::InvalidArgument("actor cannot be empty".to_string()));
-        }
-        tasks.retain(|task| task.updated_by.as_deref() == Some(trimmed));
-    }
-
-    if let Some(workspace) = options.workspace.as_ref() {
-        let trimmed = workspace.trim();
-        if trimmed.is_empty() {
-            return Err(Error::InvalidArgument(
-                "workspace cannot be empty".to_string(),
-            ));
-        }
-        let needle = trimmed.to_ascii_lowercase();
-        tasks.retain(|task| {
-            task.workspace_id
-                .as_ref()
-                .map(|value| value.eq_ignore_ascii_case(&needle))
-                .unwrap_or(false)
-                || task
-                    .workspace
-                    .as_ref()
-                    .map(|value| value.eq_ignore_ascii_case(&needle))
-                    .unwrap_or(false)
-        });
-    }
-
-    if let Some(updated_since) = updated_since {
-        tasks.retain(|task| task.updated_at >= updated_since);
-    }
+    apply_task_filters(
+        &ctx.store,
+        &mut tasks,
+        options.priority.as_deref(),
+        epic_filter.as_deref(),
+        options.workspace.as_deref(),
+        options.actor.as_deref(),
+        updated_since,
+    )?;
 
     let (blocked_ids, blocked_error) = match ctx.store.blocked_task_ids() {
         Ok(blocked_ids) => (blocked_ids, None),
@@ -341,6 +352,9 @@ pub fn run_list(options: ListOptions) -> Result<()> {
 
     let mut human = HumanOutput::new("Tasks");
     human.push_summary("Total", tasks.len().to_string());
+    if let Some(epic_id) = epic_filter {
+        human.push_summary("Epic", epic_id);
+    }
     if let Some(error) = blocked_error {
         human.push_warning(error);
     }
@@ -349,6 +363,9 @@ pub fn run_list(options: ListOptions) -> Result<()> {
             "[{}][{}] {} {}",
             task.status, task.priority, task.id, task.title
         );
+        if let Some(epic) = task.epic.as_ref() {
+            line.push_str(&format!(" (epic: {})", epic));
+        }
         if let Some(workspace) = task.workspace.as_ref() {
             line.push_str(&format!(" (ws: {})", workspace));
         }
@@ -370,13 +387,136 @@ pub fn run_ready(options: ReadyOptions) -> Result<()> {
     let ctx = load_context(options.repo, None, false)?;
     let updated_since = parse_timestamp("updated-since", options.updated_since.as_deref())?;
     let mut tasks = ctx.store.list_ready()?;
+    let epic_filter = resolve_epic_filter(&ctx.store, options.epic.as_deref())?;
 
-    if let Some(priority) = options.priority.as_ref() {
-        let normalized = ctx.store.normalize_priority(priority)?;
+    apply_task_filters(
+        &ctx.store,
+        &mut tasks,
+        options.priority.as_deref(),
+        epic_filter.as_deref(),
+        options.workspace.as_deref(),
+        options.actor.as_deref(),
+        updated_since,
+    )?;
+
+    let blocked_ids = std::collections::HashSet::new();
+    crate::task::sort_tasks(&mut tasks, ctx.store.config(), &blocked_ids);
+    apply_limit(&mut tasks, options.limit)?;
+
+    let output = TaskListOutput {
+        total: tasks.len(),
+        tasks: tasks.clone(),
+    };
+
+    let mut human = HumanOutput::new("Ready tasks");
+    human.push_summary("Total", tasks.len().to_string());
+    if let Some(epic_id) = epic_filter {
+        human.push_summary("Epic", epic_id);
+    }
+    for task in tasks {
+        let mut line = format!(
+            "[{}][{}] {} {}",
+            task.status, task.priority, task.id, task.title
+        );
+        if let Some(epic) = task.epic.as_ref() {
+            line.push_str(&format!(" (epic: {})", epic));
+        }
+        if let Some(workspace) = task.workspace.as_ref() {
+            line.push_str(&format!(" (ws: {})", workspace));
+        }
+        human.push_detail(line);
+    }
+
+    emit_success(
+        OutputOptions {
+            json: options.json,
+            quiet: options.quiet,
+        },
+        "task ready",
+        &output,
+        Some(&human),
+    )
+}
+
+#[derive(serde::Serialize)]
+struct TaskCountOutput {
+    total: usize,
+}
+
+pub fn run_count(options: CountOptions) -> Result<()> {
+    let ctx = load_context(options.repo, None, false)?;
+
+    if options.ready && options.status.is_some() {
+        return Err(Error::InvalidArgument(
+            "cannot use --status with --ready".to_string(),
+        ));
+    }
+
+    let updated_since = parse_timestamp("updated-since", options.updated_since.as_deref())?;
+    let epic_filter = resolve_epic_filter(&ctx.store, options.epic.as_deref())?;
+
+    let mut tasks = if options.ready {
+        ctx.store.list_ready()?
+    } else {
+        ctx.store.list(options.status.as_deref())?
+    };
+
+    apply_task_filters(
+        &ctx.store,
+        &mut tasks,
+        options.priority.as_deref(),
+        epic_filter.as_deref(),
+        options.workspace.as_deref(),
+        options.actor.as_deref(),
+        updated_since,
+    )?;
+
+    apply_limit(&mut tasks, options.limit)?;
+    let output = TaskCountOutput { total: tasks.len() };
+
+    let human = HumanOutput::new(output.total.to_string());
+    emit_success(
+        OutputOptions {
+            json: options.json,
+            quiet: options.quiet,
+        },
+        "task count",
+        &output,
+        Some(&human),
+    )
+}
+
+fn apply_limit(tasks: &mut Vec<TaskRecord>, limit: Option<usize>) -> Result<()> {
+    if let Some(limit) = limit {
+        if limit == 0 {
+            return Err(Error::InvalidArgument("limit must be >= 1".to_string()));
+        }
+        if tasks.len() > limit {
+            tasks.truncate(limit);
+        }
+    }
+    Ok(())
+}
+
+fn apply_task_filters(
+    store: &TaskStore,
+    tasks: &mut Vec<TaskRecord>,
+    priority: Option<&str>,
+    epic_id: Option<&str>,
+    workspace: Option<&str>,
+    actor: Option<&str>,
+    updated_since: Option<DateTime<Utc>>,
+) -> Result<()> {
+    if let Some(priority) = priority {
+        let normalized = store.normalize_priority(priority)?;
         tasks.retain(|task| task.priority == normalized);
     }
 
-    if let Some(actor) = options.actor.as_ref() {
+    if let Some(epic_id) = epic_id {
+        tasks.retain(|task| task.id == epic_id || task.epic.as_deref() == Some(epic_id));
+    }
+
+    if let Some(actor) = actor {
         let trimmed = actor.trim();
         if trimmed.is_empty() {
             return Err(Error::InvalidArgument("actor cannot be empty".to_string()));
@@ -384,7 +524,7 @@ pub fn run_ready(options: ReadyOptions) -> Result<()> {
         tasks.retain(|task| task.updated_by.as_deref() == Some(trimmed));
     }
 
-    if let Some(workspace) = options.workspace.as_ref() {
+    if let Some(workspace) = workspace {
         let trimmed = workspace.trim();
         if trimmed.is_empty() {
             return Err(Error::InvalidArgument(
@@ -409,48 +549,6 @@ pub fn run_ready(options: ReadyOptions) -> Result<()> {
         tasks.retain(|task| task.updated_at >= updated_since);
     }
 
-    let blocked_ids = std::collections::HashSet::new();
-    crate::task::sort_tasks(&mut tasks, ctx.store.config(), &blocked_ids);
-    apply_limit(&mut tasks, options.limit)?;
-
-    let output = TaskListOutput {
-        total: tasks.len(),
-        tasks: tasks.clone(),
-    };
-
-    let mut human = HumanOutput::new("Ready tasks");
-    human.push_summary("Total", tasks.len().to_string());
-    for task in tasks {
-        let mut line = format!(
-            "[{}][{}] {} {}",
-            task.status, task.priority, task.id, task.title
-        );
-        if let Some(workspace) = task.workspace.as_ref() {
-            line.push_str(&format!(" (ws: {})", workspace));
-        }
-        human.push_detail(line);
-    }
-
-    emit_success(
-        OutputOptions {
-            json: options.json,
-            quiet: options.quiet,
-        },
-        "task ready",
-        &output,
-        Some(&human),
-    )
-}
-
-fn apply_limit(tasks: &mut Vec<TaskRecord>, limit: Option<usize>) -> Result<()> {
-    if let Some(limit) = limit {
-        if limit == 0 {
-            return Err(Error::InvalidArgument("limit must be >= 1".to_string()));
-        }
-        if tasks.len() > limit {
-            tasks.truncate(limit);
-        }
-    }
     Ok(())
 }
 
@@ -500,6 +598,12 @@ pub fn run_start(options: StartOptions) -> Result<()> {
     event.status = Some(in_progress.clone());
     ctx.store.append_event(event.clone())?;
     let event_warning = emit_task_event(&mut event_sink, EventKind::TaskStarted, &event);
+    let hook_warning = forge_integration::run_task_hook_best_effort(
+        &ctx.repo_root,
+        forge_integration::ForgeTaskHookKind::TaskStart,
+        &resolved,
+        ctx.actor.as_deref().unwrap_or("unknown"),
+    );
 
     let output = TaskStatusOutput {
         id: resolved.clone(),
@@ -508,6 +612,9 @@ pub fn run_start(options: StartOptions) -> Result<()> {
 
     let mut human = HumanOutput::new("Task started");
     if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    if let Some(warning) = hook_warning {
         human.push_warning(warning);
     }
     human.push_summary("ID", resolved);
@@ -694,6 +801,12 @@ pub fn run_close(options: CloseOptions) -> Result<()> {
     }
     ctx.store.append_event(event.clone())?;
     let event_warning = emit_task_event(&mut event_sink, EventKind::TaskClosed, &event);
+    let hook_warning = forge_integration::run_task_hook_best_effort(
+        &ctx.repo_root,
+        forge_integration::ForgeTaskHookKind::TaskClose,
+        &resolved,
+        ctx.actor.as_deref().unwrap_or("unknown"),
+    );
 
     let output = TaskStatusOutput {
         id: resolved.clone(),
@@ -702,6 +815,9 @@ pub fn run_close(options: CloseOptions) -> Result<()> {
 
     let mut human = HumanOutput::new("Task closed");
     if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    if let Some(warning) = hook_warning {
         human.push_warning(warning);
     }
     human.push_summary("ID", resolved);
@@ -725,7 +841,9 @@ pub fn run_delete(options: DeleteOptions) -> Result<()> {
 
     let details = ctx.store.details(&resolved)?;
     let relations = &details.relations;
-    let has_relations = relations.parent.is_some()
+    let has_relations = details.task.epic.is_some()
+        || !relations.epic_tasks.is_empty()
+        || relations.parent.is_some()
         || !relations.children.is_empty()
         || !relations.blocks.is_empty()
         || !relations.blocked_by.is_empty()
@@ -902,6 +1020,100 @@ pub fn run_parent_clear(options: ParentClearOptions) -> Result<()> {
     )
 }
 
+pub fn run_epic_set(options: EpicSetOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let task = ctx.store.resolve_task_id(&options.task)?;
+    let epic = ctx.store.resolve_task_id(&options.epic)?;
+    if task == epic {
+        return Err(Error::InvalidArgument("epic cannot match task".to_string()));
+    }
+
+    let details = ctx.store.details(&task)?;
+    if details.task.epic.as_deref() == Some(epic.as_str()) {
+        return Err(Error::InvalidArgument(format!(
+            "epic already set to {epic}"
+        )));
+    }
+
+    let mut event = TaskEvent::new(TaskEventType::TaskEpicSet, task.clone());
+    event.actor = ctx.actor.clone();
+    event.related_task_id = Some(epic.clone());
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskEpicSet, &event);
+
+    let output = TaskEpicOutput {
+        task: task.clone(),
+        epic: epic.clone(),
+    };
+
+    let mut human = HumanOutput::new("Epic set");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("Task", task);
+    human.push_summary("Epic", epic);
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task epic set",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_epic_clear(options: EpicClearOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let task = ctx.store.resolve_task_id(&options.task)?;
+    let details = ctx.store.details(&task)?;
+    let epic = details
+        .task
+        .epic
+        .ok_or_else(|| Error::InvalidArgument(format!("task has no epic: {task}")))?;
+
+    let mut event = TaskEvent::new(TaskEventType::TaskEpicCleared, task.clone());
+    event.actor = ctx.actor.clone();
+    event.related_task_id = Some(epic.clone());
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskEpicCleared, &event);
+
+    let output = TaskEpicOutput {
+        task: task.clone(),
+        epic: epic.clone(),
+    };
+
+    let mut human = HumanOutput::new("Epic cleared");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("Task", task);
+    human.push_summary("Epic", epic);
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task epic clear",
+        &output,
+        Some(&human),
+    )
+}
+
 pub fn run_block(options: BlockOptions) -> Result<()> {
     let ctx = load_context(options.repo, options.actor, true)?;
     let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
@@ -930,6 +1142,12 @@ pub fn run_block(options: BlockOptions) -> Result<()> {
     }
     ctx.store.append_event(event.clone())?;
     let event_warning = emit_task_event(&mut event_sink, EventKind::TaskBlocked, &event);
+    let hook_warning = forge_integration::run_task_hook_best_effort(
+        &ctx.repo_root,
+        forge_integration::ForgeTaskHookKind::TaskBlock,
+        &blocker,
+        ctx.actor.as_deref().unwrap_or("unknown"),
+    );
 
     let output = TaskBlockOutput {
         blocker: blocker.clone(),
@@ -938,6 +1156,9 @@ pub fn run_block(options: BlockOptions) -> Result<()> {
 
     let mut human = HumanOutput::new("Task blocked");
     if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    if let Some(warning) = hook_warning {
         human.push_warning(warning);
     }
     human.push_summary("Blocker", blocker);
@@ -1319,7 +1540,8 @@ pub fn run_tui(options: TuiOptions) -> Result<()> {
         ));
     }
     let ctx = load_context(options.repo, None, false)?;
-    crate::ui::task_viewer::run(ctx.store)
+    let epic_filter = resolve_epic_filter(&ctx.store, options.epic.as_deref())?;
+    crate::ui::task_viewer::run(ctx.store, epic_filter)
 }
 
 #[derive(serde::Serialize)]
@@ -1379,6 +1601,7 @@ mod tests {
             created_by: None,
             updated_by: None,
             body: None,
+            epic: None,
             workspace_id: None,
             workspace: None,
             branch: None,
@@ -1409,6 +1632,12 @@ mod tests {
 struct TaskParentOutput {
     child: String,
     parent: String,
+}
+
+#[derive(serde::Serialize)]
+struct TaskEpicOutput {
+    task: String,
+    epic: String,
 }
 
 #[derive(serde::Serialize)]
@@ -1511,6 +1740,7 @@ fn load_context(
         store,
         actor,
         workspace,
+        repo_root: workdir,
     })
 }
 
@@ -1522,6 +1752,17 @@ fn parse_timestamp(label: &str, value: Option<&str>) -> Result<Option<DateTime<U
         Error::InvalidArgument(format!("invalid {label} timestamp '{value}': {err}"))
     })?;
     Ok(Some(parsed.with_timezone(&Utc)))
+}
+
+fn resolve_epic_filter(store: &TaskStore, value: Option<&str>) -> Result<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(Error::InvalidArgument("epic cannot be empty".to_string()));
+    }
+    Ok(Some(store.resolve_task_id(trimmed)?))
 }
 
 fn open_task_event_sink(events: Option<&str>) -> Result<(Option<crate::events::EventSink>, bool)> {
@@ -1585,6 +1826,12 @@ fn push_task_summary(human: &mut HumanOutput, details: &TaskDetails) {
     }
     if let Some(body) = task.body.as_ref() {
         human.push_detail(body.clone());
+    }
+    if let Some(epic) = task.epic.as_ref() {
+        human.push_summary("Epic", epic.clone());
+    }
+    if !details.relations.epic_tasks.is_empty() {
+        human.push_summary("Epic tasks", details.relations.epic_tasks.join(", "));
     }
     if let Some(parent) = details.relations.parent.as_ref() {
         human.push_summary("Parent", parent.clone());
