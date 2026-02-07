@@ -72,7 +72,7 @@ Commands (high level)
   sv lease ls|who|renew|break|wait Inspect/manage leases
   sv protect status|add|off|rm Protected paths
   sv commit                 Commit with sv checks + Change-Id
-  sv task new|list|ready|count|show|start|status|priority|edit|close|delete|comment|parent|epic|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
+  sv task new|list|ready|count|show|start|status|priority|edit|close|delete|comment|parent|epic|project|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
   sv forge hooks install     Configure Forge task hooks
   sv risk                   Overlap/conflict analysis
   sv onto                   Rebase/merge current workspace onto another
@@ -106,7 +106,7 @@ Events (JSONL)
   lease_created, lease_released, workspace_created, workspace_removed,
   commit_blocked, commit_created, task_created, task_started,
   task_status_changed, task_priority_changed, task_edited, task_closed, task_deleted,
-  task_commented, task_epic_set, task_epic_cleared, task_parent_set, task_parent_cleared, task_blocked,
+  task_commented, task_epic_set, task_epic_cleared, task_project_set, task_project_cleared, task_parent_set, task_parent_cleared, task_blocked,
   task_unblocked, task_related, task_unrelated
 
 Tips for agent automation
@@ -196,11 +196,11 @@ Quickstart
   sv task close 01HZ...
 
 Commands
-  sv task [--epic <id>]             Open task TUI
+  sv task [--epic <id>] [--project <id>]  Open task TUI
   sv task new "<title>" [--status] [--priority P0-P4] [--body]
-  sv task list [--status] [--priority] [--epic] [--workspace] [--actor] [--updated-since] [--limit]
-  sv task ready [--priority] [--epic] [--workspace] [--actor] [--updated-since] [--limit]
-  sv task count [--ready] [--status] [--priority] [--epic] [--workspace] [--actor] [--updated-since] [--limit]
+  sv task list [--status] [--priority] [--epic] [--project] [--workspace] [--actor] [--updated-since] [--limit]
+  sv task ready [--priority] [--epic] [--project] [--workspace] [--actor] [--updated-since] [--limit]
+  sv task count [--ready] [--status] [--priority] [--epic] [--project] [--workspace] [--actor] [--updated-since] [--limit]
   sv task show <id>
   sv task start <id>
   sv task status <id> <status>
@@ -213,6 +213,8 @@ Commands
   sv task parent clear <child>
   sv task epic set <task> <epic>
   sv task epic clear <task>
+  sv task project set <task> <project>
+  sv task project clear <task>
   sv task block <blocker> <blocked>
   sv task unblock <blocker> <blocked>
   sv task relate <left> <right> --desc "<text>"
@@ -226,6 +228,7 @@ Notes
   list/ready sorted: status -> priority -> readiness -> updated_at -> id
   readiness: default_status and not blocked
   epic filter via --epic or SV_EPIC
+  project filter via --project or SV_PROJECT
   Use --json for machine output; use --events <path> with --json.
 "#;
 const FORGE_ROBOT_HELP: &str = r#"sv forge --robot-help
@@ -518,6 +521,10 @@ Examples:
         /// Filter tasks by epic ID (or set default via SV_EPIC)
         #[arg(long, env = "SV_EPIC")]
         epic: Option<String>,
+
+        /// Filter tasks by project ID (or set default via SV_PROJECT)
+        #[arg(long, env = "SV_PROJECT")]
+        project: Option<String>,
 
         #[command(subcommand)]
         command: Option<TaskCommands>,
@@ -996,6 +1003,7 @@ Examples:
   sv task list --status open
   sv task list --priority P2
   sv task list --epic sv-abc
+  sv task list --project sv-proj
   sv task list --workspace agent1
   sv task list --actor alice --updated-since 2025-01-01T00:00:00Z
   sv task list --limit 20
@@ -1013,6 +1021,10 @@ Examples:
         /// Filter by epic task ID
         #[arg(long, env = "SV_EPIC")]
         epic: Option<String>,
+
+        /// Filter by project task ID
+        #[arg(long, env = "SV_PROJECT")]
+        project: Option<String>,
 
         /// Filter by workspace (name or id)
         #[arg(long)]
@@ -1038,6 +1050,7 @@ Examples:
   sv task ready
   sv task ready --priority P2
   sv task ready --epic sv-abc
+  sv task ready --project sv-proj
   sv task ready --workspace agent1
   sv task ready --actor alice --updated-since 2025-01-01T00:00:00Z
   sv task ready --limit 20
@@ -1050,6 +1063,10 @@ Examples:
         /// Filter by epic task ID
         #[arg(long, env = "SV_EPIC")]
         epic: Option<String>,
+
+        /// Filter by project task ID
+        #[arg(long, env = "SV_PROJECT")]
+        project: Option<String>,
 
         /// Filter by workspace (name or id)
         #[arg(long)]
@@ -1077,6 +1094,7 @@ Examples:
   sv task count --priority P2
   sv task count --ready
   sv task count --epic sv-abc
+  sv task count --project sv-proj
   sv task count --workspace agent1
   sv task count --actor alice --updated-since 2025-01-01T00:00:00Z
 "#)]
@@ -1096,6 +1114,10 @@ Examples:
         /// Filter by epic task ID
         #[arg(long, env = "SV_EPIC")]
         epic: Option<String>,
+
+        /// Filter by project task ID
+        #[arg(long, env = "SV_PROJECT")]
+        project: Option<String>,
 
         /// Filter by workspace (name or id)
         #[arg(long)]
@@ -1246,6 +1268,18 @@ Examples:
     Epic {
         #[command(subcommand)]
         command: EpicCommands,
+    },
+
+    /// Manage task project relationships
+    #[command(long_about = r#"Manage task project relationships.
+
+Examples:
+  sv task project set 01HZ... 01HZ...
+  sv task project clear 01HZ...
+"#)]
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommands,
     },
 
     /// Block a task with another task
@@ -1412,6 +1446,35 @@ Examples:
 
 Examples:
   sv task epic clear 01HZ...
+"#)]
+    Clear {
+        /// Task ID
+        task: String,
+    },
+}
+
+/// Task project subcommands
+#[derive(Subcommand, Debug)]
+pub enum ProjectCommands {
+    /// Set task project
+    #[command(long_about = r#"Set task project.
+
+Examples:
+  sv task project set 01HZ... 01HZ...
+"#)]
+    Set {
+        /// Task ID
+        task: String,
+
+        /// Project task ID
+        project: String,
+    },
+
+    /// Clear task project
+    #[command(long_about = r#"Clear task project.
+
+Examples:
+  sv task project clear 01HZ...
 "#)]
     Clear {
         /// Task ID
@@ -2727,7 +2790,11 @@ impl Cli {
                 json,
                 quiet,
             }),
-            Commands::Task { epic, command } => match command {
+            Commands::Task {
+                epic,
+                project,
+                command,
+            } => match command {
                 Some(cmd) => match cmd {
                     TaskCommands::New {
                         title,
@@ -2749,6 +2816,7 @@ impl Cli {
                         status,
                         priority,
                         epic: list_epic,
+                        project: list_project,
                         workspace,
                         actor: list_actor,
                         updated_since,
@@ -2757,6 +2825,7 @@ impl Cli {
                         status,
                         priority,
                         epic: list_epic.or_else(|| epic.clone()),
+                        project: list_project.or_else(|| project.clone()),
                         workspace,
                         actor: list_actor,
                         updated_since,
@@ -2768,6 +2837,7 @@ impl Cli {
                     TaskCommands::Ready {
                         priority,
                         epic: list_epic,
+                        project: list_project,
                         workspace,
                         actor: list_actor,
                         updated_since,
@@ -2775,6 +2845,7 @@ impl Cli {
                     } => task::run_ready(task::ReadyOptions {
                         priority,
                         epic: list_epic.or_else(|| epic.clone()),
+                        project: list_project.or_else(|| project.clone()),
                         workspace,
                         actor: list_actor,
                         updated_since,
@@ -2788,6 +2859,7 @@ impl Cli {
                         status,
                         priority,
                         epic: list_epic,
+                        project: list_project,
                         workspace,
                         actor: list_actor,
                         updated_since,
@@ -2797,6 +2869,7 @@ impl Cli {
                         status,
                         priority,
                         epic: list_epic.or_else(|| epic.clone()),
+                        project: list_project.or_else(|| project.clone()),
                         workspace,
                         actor: list_actor,
                         updated_since,
@@ -2922,6 +2995,30 @@ impl Cli {
                             })
                         }
                     },
+                    TaskCommands::Project { command } => match command {
+                        ProjectCommands::Set {
+                            task: task_id,
+                            project,
+                        } => task::run_project_set(task::ProjectSetOptions {
+                            task: task_id,
+                            project,
+                            actor,
+                            events: events.clone(),
+                            repo,
+                            json,
+                            quiet,
+                        }),
+                        ProjectCommands::Clear { task: task_id } => {
+                            task::run_project_clear(task::ProjectClearOptions {
+                                task: task_id,
+                                actor,
+                                events: events.clone(),
+                                repo,
+                                json,
+                                quiet,
+                            })
+                        }
+                    },
                     TaskCommands::Block { blocker, blocked } => {
                         task::run_block(task::BlockOptions {
                             blocker,
@@ -2995,6 +3092,7 @@ impl Cli {
                 },
                 None => task::run_tui(task::TuiOptions {
                     epic,
+                    project,
                     repo,
                     json,
                     quiet,

@@ -193,6 +193,106 @@ pub fn group_tasks_by_epic(
     (grouped_tasks, grouped_depths, epic_ids)
 }
 
+pub fn group_tasks_by_project(
+    tasks: Vec<TaskRecord>,
+    depths: Vec<usize>,
+) -> (Vec<TaskRecord>, Vec<usize>, HashSet<String>) {
+    if tasks.is_empty() {
+        return (tasks, depths, HashSet::new());
+    }
+
+    let mut index_by_id = HashMap::new();
+    for (idx, task) in tasks.iter().enumerate() {
+        index_by_id.insert(task.id.clone(), idx);
+    }
+
+    let all_project_ids: HashSet<String> = tasks
+        .iter()
+        .filter_map(|task| task.project.clone())
+        .collect();
+    let project_ids: HashSet<String> = all_project_ids
+        .iter()
+        .filter(|id| index_by_id.contains_key(*id))
+        .cloned()
+        .collect();
+    if project_ids.is_empty() {
+        return (tasks, depths, project_ids);
+    }
+
+    let mut members_by_project: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, task) in tasks.iter().enumerate() {
+        let Some(project) = task.project.as_ref() else {
+            continue;
+        };
+        if task.id == *project {
+            continue;
+        }
+        members_by_project
+            .entry(project.clone())
+            .or_default()
+            .push(idx);
+    }
+    for members in members_by_project.values_mut() {
+        members.sort_unstable();
+    }
+
+    let mut project_order: Vec<(usize, String)> = project_ids
+        .iter()
+        .map(|project| {
+            let order_key = index_by_id
+                .get(project)
+                .copied()
+                .or_else(|| {
+                    members_by_project
+                        .get(project)
+                        .and_then(|ids| ids.first().copied())
+                })
+                .unwrap_or(usize::MAX);
+            (order_key, project.clone())
+        })
+        .collect();
+    project_order.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+    let mut slots: Vec<Option<TaskRecord>> = tasks.into_iter().map(Some).collect();
+    let mut grouped_tasks = Vec::with_capacity(slots.len());
+    let mut grouped_depths = Vec::with_capacity(slots.len());
+    let mut consumed = HashSet::new();
+
+    for (_, project_id) in project_order {
+        if let Some(&project_idx) = index_by_id.get(&project_id) {
+            if consumed.insert(project_idx) {
+                if let Some(task) = slots[project_idx].take() {
+                    grouped_tasks.push(task);
+                    grouped_depths.push(0);
+                }
+            }
+        }
+        if let Some(member_indices) = members_by_project.get(&project_id) {
+            for idx in member_indices {
+                if !consumed.insert(*idx) {
+                    continue;
+                }
+                if let Some(task) = slots[*idx].take() {
+                    grouped_tasks.push(task);
+                    grouped_depths.push(depths.get(*idx).copied().unwrap_or(0) + 1);
+                }
+            }
+        }
+    }
+
+    for (idx, depth) in depths.into_iter().enumerate() {
+        if !consumed.insert(idx) {
+            continue;
+        }
+        if let Some(task) = slots[idx].take() {
+            grouped_tasks.push(task);
+            grouped_depths.push(depth);
+        }
+    }
+
+    (grouped_tasks, grouped_depths, project_ids)
+}
+
 fn fuzzy_match(value: &str, query: &str) -> bool {
     if query.is_empty() {
         return true;
@@ -210,21 +310,29 @@ fn fuzzy_match(value: &str, query: &str) -> bool {
     false
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn filter_task_indices(
     tasks: &[TaskRecord],
     query: &str,
     status_filter: Option<&str>,
     epic_filter: Option<&str>,
+    project_filter: Option<&str>,
     epic_ids: &HashSet<String>,
+    project_ids: &HashSet<String>,
     epics_only: bool,
+    projects_only: bool,
 ) -> Vec<usize> {
     let query_norm = normalize_text(query);
     let status_norm = status_filter.map(normalize_status);
     let epic_norm = epic_filter.map(normalize_text);
+    let project_norm = project_filter.map(normalize_text);
     let mut indices = Vec::new();
 
     for (idx, task) in tasks.iter().enumerate() {
         if epics_only && !epic_ids.contains(&task.id) {
+            continue;
+        }
+        if projects_only && !project_ids.contains(&task.id) {
             continue;
         }
 
@@ -238,6 +346,13 @@ pub fn filter_task_indices(
             let task_id = normalize_text(&task.id);
             let task_epic = task.epic.as_deref().map(normalize_text);
             if task_id != epic && task_epic.as_deref() != Some(epic) {
+                continue;
+            }
+        }
+        if let Some(project) = project_norm.as_deref() {
+            let task_id = normalize_text(&task.id);
+            let task_project = task.project.as_deref().map(normalize_text);
+            if task_id != project && task_project.as_deref() != Some(project) {
                 continue;
             }
         }
@@ -307,6 +422,7 @@ mod tests {
             updated_by: None,
             body: None,
             epic: None,
+            project: None,
             workspace_id: None,
             workspace: None,
             branch: None,
@@ -326,10 +442,30 @@ mod tests {
             task("sv-aaa", "Fix Sync", "open", "P2", now),
             task("sv-bbb", "Add watcher", "open", "P2", now),
         ];
-        let indices = filter_task_indices(&tasks, "SYNC", None, None, &HashSet::new(), false);
+        let indices = filter_task_indices(
+            &tasks,
+            "SYNC",
+            None,
+            None,
+            None,
+            &HashSet::new(),
+            &HashSet::new(),
+            false,
+            false,
+        );
         assert_eq!(indices, vec![0]);
 
-        let indices = filter_task_indices(&tasks, "watch", None, None, &HashSet::new(), false);
+        let indices = filter_task_indices(
+            &tasks,
+            "watch",
+            None,
+            None,
+            None,
+            &HashSet::new(),
+            &HashSet::new(),
+            false,
+            false,
+        );
         assert_eq!(indices, vec![1]);
     }
 
@@ -340,8 +476,17 @@ mod tests {
             task("sv-aaa", "Fix Sync", "open", "P2", now),
             task("sv-bbb", "Fix Sync", "closed", "P2", now),
         ];
-        let indices =
-            filter_task_indices(&tasks, "sync", Some("open"), None, &HashSet::new(), false);
+        let indices = filter_task_indices(
+            &tasks,
+            "sync",
+            Some("open"),
+            None,
+            None,
+            &HashSet::new(),
+            &HashSet::new(),
+            false,
+            false,
+        );
         assert_eq!(indices, vec![0]);
     }
 
@@ -356,11 +501,69 @@ mod tests {
         let mut epic_ids = HashSet::new();
         epic_ids.insert("sv-epic".to_string());
 
-        let filtered = filter_task_indices(&tasks, "", None, Some("sv-epic"), &epic_ids, false);
+        let filtered = filter_task_indices(
+            &tasks,
+            "",
+            None,
+            Some("sv-epic"),
+            None,
+            &epic_ids,
+            &HashSet::new(),
+            false,
+            false,
+        );
         assert_eq!(filtered, vec![0, 1]);
 
-        let epic_only = filter_task_indices(&tasks, "", None, None, &epic_ids, true);
+        let epic_only = filter_task_indices(
+            &tasks,
+            "",
+            None,
+            None,
+            None,
+            &epic_ids,
+            &HashSet::new(),
+            true,
+            false,
+        );
         assert_eq!(epic_only, vec![0]);
+    }
+
+    #[test]
+    fn filter_supports_project_and_projects_only_mode() {
+        let now = Utc::now();
+        let mut project = task("sv-project", "Project", "open", "P1", now);
+        project.project = None;
+        let mut child = task("sv-child", "Child", "open", "P2", now);
+        child.project = Some("sv-project".to_string());
+        let tasks = vec![project, child];
+        let mut project_ids = HashSet::new();
+        project_ids.insert("sv-project".to_string());
+
+        let filtered = filter_task_indices(
+            &tasks,
+            "",
+            None,
+            None,
+            Some("sv-project"),
+            &HashSet::new(),
+            &project_ids,
+            false,
+            false,
+        );
+        assert_eq!(filtered, vec![0, 1]);
+
+        let project_only = filter_task_indices(
+            &tasks,
+            "",
+            None,
+            None,
+            None,
+            &HashSet::new(),
+            &project_ids,
+            false,
+            true,
+        );
+        assert_eq!(project_only, vec![0]);
     }
 
     #[test]
@@ -423,6 +626,23 @@ mod tests {
         assert_eq!(ids, vec!["sv-epic", "sv-child", "sv-root"]);
         assert_eq!(depths, vec![0, 1, 0]);
         assert!(epic_ids.contains("sv-epic"));
+    }
+
+    #[test]
+    fn group_tasks_by_project_places_members_under_project() {
+        let now = Utc::now();
+        let mut project = task("sv-project", "Project", "open", "P1", now);
+        project.project = None;
+        let mut child = task("sv-child", "Child", "open", "P2", now);
+        child.project = Some("sv-project".to_string());
+        let root = task("sv-root", "Root", "open", "P2", now);
+
+        let (grouped, depths, project_ids) =
+            group_tasks_by_project(vec![root, child, project], vec![0, 0, 0]);
+        let ids: Vec<&str> = grouped.iter().map(|task| task.id.as_str()).collect();
+        assert_eq!(ids, vec!["sv-project", "sv-child", "sv-root"]);
+        assert_eq!(depths, vec![0, 1, 0]);
+        assert!(project_ids.contains("sv-project"));
     }
 
     #[test]

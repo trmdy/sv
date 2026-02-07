@@ -33,6 +33,7 @@ pub struct ListOptions {
     pub status: Option<String>,
     pub priority: Option<String>,
     pub epic: Option<String>,
+    pub project: Option<String>,
     pub workspace: Option<String>,
     pub actor: Option<String>,
     pub updated_since: Option<String>,
@@ -45,6 +46,7 @@ pub struct ListOptions {
 pub struct ReadyOptions {
     pub priority: Option<String>,
     pub epic: Option<String>,
+    pub project: Option<String>,
     pub workspace: Option<String>,
     pub actor: Option<String>,
     pub updated_since: Option<String>,
@@ -59,6 +61,7 @@ pub struct CountOptions {
     pub status: Option<String>,
     pub priority: Option<String>,
     pub epic: Option<String>,
+    pub project: Option<String>,
     pub workspace: Option<String>,
     pub actor: Option<String>,
     pub updated_since: Option<String>,
@@ -144,6 +147,25 @@ pub struct EpicSetOptions {
 }
 
 pub struct EpicClearOptions {
+    pub task: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct ProjectSetOptions {
+    pub task: String,
+    pub project: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct ProjectClearOptions {
     pub task: String,
     pub actor: Option<String>,
     pub events: Option<String>,
@@ -245,6 +267,7 @@ pub struct PrefixOptions {
 
 pub struct TuiOptions {
     pub epic: Option<String>,
+    pub project: Option<String>,
     pub repo: Option<PathBuf>,
     pub json: bool,
     pub quiet: bool,
@@ -324,12 +347,14 @@ pub fn run_list(options: ListOptions) -> Result<()> {
     let updated_since = parse_timestamp("updated-since", options.updated_since.as_deref())?;
     let mut tasks = ctx.store.list(options.status.as_deref())?;
     let epic_filter = resolve_epic_filter(&ctx.store, options.epic.as_deref())?;
+    let project_filter = resolve_project_filter(&ctx.store, options.project.as_deref())?;
 
     apply_task_filters(
         &ctx.store,
         &mut tasks,
         options.priority.as_deref(),
         epic_filter.as_deref(),
+        project_filter.as_deref(),
         options.workspace.as_deref(),
         options.actor.as_deref(),
         updated_since,
@@ -355,6 +380,9 @@ pub fn run_list(options: ListOptions) -> Result<()> {
     if let Some(epic_id) = epic_filter {
         human.push_summary("Epic", epic_id);
     }
+    if let Some(project_id) = project_filter {
+        human.push_summary("Project", project_id);
+    }
     if let Some(error) = blocked_error {
         human.push_warning(error);
     }
@@ -365,6 +393,9 @@ pub fn run_list(options: ListOptions) -> Result<()> {
         );
         if let Some(epic) = task.epic.as_ref() {
             line.push_str(&format!(" (epic: {})", epic));
+        }
+        if let Some(project) = task.project.as_ref() {
+            line.push_str(&format!(" (project: {})", project));
         }
         if let Some(workspace) = task.workspace.as_ref() {
             line.push_str(&format!(" (ws: {})", workspace));
@@ -388,12 +419,14 @@ pub fn run_ready(options: ReadyOptions) -> Result<()> {
     let updated_since = parse_timestamp("updated-since", options.updated_since.as_deref())?;
     let mut tasks = ctx.store.list_ready()?;
     let epic_filter = resolve_epic_filter(&ctx.store, options.epic.as_deref())?;
+    let project_filter = resolve_project_filter(&ctx.store, options.project.as_deref())?;
 
     apply_task_filters(
         &ctx.store,
         &mut tasks,
         options.priority.as_deref(),
         epic_filter.as_deref(),
+        project_filter.as_deref(),
         options.workspace.as_deref(),
         options.actor.as_deref(),
         updated_since,
@@ -413,6 +446,9 @@ pub fn run_ready(options: ReadyOptions) -> Result<()> {
     if let Some(epic_id) = epic_filter {
         human.push_summary("Epic", epic_id);
     }
+    if let Some(project_id) = project_filter {
+        human.push_summary("Project", project_id);
+    }
     for task in tasks {
         let mut line = format!(
             "[{}][{}] {} {}",
@@ -420,6 +456,9 @@ pub fn run_ready(options: ReadyOptions) -> Result<()> {
         );
         if let Some(epic) = task.epic.as_ref() {
             line.push_str(&format!(" (epic: {})", epic));
+        }
+        if let Some(project) = task.project.as_ref() {
+            line.push_str(&format!(" (project: {})", project));
         }
         if let Some(workspace) = task.workspace.as_ref() {
             line.push_str(&format!(" (ws: {})", workspace));
@@ -454,6 +493,7 @@ pub fn run_count(options: CountOptions) -> Result<()> {
 
     let updated_since = parse_timestamp("updated-since", options.updated_since.as_deref())?;
     let epic_filter = resolve_epic_filter(&ctx.store, options.epic.as_deref())?;
+    let project_filter = resolve_project_filter(&ctx.store, options.project.as_deref())?;
 
     let mut tasks = if options.ready {
         ctx.store.list_ready()?
@@ -466,6 +506,7 @@ pub fn run_count(options: CountOptions) -> Result<()> {
         &mut tasks,
         options.priority.as_deref(),
         epic_filter.as_deref(),
+        project_filter.as_deref(),
         options.workspace.as_deref(),
         options.actor.as_deref(),
         updated_since,
@@ -498,11 +539,13 @@ fn apply_limit(tasks: &mut Vec<TaskRecord>, limit: Option<usize>) -> Result<()> 
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_task_filters(
     store: &TaskStore,
     tasks: &mut Vec<TaskRecord>,
     priority: Option<&str>,
     epic_id: Option<&str>,
+    project_id: Option<&str>,
     workspace: Option<&str>,
     actor: Option<&str>,
     updated_since: Option<DateTime<Utc>>,
@@ -514,6 +557,9 @@ fn apply_task_filters(
 
     if let Some(epic_id) = epic_id {
         tasks.retain(|task| task.id == epic_id || task.epic.as_deref() == Some(epic_id));
+    }
+    if let Some(project_id) = project_id {
+        tasks.retain(|task| task.id == project_id || task.project.as_deref() == Some(project_id));
     }
 
     if let Some(actor) = actor {
@@ -843,6 +889,8 @@ pub fn run_delete(options: DeleteOptions) -> Result<()> {
     let relations = &details.relations;
     let has_relations = details.task.epic.is_some()
         || !relations.epic_tasks.is_empty()
+        || details.task.project.is_some()
+        || !relations.project_tasks.is_empty()
         || relations.parent.is_some()
         || !relations.children.is_empty()
         || !relations.blocks.is_empty()
@@ -1109,6 +1157,102 @@ pub fn run_epic_clear(options: EpicClearOptions) -> Result<()> {
             quiet: options.quiet || events_to_stdout,
         },
         "task epic clear",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_project_set(options: ProjectSetOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let task = ctx.store.resolve_task_id(&options.task)?;
+    let project = ctx.store.resolve_task_id(&options.project)?;
+    if task == project {
+        return Err(Error::InvalidArgument(
+            "project cannot match task".to_string(),
+        ));
+    }
+
+    let details = ctx.store.details(&task)?;
+    if details.task.project.as_deref() == Some(project.as_str()) {
+        return Err(Error::InvalidArgument(format!(
+            "project already set to {project}"
+        )));
+    }
+
+    let mut event = TaskEvent::new(TaskEventType::TaskProjectSet, task.clone());
+    event.actor = ctx.actor.clone();
+    event.related_task_id = Some(project.clone());
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskProjectSet, &event);
+
+    let output = TaskProjectOutput {
+        task: task.clone(),
+        project: project.clone(),
+    };
+
+    let mut human = HumanOutput::new("Project set");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("Task", task);
+    human.push_summary("Project", project);
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task project set",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_project_clear(options: ProjectClearOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let task = ctx.store.resolve_task_id(&options.task)?;
+    let details = ctx.store.details(&task)?;
+    let project = details
+        .task
+        .project
+        .ok_or_else(|| Error::InvalidArgument(format!("task has no project: {task}")))?;
+
+    let mut event = TaskEvent::new(TaskEventType::TaskProjectCleared, task.clone());
+    event.actor = ctx.actor.clone();
+    event.related_task_id = Some(project.clone());
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskProjectCleared, &event);
+
+    let output = TaskProjectOutput {
+        task: task.clone(),
+        project: project.clone(),
+    };
+
+    let mut human = HumanOutput::new("Project cleared");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("Task", task);
+    human.push_summary("Project", project);
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task project clear",
         &output,
         Some(&human),
     )
@@ -1541,7 +1685,8 @@ pub fn run_tui(options: TuiOptions) -> Result<()> {
     }
     let ctx = load_context(options.repo, None, false)?;
     let epic_filter = resolve_epic_filter(&ctx.store, options.epic.as_deref())?;
-    crate::ui::task_viewer::run(ctx.store, epic_filter)
+    let project_filter = resolve_project_filter(&ctx.store, options.project.as_deref())?;
+    crate::ui::task_viewer::run(ctx.store, epic_filter, project_filter)
 }
 
 #[derive(serde::Serialize)]
@@ -1602,6 +1747,7 @@ mod tests {
             updated_by: None,
             body: None,
             epic: None,
+            project: None,
             workspace_id: None,
             workspace: None,
             branch: None,
@@ -1638,6 +1784,12 @@ struct TaskParentOutput {
 struct TaskEpicOutput {
     task: String,
     epic: String,
+}
+
+#[derive(serde::Serialize)]
+struct TaskProjectOutput {
+    task: String,
+    project: String,
 }
 
 #[derive(serde::Serialize)]
@@ -1765,6 +1917,19 @@ fn resolve_epic_filter(store: &TaskStore, value: Option<&str>) -> Result<Option<
     Ok(Some(store.resolve_task_id(trimmed)?))
 }
 
+fn resolve_project_filter(store: &TaskStore, value: Option<&str>) -> Result<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(Error::InvalidArgument(
+            "project cannot be empty".to_string(),
+        ));
+    }
+    Ok(Some(store.resolve_task_id(trimmed)?))
+}
+
 fn open_task_event_sink(events: Option<&str>) -> Result<(Option<crate::events::EventSink>, bool)> {
     let destination = EventDestination::parse(events);
     let sink = destination.as_ref().map(|dest| dest.open()).transpose()?;
@@ -1832,6 +1997,12 @@ fn push_task_summary(human: &mut HumanOutput, details: &TaskDetails) {
     }
     if !details.relations.epic_tasks.is_empty() {
         human.push_summary("Epic tasks", details.relations.epic_tasks.join(", "));
+    }
+    if let Some(project) = task.project.as_ref() {
+        human.push_summary("Project", project.clone());
+    }
+    if !details.relations.project_tasks.is_empty() {
+        human.push_summary("Project tasks", details.relations.project_tasks.join(", "));
     }
     if let Some(parent) = details.relations.parent.as_ref() {
         human.push_summary("Parent", parent.clone());

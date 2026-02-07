@@ -50,6 +50,8 @@ pub enum TaskEventType {
     TaskCommented,
     TaskEpicSet,
     TaskEpicCleared,
+    TaskProjectSet,
+    TaskProjectCleared,
     TaskParentSet,
     TaskParentCleared,
     TaskBlocked,
@@ -128,6 +130,8 @@ pub struct TaskRecord {
     pub body: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub epic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -236,6 +240,10 @@ pub struct TaskRelations {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub epic_tasks: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub project_tasks: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<String>,
@@ -251,6 +259,8 @@ impl TaskRelations {
     fn is_empty(relations: &TaskRelations) -> bool {
         relations.epic.is_none()
             && relations.epic_tasks.is_empty()
+            && relations.project.is_none()
+            && relations.project_tasks.is_empty()
             && relations.parent.is_none()
             && relations.children.is_empty()
             && relations.blocks.is_empty()
@@ -1037,6 +1047,8 @@ fn event_status(event: &TaskEvent, config: &TasksConfig) -> Result<Option<String
         | TaskEventType::TaskDeleted
         | TaskEventType::TaskEpicSet
         | TaskEventType::TaskEpicCleared
+        | TaskEventType::TaskProjectSet
+        | TaskEventType::TaskProjectCleared
         | TaskEventType::TaskParentSet
         | TaskEventType::TaskParentCleared
         | TaskEventType::TaskBlocked
@@ -1100,6 +1112,7 @@ fn apply_event(
                     updated_by: event.actor.clone(),
                     body: event.body.clone(),
                     epic: None,
+                    project: None,
                     workspace_id: event.workspace_id.clone(),
                     workspace: event.workspace.clone(),
                     branch: event.branch.clone(),
@@ -1278,6 +1291,37 @@ fn apply_event(
                 touch_task_if_present(map, epic_id, event);
             }
         }
+        TaskEventType::TaskProjectSet => {
+            let Some(project_id) = relation_target(event) else {
+                return Ok(());
+            };
+            if project_id == event.task_id {
+                return Ok(());
+            }
+            let record = map.get_mut(&event.task_id).ok_or_else(|| {
+                Error::InvalidArgument(format!("task not found: {}", event.task_id))
+            })?;
+            record.project = Some(project_id.to_string());
+            record.updated_at = event.timestamp;
+            record.updated_by = event.actor.clone();
+            touch_task_if_present(map, project_id, event);
+        }
+        TaskEventType::TaskProjectCleared => {
+            let record = map.get_mut(&event.task_id).ok_or_else(|| {
+                Error::InvalidArgument(format!("task not found: {}", event.task_id))
+            })?;
+            let should_clear = relation_target(event)
+                .map(|project_id| record.project.as_deref() == Some(project_id))
+                .unwrap_or(true);
+            if should_clear {
+                record.project = None;
+            }
+            record.updated_at = event.timestamp;
+            record.updated_by = event.actor.clone();
+            if let Some(project_id) = relation_target(event) {
+                touch_task_if_present(map, project_id, event);
+            }
+        }
         TaskEventType::TaskParentSet
         | TaskEventType::TaskParentCleared
         | TaskEventType::TaskBlocked
@@ -1335,6 +1379,8 @@ fn is_relation_event(event_type: TaskEventType) -> bool {
         event_type,
         TaskEventType::TaskEpicSet
             | TaskEventType::TaskEpicCleared
+            | TaskEventType::TaskProjectSet
+            | TaskEventType::TaskProjectCleared
             | TaskEventType::TaskParentSet
             | TaskEventType::TaskParentCleared
             | TaskEventType::TaskBlocked
@@ -1347,6 +1393,7 @@ fn is_relation_event(event_type: TaskEventType) -> bool {
 #[derive(Default)]
 struct RelationState {
     epic_by_task: HashMap<String, String>,
+    project_by_task: HashMap<String, String>,
     parent_by_child: HashMap<String, String>,
     blocks: HashSet<(String, String)>,
     relates: HashMap<(String, String), String>,
@@ -1381,6 +1428,18 @@ fn apply_relation_event(state: &mut RelationState, event: &TaskEvent) -> Result<
             if let Some(current) = state.epic_by_task.get(&event.task_id) {
                 if current == related_task_id {
                     state.epic_by_task.remove(&event.task_id);
+                }
+            }
+        }
+        TaskEventType::TaskProjectSet => {
+            state
+                .project_by_task
+                .insert(event.task_id.clone(), related_task_id.to_string());
+        }
+        TaskEventType::TaskProjectCleared => {
+            if let Some(current) = state.project_by_task.get(&event.task_id) {
+                if current == related_task_id {
+                    state.project_by_task.remove(&event.task_id);
                 }
             }
         }
@@ -1502,6 +1561,18 @@ fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations>
             }
         })
         .collect();
+    let project = state.project_by_task.get(task_id).cloned();
+    let mut project_tasks: Vec<String> = state
+        .project_by_task
+        .iter()
+        .filter_map(|(task, project)| {
+            if project == task_id {
+                Some(task.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
     let parent = state.parent_by_child.get(task_id).cloned();
     let mut children: Vec<String> = state
         .parent_by_child
@@ -1557,6 +1628,7 @@ fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations>
         .collect();
 
     epic_tasks.sort();
+    project_tasks.sort();
     children.sort();
     blocks.sort();
     blocked_by.sort();
@@ -1568,6 +1640,8 @@ fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations>
     Ok(TaskRelations {
         epic,
         epic_tasks,
+        project,
+        project_tasks,
         parent,
         children,
         blocks,
@@ -1828,6 +1902,35 @@ mod tests {
     }
 
     #[test]
+    fn relations_include_project_and_project_tasks() {
+        let now = Utc::now();
+        let mut events = Vec::new();
+        let mut project = TaskEvent::new(TaskEventType::TaskCreated, "task-project");
+        project.title = Some("Project".to_string());
+        project.timestamp = now;
+        events.push(project);
+
+        let mut child = TaskEvent::new(TaskEventType::TaskCreated, "task-child");
+        child.title = Some("Child".to_string());
+        child.timestamp = now + chrono::Duration::milliseconds(1);
+        events.push(child);
+
+        let mut set_project = TaskEvent::new(TaskEventType::TaskProjectSet, "task-child");
+        set_project.related_task_id = Some("task-project".to_string());
+        set_project.timestamp = now + chrono::Duration::milliseconds(2);
+        events.push(set_project);
+
+        let child_relations = build_relations("task-child", &events).expect("relations");
+        assert_eq!(child_relations.project.as_deref(), Some("task-project"));
+
+        let project_relations = build_relations("task-project", &events).expect("relations");
+        assert_eq!(
+            project_relations.project_tasks,
+            vec!["task-child".to_string()]
+        );
+    }
+
+    #[test]
     fn apply_event_sets_and_clears_epic() {
         let config = default_config();
         let mut map = HashMap::new();
@@ -1859,6 +1962,42 @@ mod tests {
         assert!(map
             .get("task-child")
             .and_then(|task| task.epic.as_deref())
+            .is_none());
+    }
+
+    #[test]
+    fn apply_event_sets_and_clears_project() {
+        let config = default_config();
+        let mut map = HashMap::new();
+        let now = Utc::now();
+
+        let mut project = TaskEvent::new(TaskEventType::TaskCreated, "task-project");
+        project.title = Some("Project".to_string());
+        project.timestamp = now;
+        apply_event(&mut map, &project, &config).expect("create project");
+
+        let mut child = TaskEvent::new(TaskEventType::TaskCreated, "task-child");
+        child.title = Some("Child".to_string());
+        child.timestamp = now + chrono::Duration::milliseconds(1);
+        apply_event(&mut map, &child, &config).expect("create child");
+
+        let mut set_project = TaskEvent::new(TaskEventType::TaskProjectSet, "task-child");
+        set_project.related_task_id = Some("task-project".to_string());
+        set_project.timestamp = now + chrono::Duration::milliseconds(2);
+        apply_event(&mut map, &set_project, &config).expect("set project");
+        assert_eq!(
+            map.get("task-child")
+                .and_then(|task| task.project.as_deref()),
+            Some("task-project")
+        );
+
+        let mut clear_project = TaskEvent::new(TaskEventType::TaskProjectCleared, "task-child");
+        clear_project.related_task_id = Some("task-project".to_string());
+        clear_project.timestamp = now + chrono::Duration::milliseconds(3);
+        apply_event(&mut map, &clear_project, &config).expect("clear project");
+        assert!(map
+            .get("task-child")
+            .and_then(|task| task.project.as_deref())
             .is_none());
     }
 
@@ -2145,6 +2284,7 @@ mod tests {
                     updated_by: None,
                     body: None,
                     epic: None,
+                    project: None,
                     workspace_id: None,
                     workspace: None,
                     branch: None,
@@ -2166,6 +2306,7 @@ mod tests {
                     updated_by: None,
                     body: None,
                     epic: None,
+                    project: None,
                     workspace_id: None,
                     workspace: None,
                     branch: None,
@@ -2187,6 +2328,7 @@ mod tests {
                     updated_by: None,
                     body: None,
                     epic: None,
+                    project: None,
                     workspace_id: None,
                     workspace: None,
                     branch: None,

@@ -212,6 +212,7 @@ sv task edit acme-abc --title "Ship CLI help v2"
 # Parent + relations
 sv task parent set acme-abc acme-xyz
 sv task epic set acme-def acme-xyz
+sv task project set acme-def acme-proj
 sv task block acme-xyz acme-def
 sv task relate acme-abc acme-ghi --desc "shared refactor"
 sv task relations acme-abc
@@ -219,6 +220,7 @@ sv task relations acme-abc
 # List tasks (filters)
 sv task list --status open
 sv task list --epic acme-xyz
+sv task list --project acme-proj
 sv task list --workspace agent1
 sv task list --actor alice --updated-since 2025-01-01T00:00:00Z
 
@@ -331,6 +333,8 @@ sv release src/auth/** --events -               # Explicit stdout
 - `task_commented` - emitted by `sv task comment`
 - `task_epic_set` - emitted by `sv task epic set`
 - `task_epic_cleared` - emitted by `sv task epic clear`
+- `task_project_set` - emitted by `sv task project set`
+- `task_project_cleared` - emitted by `sv task project clear`
 - `task_parent_set` - emitted by `sv task parent set`
 - `task_parent_cleared` - emitted by `sv task parent clear`
 - `task_blocked` - emitted by `sv task block`
@@ -362,7 +366,7 @@ Event envelope:
 | `--quiet` | | Suppress non-essential output |
 | `--verbose` | | Extra logging |
 
-Task filters also support `SV_EPIC` as default for `sv task list`, `sv task ready`, and `sv task`.
+Task filters also support `SV_EPIC` and `SV_PROJECT` as defaults for `sv task list`, `sv task ready`, `sv task count`, and `sv task`.
 
 ### Commands
 
@@ -378,7 +382,7 @@ Task filters also support `SV_EPIC` as default for `sv task list`, `sv task read
 | `sv lease ls\|who\|renew\|break` | Inspect and manage leases |
 | `sv protect status\|add\|off\|rm` | Protected path management |
 | `sv commit` | Commit with sv checks |
-| `sv task new\|list\|ready\|show\|start\|status\|priority\|edit\|close\|delete\|comment\|parent\|epic\|block\|unblock\|relate\|unrelate\|relations\|sync\|compact\|prefix` | Task management |
+| `sv task new\|list\|ready\|show\|start\|status\|priority\|edit\|close\|delete\|comment\|parent\|epic\|project\|block\|unblock\|relate\|unrelate\|relations\|sync\|compact\|prefix` | Task management |
 | `sv risk` | Overlap and conflict analysis |
 | `sv onto` | Reposition workspace onto another |
 | `sv hoist` | Bulk integration of workspaces |

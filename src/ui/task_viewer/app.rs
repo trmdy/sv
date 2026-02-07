@@ -38,6 +38,8 @@ const CLEAR_PARENT_ID: &str = "<none>";
 const CLEAR_PARENT_TITLE: &str = "No parent";
 const CLEAR_EPIC_FILTER_ID: &str = "<all>";
 const CLEAR_EPIC_FILTER_TITLE: &str = "All epics";
+const CLEAR_PROJECT_FILTER_ID: &str = "<all>";
+const CLEAR_PROJECT_FILTER_TITLE: &str = "All projects";
 
 enum LoadRequest {
     Reload,
@@ -92,6 +94,7 @@ pub(crate) struct DeleteConfirmState {
 pub(crate) enum ListMode {
     Tasks,
     Epics,
+    Projects,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -109,12 +112,14 @@ pub struct AppState {
     pub(crate) filter_active: bool,
     pub(crate) status_filter: Option<String>,
     pub(crate) epic_filter: Option<String>,
+    pub(crate) project_filter: Option<String>,
     pub(crate) blocked_ids: HashSet<String>,
     pub(crate) editor: Option<EditorState>,
     pub(crate) priority_picker: Option<PriorityPicker>,
     pub(crate) editor_priority_picker: Option<PriorityPicker>,
     pub(crate) parent_picker: Option<TaskPicker>,
     pub(crate) epic_picker: Option<TaskPicker>,
+    pub(crate) project_picker: Option<TaskPicker>,
     pub(crate) children_picker: Option<MultiTaskPicker>,
     pub(crate) blocks_picker: Option<MultiTaskPicker>,
     pub(crate) blocked_by_picker: Option<MultiTaskPicker>,
@@ -124,6 +129,7 @@ pub struct AppState {
     pub(crate) help_context: HelpContext,
     pub(crate) list_mode: ListMode,
     pub(crate) epic_ids: HashSet<String>,
+    pub(crate) project_ids: HashSet<String>,
     detail_cache: HashMap<String, TaskDetails>,
     pending_details: HashSet<String>,
     status_message: Option<String>,
@@ -137,7 +143,12 @@ pub struct AppState {
 }
 
 impl AppState {
-    fn new(store: TaskStore, actor: Option<String>, epic_filter: Option<String>) -> Self {
+    fn new(
+        store: TaskStore,
+        actor: Option<String>,
+        epic_filter: Option<String>,
+        project_filter: Option<String>,
+    ) -> Self {
         Self {
             tasks: Vec::new(),
             task_depths: Vec::new(),
@@ -147,12 +158,14 @@ impl AppState {
             filter_active: false,
             status_filter: None,
             epic_filter,
+            project_filter,
             blocked_ids: HashSet::new(),
             editor: None,
             priority_picker: None,
             editor_priority_picker: None,
             parent_picker: None,
             epic_picker: None,
+            project_picker: None,
             children_picker: None,
             blocks_picker: None,
             blocked_by_picker: None,
@@ -162,6 +175,7 @@ impl AppState {
             help_context: HelpContext::None,
             list_mode: ListMode::Tasks,
             epic_ids: HashSet::new(),
+            project_ids: HashSet::new(),
             detail_cache: HashMap::new(),
             pending_details: HashSet::new(),
             status_message: None,
@@ -203,9 +217,15 @@ impl AppState {
         self.list_mode == ListMode::Epics
     }
 
+    pub(crate) fn is_projects_mode(&self) -> bool {
+        self.list_mode == ListMode::Projects
+    }
+
     pub(crate) fn list_title(&self) -> &'static str {
         if self.is_epics_mode() {
             "Epics"
+        } else if self.is_projects_mode() {
+            "Projects"
         } else {
             "Tasks"
         }
@@ -213,6 +233,10 @@ impl AppState {
 
     pub(crate) fn is_epic_task(&self, task_id: &str) -> bool {
         self.epic_ids.contains(task_id)
+    }
+
+    pub(crate) fn is_project_task(&self, task_id: &str) -> bool {
+        self.project_ids.contains(task_id)
     }
 
     pub(crate) fn status_line(&self) -> Option<(String, StatusKind)> {
@@ -228,8 +252,15 @@ impl AppState {
         if !self.filter.is_empty() {
             return Some((format!("filter: {}", self.filter), StatusKind::Info));
         }
-        if let Some(epic) = self.epic_filter.as_ref() {
-            return Some((format!("epic: {epic}"), StatusKind::Info));
+        if self.epic_filter.is_some() || self.project_filter.is_some() {
+            let mut segments = Vec::new();
+            if let Some(epic) = self.epic_filter.as_ref() {
+                segments.push(format!("epic: {epic}"));
+            }
+            if let Some(project) = self.project_filter.as_ref() {
+                segments.push(format!("project: {project}"));
+            }
+            return Some((segments.join("  "), StatusKind::Info));
         }
         None
     }
@@ -255,6 +286,9 @@ impl AppState {
         if self.epic_picker.is_some() {
             return "type to filter  j/k move  enter apply  esc cancel".to_string();
         }
+        if self.project_picker.is_some() {
+            return "type to filter  j/k move  enter apply  esc cancel".to_string();
+        }
         if self.children_picker.is_some()
             || self.blocks_picker.is_some()
             || self.blocked_by_picker.is_some()
@@ -276,7 +310,7 @@ impl AppState {
         if self.filter_active {
             return "type filter  backspace delete  tab status  enter done  esc clear".to_string();
         }
-        "j/k move  / filter  x epic filter  v view mode  enter details  ? help  esc/q quit"
+        "j/k move  / filter  x epic filter  y project filter  v view mode  enter details  ? help  esc/q quit"
             .to_string()
     }
 
@@ -296,6 +330,22 @@ impl AppState {
                 }
             }
             return format!("current epics: {current}  completed epics: {completed}");
+        }
+        if self.is_projects_mode() {
+            let closed_statuses = &self.config.closed_statuses;
+            let mut current = 0usize;
+            let mut completed = 0usize;
+            for task in &self.tasks {
+                if !self.is_project_task(&task.id) {
+                    continue;
+                }
+                if closed_statuses.iter().any(|status| status == &task.status) {
+                    completed += 1;
+                } else {
+                    current += 1;
+                }
+            }
+            return format!("current projects: {current}  completed projects: {completed}");
         }
 
         let open_status = self.config.default_status.as_str();
@@ -374,6 +424,33 @@ impl AppState {
         options
     }
 
+    fn project_picker_options(&self) -> Vec<TaskOption> {
+        let mut options = Vec::new();
+        options.push(TaskOption {
+            id: CLEAR_PROJECT_FILTER_ID.to_string(),
+            title: CLEAR_PROJECT_FILTER_TITLE.to_string(),
+        });
+        for task in &self.tasks {
+            if !self.is_project_task(&task.id) {
+                continue;
+            }
+            options.push(TaskOption {
+                id: task.id.clone(),
+                title: task.title.clone(),
+            });
+        }
+        options.sort_by(|left, right| {
+            if left.id == CLEAR_PROJECT_FILTER_ID {
+                std::cmp::Ordering::Less
+            } else if right.id == CLEAR_PROJECT_FILTER_ID {
+                std::cmp::Ordering::Greater
+            } else {
+                left.id.cmp(&right.id)
+            }
+        });
+        options
+    }
+
     fn status_options(&self, include_all: bool) -> Vec<String> {
         let mut options = Vec::new();
         if include_all {
@@ -389,8 +466,11 @@ impl AppState {
             &self.filter,
             self.status_filter.as_deref(),
             self.epic_filter.as_deref(),
+            self.project_filter.as_deref(),
             &self.epic_ids,
+            &self.project_ids,
             self.is_epics_mode(),
+            self.is_projects_mode(),
         );
         self.selected = model::select_by_id(&self.tasks, &self.filtered, previous_id.as_deref());
     }
@@ -430,6 +510,10 @@ impl AppState {
         self.epic_filter = epic;
     }
 
+    fn set_project_filter(&mut self, project: Option<String>) {
+        self.project_filter = project;
+    }
+
     fn set_error(&mut self, message: String) {
         self.status_message = Some(message);
         self.info_message = None;
@@ -453,6 +537,7 @@ impl AppState {
             || !self.filter.is_empty()
             || self.status_filter.is_some()
             || self.epic_filter.is_some()
+            || self.project_filter.is_some()
         {
             height = height.saturating_sub(2);
         }
@@ -461,7 +546,11 @@ impl AppState {
     }
 }
 
-pub fn run(store: TaskStore, epic_filter: Option<String>) -> Result<()> {
+pub fn run(
+    store: TaskStore,
+    epic_filter: Option<String>,
+    project_filter: Option<String>,
+) -> Result<()> {
     let actor = actor::resolve_actor_optional(Some(store.storage().workspace_root()), None)?;
     let (ui_tx, ui_rx) = mpsc::channel();
     let (req_tx, req_rx) = mpsc::channel();
@@ -475,7 +564,7 @@ pub fn run(store: TaskStore, epic_filter: Option<String>) -> Result<()> {
         ));
     }
 
-    let mut app = AppState::new(store, actor, epic_filter);
+    let mut app = AppState::new(store, actor, epic_filter, project_filter);
     run_terminal(&mut app, ui_rx, req_tx)
 }
 
@@ -654,10 +743,12 @@ fn handle_ui_msg(app: &mut AppState, msg: UiMsg, req_tx: &Sender<LoadRequest>) {
             model::sort_tasks(&mut tasks, &app.config, &blocked_ids);
             let (tasks, depths) = model::nest_tasks(tasks, &parent_by_child);
             let (tasks, depths, epic_ids) = model::group_tasks_by_epic(tasks, depths);
+            let (tasks, depths, project_ids) = model::group_tasks_by_project(tasks, depths);
             let previous_id = app.selected_task().map(|task| task.id.clone());
             app.tasks = tasks;
             app.task_depths = depths;
             app.epic_ids = epic_ids;
+            app.project_ids = project_ids;
             app.blocked_ids = blocked_ids;
             app.detail_cache.clear();
             app.pending_details.clear();
@@ -814,6 +905,34 @@ fn handle_key(
         return false;
     }
 
+    if app.project_picker.is_some() {
+        let mut picker = app.project_picker.take().unwrap();
+        let action = picker.handle_key(key);
+        match action {
+            TaskPickerAction::None => {
+                app.project_picker = Some(picker);
+            }
+            TaskPickerAction::Cancel => {
+                app.project_picker = None;
+            }
+            TaskPickerAction::Confirm => {
+                app.project_picker = None;
+                if let Some(option) = picker.selected_option() {
+                    let next_project = if option.id == CLEAR_PROJECT_FILTER_ID {
+                        None
+                    } else {
+                        Some(option.id.clone())
+                    };
+                    app.set_project_filter(next_project);
+                    let previous = app.selected_task().map(|task| task.id.clone());
+                    app.apply_filter(previous);
+                    app.queue_detail_load(req_tx);
+                }
+            }
+        }
+        return false;
+    }
+
     if app.children_picker.is_some() {
         let mut picker = app.children_picker.take().unwrap();
         let action = picker.handle_key(key);
@@ -911,6 +1030,7 @@ fn handle_key(
             && app.status_picker.is_none()
             && app.parent_picker.is_none()
             && app.epic_picker.is_none()
+            && app.project_picker.is_none()
             && app.children_picker.is_none()
             && app.blocks_picker.is_none()
             && app.blocked_by_picker.is_none()
@@ -1141,11 +1261,19 @@ fn handle_key(
             app.epic_picker = Some(picker);
             false
         }
+        KeyCode::Char('y') => {
+            let mut picker = TaskPicker::new(app.project_picker_options());
+            if let Some(current_project) = app.project_filter.as_ref() {
+                picker.set_query(current_project.clone());
+            }
+            app.project_picker = Some(picker);
+            false
+        }
         KeyCode::Char('v') => {
-            app.list_mode = if app.is_epics_mode() {
-                ListMode::Tasks
-            } else {
-                ListMode::Epics
+            app.list_mode = match app.list_mode {
+                ListMode::Tasks => ListMode::Epics,
+                ListMode::Epics => ListMode::Projects,
+                ListMode::Projects => ListMode::Tasks,
             };
             let previous = app.selected_task().map(|task| task.id.clone());
             app.apply_filter(previous);

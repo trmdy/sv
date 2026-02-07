@@ -9,6 +9,7 @@ Unit tests for pure logic and cache behavior. No heavy end-to-end UI tests.
 - Match by title (case-insensitive, partial).
 - Combined filter: text + status filter (AND).
 - Epic filter combines with text/status (AND).
+- Project filter combines with text/status (AND).
 - Empty filter returns all tasks.
 - Filter with no results keeps selection = none.
 
@@ -20,12 +21,14 @@ Unit tests for pure logic and cache behavior. No heavy end-to-end UI tests.
 - Tiebreaker by id for stable ordering.
 - Parent nesting keeps children directly under parents.
 - Epic grouping places tasks under epic rows.
+- Project grouping places tasks under project rows.
 
 ### Selection persistence
 - Selection preserved by task id across reload.
 - If selected id missing, select first visible or none.
 - Selection adjusts when filter changes to exclude selected.
 - Epics-only mode shows only tasks that own epic groups.
+- Projects-only mode shows only tasks that own project groups.
 
 ### Cache invalidation
 - Width change invalidates list + detail caches.

@@ -66,6 +66,9 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
     if let Some(picker) = app.epic_picker.as_ref() {
         render_task_picker_modal(frame, area, picker, "Epic Filter");
     }
+    if let Some(picker) = app.project_picker.as_ref() {
+        render_task_picker_modal(frame, area, picker, "Project Filter");
+    }
     if let Some(picker) = app.children_picker.as_ref() {
         render_multi_picker_modal(frame, area, picker, "Children");
     }
@@ -105,6 +108,7 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
         || !app.filter.is_empty()
         || app.status_filter.is_some()
         || app.epic_filter.is_some()
+        || app.project_filter.is_some()
     {
         let filter_label = if app.filter_active && app.filter.is_empty() {
             "filter: _".to_string()
@@ -121,21 +125,33 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
             Some(value) => format!("epic: {value}"),
             None => "epic: all".to_string(),
         };
+        let project_label = match app.project_filter.as_deref() {
+            Some(value) => format!("project: {value}"),
+            None => "project: all".to_string(),
+        };
         lines.push(Line::from(vec![
             Span::styled(filter_label, Style::default().fg(COLOR_INFO)),
             Span::raw("  "),
             Span::styled(status_label, Style::default().fg(COLOR_WARNING)),
             Span::raw("  "),
             Span::styled(epic_label, Style::default().fg(COLOR_ACCENT)),
+            Span::raw("  "),
+            Span::styled(project_label, Style::default().fg(COLOR_SUCCESS)),
         ]));
         lines.push(Line::from(""));
     }
 
     if app.filtered.is_empty() {
-        if !app.filter.is_empty() || app.status_filter.is_some() || app.epic_filter.is_some() {
+        if !app.filter.is_empty()
+            || app.status_filter.is_some()
+            || app.epic_filter.is_some()
+            || app.project_filter.is_some()
+        {
             lines.push(Line::from("No matches"));
         } else if app.is_epics_mode() {
             lines.push(Line::from("No epics"));
+        } else if app.is_projects_mode() {
+            lines.push(Line::from("No projects"));
         } else {
             lines.push(Line::from("No tasks"));
         }
@@ -156,6 +172,7 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 let ready = app.is_task_ready(task);
                 let depth = app.task_depths.get(idx).copied().unwrap_or(0);
                 let is_epic = app.is_epic_task(&task.id);
+                let is_project = app.is_project_task(&task.id);
                 lines.push(render_list_row(
                     task,
                     selected,
@@ -163,6 +180,7 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
                     depth,
                     content_width,
                     is_epic,
+                    is_project,
                 ));
             }
         }
@@ -708,7 +726,8 @@ fn build_list_help_lines(width: usize) -> Vec<Line<'static>> {
         help_line("b", "blocked by", width),
         help_line("/", "filter tasks", width),
         help_line("x", "epic filter", width),
-        help_line("v", "toggle tasks/epics view", width),
+        help_line("y", "project filter", width),
+        help_line("v", "toggle tasks/epics/projects view", width),
         help_line("tab", "status filter while filtering", width),
         help_line("r", "reload tasks", width),
         help_line("ctrl+d/u", "page down/up", width),
@@ -841,6 +860,7 @@ fn render_list_row(
     depth: usize,
     width: usize,
     is_epic: bool,
+    is_project: bool,
 ) -> Line<'static> {
     let status_label = format_status_label(&task.status);
     let status_text = pad_text_center(&status_label, STATUS_WIDTH);
@@ -853,13 +873,15 @@ fn render_list_row(
     };
     let indent_width = indent_prefix.len();
     let epic_marker_width = if is_epic { 2 } else { 0 };
+    let project_marker_width = if is_project { 2 } else { 0 };
     let used = STATUS_WIDTH
         + READY_WIDTH
         + ID_WIDTH
         + PRIORITY_WIDTH
         + 5
         + indent_width
-        + epic_marker_width;
+        + epic_marker_width
+        + project_marker_width;
     let title_width = width.saturating_sub(used);
     let title = truncate_text(&task.title, title_width);
 
@@ -895,6 +917,14 @@ fn render_list_row(
             "E ",
             Style::default()
                 .fg(COLOR_ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if is_project {
+        spans.push(Span::styled(
+            "P ",
+            Style::default()
+                .fg(COLOR_SUCCESS)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -948,6 +978,12 @@ fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
         lines.push(Line::from(vec![
             label_span("Epic: "),
             Span::styled(epic.to_string(), id_style()),
+        ]));
+    }
+    if let Some(project) = task.project.as_deref() {
+        lines.push(Line::from(vec![
+            label_span("Project: "),
+            Span::styled(project.to_string(), id_style()),
         ]));
     }
     lines.push(Line::from(vec![
@@ -1028,6 +1064,13 @@ fn append_relations(lines: &mut Vec<Line<'static>>, relations: &crate::task::Tas
         lines.push(Line::from(vec![
             label_span("Epic tasks: "),
             Span::styled(relations.epic_tasks.join(", "), id_style()),
+        ]));
+    }
+    if !relations.project_tasks.is_empty() {
+        any = true;
+        lines.push(Line::from(vec![
+            label_span("Project tasks: "),
+            Span::styled(relations.project_tasks.join(", "), id_style()),
         ]));
     }
     if !relations.children.is_empty() {

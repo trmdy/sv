@@ -17,6 +17,7 @@
 ## CLI entrypoint
 - `sv task` with no subcommand launches the TUI.
 - `sv task --epic <id>` (or `SV_EPIC=<id>`) starts with epic filter applied.
+- `sv task --project <id>` (or `SV_PROJECT=<id>`) starts with project filter applied.
 - All existing subcommands remain unchanged for scripting.
 
 ## Layout
@@ -24,9 +25,10 @@
   - Left: task list.
   - Right: detail panel.
 - Narrow terminals: single pane list, detail opens in place.
-- Footer: key hints + status line (filter, epic filter, errors, watch state) + task counts.
+- Footer: key hints + status line (filter, epic/project filter, errors, watch state) + task counts.
   - Tasks mode counts: open/ready/closed (`ready = open + not blocked`).
   - Epics mode counts: current/completed epics.
+  - Projects mode counts: current/completed projects.
 
 ## Wireframes
 Split view (default):
@@ -75,7 +77,8 @@ Narrow view:
 - `o/i/c/a`: quick filter open / in_progress / closed / all.
 - `r`: manual reload.
 - `x`: epic filter picker.
-- `v`: toggle list mode (tasks/epics).
+- `y`: project filter picker.
+- `v`: toggle list mode (tasks/epics/projects).
 - `n`: new task wizard.
 - `e`: inline edit task.
 - `p`: change task priority.
@@ -89,7 +92,8 @@ Narrow view:
 | `enter` | Toggle detail (narrow) |
 | `/` | Focus filter |
 | `x` | Epic filter picker |
-| `v` | Toggle tasks/epics view |
+| `y` | Project filter picker |
+| `v` | Toggle tasks/epics/projects view |
 | `esc` | Clear filter |
 | `o` | Filter open |
 | `i` | Filter in_progress |
@@ -105,7 +109,7 @@ Narrow view:
 - Fuzzy match on id + title (case-insensitive).
 - While filter active, show input line under list header.
 - If filter yields no results, show "No matches".
-- Status filter and epic filter combine with text filter (AND).
+- Status filter, epic filter, and project filter combine with text filter (AND).
 - Clear filter resets selection to first visible item.
 
 ## Data sources

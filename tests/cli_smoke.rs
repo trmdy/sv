@@ -35,7 +35,9 @@ fn task_robot_help_works() {
         .success()
         .stdout(contains("sv task --robot-help"))
         .stdout(contains("sv task new"))
-        .stdout(contains("sv task count"));
+        .stdout(contains("sv task count"))
+        .stdout(contains("sv task project set"))
+        .stdout(contains("SV_PROJECT"));
 }
 
 #[test]
