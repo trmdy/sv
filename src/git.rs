@@ -33,13 +33,26 @@ pub fn discover_repo(start: Option<&Path>) -> Result<Repository> {
         None => std::env::current_dir()?,
     };
 
-    Repository::discover(&start_path).map_err(|err| {
-        if err.code() == ErrorCode::NotFound {
-            Error::RepoNotFound(start_path)
-        } else {
-            Error::Git(err)
-        }
-    })
+    // libgit2's Repository::discover has caused stack overflows on Windows in CI.
+    // Prefer a simple upward search for ".git" there.
+    #[cfg(windows)]
+    {
+        discover_repo_by_fs(&start_path).map_err(|err| match err {
+            Error::RepoNotFound(_) => Error::RepoNotFound(start_path),
+            other => other,
+        })
+    }
+
+    #[cfg(not(windows))]
+    {
+        Repository::discover(&start_path).map_err(|err| {
+            if err.code() == ErrorCode::NotFound {
+                Error::RepoNotFound(start_path)
+            } else {
+                Error::Git(err)
+            }
+        })
+    }
 }
 
 /// Open a repository and validate it is a non-bare checkout.
@@ -51,6 +64,29 @@ pub fn open_repo(start: Option<&Path>) -> Result<Repository> {
         ));
     }
     Ok(repo)
+}
+
+#[cfg(windows)]
+fn discover_repo_by_fs(start_path: &Path) -> Result<Repository> {
+    let mut dir = start_path.to_path_buf();
+    if dir.is_file() {
+        if let Some(parent) = dir.parent() {
+            dir = parent.to_path_buf();
+        }
+    }
+
+    let mut cursor = dir.clone();
+    loop {
+        if cursor.join(".git").exists() {
+            return Repository::open(&cursor).map_err(Error::Git);
+        }
+
+        if !cursor.pop() {
+            break;
+        }
+    }
+
+    Err(Error::RepoNotFound(dir))
 }
 
 /// Return the repository workdir (root of the working tree).
