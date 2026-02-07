@@ -92,6 +92,14 @@ older_than = "180d"
 - `sv task relations <id>`
 - `sv task sync`
 - `sv task prefix [<prefix>]`
+- `sv project new <name> [--description <txt>]`
+- `sv project list [--all]`
+- `sv project show <id>`
+- `sv project edit <id> [--name <txt>] [--description <txt>]`
+- `sv project archive <id>`
+- `sv project unarchive <id>`
+- `sv project sync`
+- `sv project migrate-legacy [--dry-run]`
 
 ## Task viewer (TUI)
 - v1: read-only viewer for list + detail.
@@ -105,6 +113,8 @@ older_than = "180d"
 - Close task -> status in `closed_statuses`, optional note.
 - Ready task -> status `default_status` and no blockers.
 - Relations: epic, project, parent, blocks, and described relations; use `sv task relations` to inspect.
+- Projects are standalone grouping entities (not tasks) and should not be completed.
+- Legacy task-backed project ids remain readable; `sv project migrate-legacy` creates standalone project entities for them.
 - List/show prefers shared snapshot; falls back to fold log.
 - Sync between participants: `git pull` brings `.tasks/*`, then `sv task sync` rebuilds snapshot + refreshes shared cache.
 - Task IDs are case-insensitive; can be referenced by unique prefix of the suffix (e.g., `ab`, `a9`), or full ID (any prefix). Changing `id_prefix` does not affect existing tasks.

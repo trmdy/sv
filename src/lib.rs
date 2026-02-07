@@ -42,6 +42,7 @@ pub mod lock;
 pub mod merge;
 pub mod oplog;
 pub mod output;
+pub mod project;
 pub mod protect;
 pub mod refs;
 pub mod risk;

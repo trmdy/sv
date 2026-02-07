@@ -1,5 +1,6 @@
 //! sv task command implementations.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -12,6 +13,7 @@ use crate::events::{Event, EventDestination, EventKind};
 use crate::git;
 use crate::integrations::forge as forge_integration;
 use crate::output::{emit_success, HumanOutput, OutputOptions};
+use crate::project::ProjectStore;
 use crate::storage::{Storage, WorkspaceEntry};
 use crate::task::{
     CompactionPolicy, TaskDetails, TaskEvent, TaskEventType, TaskRecord, TaskRelations, TaskStore,
@@ -559,7 +561,14 @@ fn apply_task_filters(
         tasks.retain(|task| task.id == epic_id || task.epic.as_deref() == Some(epic_id));
     }
     if let Some(project_id) = project_id {
-        tasks.retain(|task| task.id == project_id || task.project.as_deref() == Some(project_id));
+        let effective_project = build_effective_project_map(tasks);
+        tasks.retain(|task| {
+            task.id == project_id
+                || effective_project
+                    .get(&task.id)
+                    .and_then(|value| value.as_deref())
+                    == Some(project_id)
+        });
     }
 
     if let Some(actor) = actor {
@@ -596,6 +605,55 @@ fn apply_task_filters(
     }
 
     Ok(())
+}
+
+fn build_effective_project_map(tasks: &[TaskRecord]) -> HashMap<String, Option<String>> {
+    let mut index_by_id = HashMap::new();
+    for (idx, task) in tasks.iter().enumerate() {
+        index_by_id.insert(task.id.as_str(), idx);
+    }
+
+    let mut cache: Vec<Option<Option<String>>> = vec![None; tasks.len()];
+    let mut out = HashMap::new();
+    for (idx, task) in tasks.iter().enumerate() {
+        let project =
+            resolve_effective_project(idx, tasks, &index_by_id, &mut cache, &mut HashSet::new());
+        out.insert(task.id.clone(), project);
+    }
+    out
+}
+
+fn resolve_effective_project<'a>(
+    idx: usize,
+    tasks: &'a [TaskRecord],
+    index_by_id: &HashMap<&'a str, usize>,
+    cache: &mut [Option<Option<String>>],
+    visiting: &mut HashSet<usize>,
+) -> Option<String> {
+    if let Some(cached) = cache.get(idx).and_then(|value| value.as_ref()) {
+        return cached.clone();
+    }
+
+    if !visiting.insert(idx) {
+        return tasks.get(idx).and_then(|task| task.project.clone());
+    }
+
+    let resolved = if let Some(project) = tasks.get(idx).and_then(|task| task.project.clone()) {
+        Some(project)
+    } else if let Some(epic_idx) = tasks
+        .get(idx)
+        .and_then(|task| task.epic.as_deref())
+        .and_then(|epic_id| index_by_id.get(epic_id))
+        .copied()
+    {
+        resolve_effective_project(epic_idx, tasks, index_by_id, cache, visiting)
+    } else {
+        None
+    };
+
+    visiting.remove(&idx);
+    cache[idx] = Some(resolved.clone());
+    resolved
 }
 
 pub fn run_show(options: ShowOptions) -> Result<()> {
@@ -682,6 +740,7 @@ pub fn run_status(options: StatusOptions) -> Result<()> {
     let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
     let resolved = ctx.store.resolve_task_id(&options.id)?;
     ctx.store.validate_status(&options.status)?;
+    ensure_project_group_not_closed(&ctx.store, &resolved, &options.status)?;
 
     let mut event = TaskEvent::new(TaskEventType::TaskStatusChanged, resolved.clone());
     event.actor = ctx.actor.clone();
@@ -836,6 +895,7 @@ pub fn run_close(options: CloseOptions) -> Result<()> {
             .unwrap_or_else(|| "closed".to_string())
     });
     ctx.store.validate_status(&status)?;
+    ensure_project_group_not_closed(&ctx.store, &resolved, &status)?;
 
     let mut event = TaskEvent::new(TaskEventType::TaskClosed, resolved.clone());
     event.actor = ctx.actor.clone();
@@ -1166,8 +1226,18 @@ pub fn run_project_set(options: ProjectSetOptions) -> Result<()> {
     let ctx = load_context(options.repo, options.actor, true)?;
     let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
     let task = ctx.store.resolve_task_id(&options.task)?;
-    let project = ctx.store.resolve_task_id(&options.project)?;
-    if task == project {
+    let project_target = resolve_project_target(&ctx.store, &options.project)?;
+    let project = project_target.id().to_string();
+    if let ProjectTarget::Entity(ref project_id) = project_target {
+        let project_store = ProjectStore::new(ctx.store.storage().clone());
+        let project_record = project_store.get(project_id)?;
+        if project_record.archived {
+            return Err(Error::InvalidArgument(format!(
+                "project is archived: {project_id}"
+            )));
+        }
+    }
+    if matches!(project_target, ProjectTarget::LegacyTask(_)) && task == project {
         return Err(Error::InvalidArgument(
             "project cannot match task".to_string(),
         ));
@@ -1212,6 +1282,27 @@ pub fn run_project_set(options: ProjectSetOptions) -> Result<()> {
         &output,
         Some(&human),
     )
+}
+
+enum ProjectTarget {
+    Entity(String),
+    LegacyTask(String),
+}
+
+impl ProjectTarget {
+    fn id(&self) -> &str {
+        match self {
+            ProjectTarget::Entity(id) | ProjectTarget::LegacyTask(id) => id.as_str(),
+        }
+    }
+}
+
+fn resolve_project_target(store: &TaskStore, input: &str) -> Result<ProjectTarget> {
+    let project_store = ProjectStore::new(store.storage().clone());
+    if let Some(project_id) = project_store.try_resolve_project_id(input)? {
+        return Ok(ProjectTarget::Entity(project_id));
+    }
+    Ok(ProjectTarget::LegacyTask(store.resolve_task_id(input)?))
 }
 
 pub fn run_project_clear(options: ProjectClearOptions) -> Result<()> {
@@ -1906,6 +1997,27 @@ fn parse_timestamp(label: &str, value: Option<&str>) -> Result<Option<DateTime<U
     Ok(Some(parsed.with_timezone(&Utc)))
 }
 
+fn status_is_closed(store: &TaskStore, status: &str) -> bool {
+    store
+        .config()
+        .closed_statuses
+        .iter()
+        .any(|entry| entry.eq_ignore_ascii_case(status.trim()))
+}
+
+fn ensure_project_group_not_closed(store: &TaskStore, task_id: &str, status: &str) -> Result<()> {
+    if !status_is_closed(store, status) {
+        return Ok(());
+    }
+    let relations = store.relations(task_id)?;
+    if relations.project_tasks.is_empty() {
+        return Ok(());
+    }
+    Err(Error::InvalidArgument(
+        "project groups cannot be completed; close member tasks instead".to_string(),
+    ))
+}
+
 fn resolve_epic_filter(store: &TaskStore, value: Option<&str>) -> Result<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
@@ -1926,6 +2038,10 @@ fn resolve_project_filter(store: &TaskStore, value: Option<&str>) -> Result<Opti
         return Err(Error::InvalidArgument(
             "project cannot be empty".to_string(),
         ));
+    }
+    let project_store = ProjectStore::new(store.storage().clone());
+    if let Some(project_id) = project_store.try_resolve_project_id(trimmed)? {
+        return Ok(Some(project_id));
     }
     Ok(Some(store.resolve_task_id(trimmed)?))
 }

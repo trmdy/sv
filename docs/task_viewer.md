@@ -22,13 +22,14 @@
 
 ## Layout
 - Default: split view.
+  - Top row: tabs with counts (`Tasks`, `Epics`, `Projects`).
   - Left: task list.
   - Right: detail panel.
 - Narrow terminals: single pane list, detail opens in place.
 - Footer: key hints + status line (filter, epic/project filter, errors, watch state) + task counts.
   - Tasks mode counts: open/ready/closed (`ready = open + not blocked`).
   - Epics mode counts: current/completed epics.
-  - Projects mode counts: current/completed projects.
+  - Projects mode counts: total projects (groupings).
 
 ## Wireframes
 Split view (default):
@@ -79,6 +80,7 @@ Narrow view:
 - `x`: epic filter picker.
 - `y`: project filter picker.
 - `v`: toggle list mode (tasks/epics/projects).
+- `1/2/3`: jump directly to tasks/epics/projects view.
 - `n`: new task wizard.
 - `e`: inline edit task.
 - `p`: change task priority.
@@ -93,6 +95,7 @@ Narrow view:
 | `/` | Focus filter |
 | `x` | Epic filter picker |
 | `y` | Project filter picker |
+| `1` / `2` / `3` | Switch tasks/epics/projects view |
 | `v` | Toggle tasks/epics/projects view |
 | `esc` | Clear filter |
 | `o` | Filter open |

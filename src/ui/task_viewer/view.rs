@@ -7,7 +7,7 @@ use ratatui::Frame;
 
 use crate::task::{TaskDetails, TaskRecord};
 
-use super::app::{AppState, DeleteConfirmState, HelpContext, StatusKind};
+use super::app::{AppState, DeleteConfirmState, HelpContext, ListMode, StatusKind};
 use super::editor::{
     EditorFieldId, EditorMode, EditorState, MultiTaskPicker, PriorityPicker, StatusPicker,
     TaskPicker,
@@ -33,10 +33,22 @@ const COLOR_MAGENTA: Color = Color::Rgb(214, 140, 230);
 
 pub fn render(frame: &mut Frame, app: &mut AppState) {
     let area = frame.size();
-    let footer_height = 3u16;
-    let main_height = area.height.saturating_sub(footer_height);
-    let main = Rect::new(area.x, area.y, area.width, main_height);
-    let footer = Rect::new(area.x, area.y + main_height, area.width, footer_height);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Length(1),
+                Constraint::Min(0),
+                Constraint::Length(3),
+            ]
+            .as_ref(),
+        )
+        .split(area);
+    let tabs = chunks[0];
+    let main = chunks[1];
+    let footer = chunks[2];
+
+    render_tabs(frame, app, tabs);
 
     if app.is_narrow() && !app.show_detail {
         render_list(frame, app, main);
@@ -88,6 +100,52 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
     if let Some(state) = app.delete_confirm.as_ref() {
         render_delete_confirm_modal(frame, area, state);
     }
+}
+
+fn render_tabs(frame: &mut Frame, app: &AppState, area: Rect) {
+    let tabs = vec![
+        (
+            "1 Tasks",
+            app.list_mode == ListMode::Tasks,
+            app.tasks.len(),
+            COLOR_INFO,
+        ),
+        (
+            "2 Epics",
+            app.list_mode == ListMode::Epics,
+            app.epic_ids.len(),
+            COLOR_ACCENT,
+        ),
+        (
+            "3 Projects",
+            app.list_mode == ListMode::Projects,
+            app.project_ids.len(),
+            COLOR_SUCCESS,
+        ),
+    ];
+
+    let mut spans = Vec::new();
+    for (idx, (label, selected, count, color)) in tabs.into_iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled("  ", Style::default().fg(COLOR_MUTED_DARK)));
+        }
+        let text = format!("{label} ({count})");
+        let style = if selected {
+            Style::default()
+                .fg(color)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        } else {
+            Style::default().fg(COLOR_MUTED)
+        };
+        spans.push(Span::styled(text, style));
+    }
+
+    let widget = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(COLOR_BG_MUTED)),
+    );
+    frame.render_widget(widget, area);
 }
 
 fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
@@ -727,6 +785,7 @@ fn build_list_help_lines(width: usize) -> Vec<Line<'static>> {
         help_line("/", "filter tasks", width),
         help_line("x", "epic filter", width),
         help_line("y", "project filter", width),
+        help_line("1/2/3", "switch tasks/epics/projects view", width),
         help_line("v", "toggle tasks/epics/projects view", width),
         help_line("tab", "status filter while filtering", width),
         help_line("r", "reload tasks", width),

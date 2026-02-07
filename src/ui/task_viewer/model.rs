@@ -206,22 +206,32 @@ pub fn group_tasks_by_project(
         index_by_id.insert(task.id.clone(), idx);
     }
 
-    let all_project_ids: HashSet<String> = tasks
-        .iter()
-        .filter_map(|task| task.project.clone())
-        .collect();
-    let project_ids: HashSet<String> = all_project_ids
-        .iter()
-        .filter(|id| index_by_id.contains_key(*id))
-        .cloned()
-        .collect();
+    let mut project_cache: Vec<Option<Option<String>>> = vec![None; tasks.len()];
+    let mut all_project_ids: HashSet<String> = HashSet::new();
+    for idx in 0..tasks.len() {
+        let project = resolve_project_for_task(
+            idx,
+            &tasks,
+            &index_by_id,
+            &mut project_cache,
+            &mut HashSet::new(),
+        );
+        if let Some(project_id) = project {
+            all_project_ids.insert(project_id);
+        }
+    }
+    let project_ids: HashSet<String> = all_project_ids;
     if project_ids.is_empty() {
         return (tasks, depths, project_ids);
     }
 
     let mut members_by_project: HashMap<String, Vec<usize>> = HashMap::new();
     for (idx, task) in tasks.iter().enumerate() {
-        let Some(project) = task.project.as_ref() else {
+        let Some(project) = project_cache
+            .get(idx)
+            .and_then(|entry| entry.as_ref())
+            .and_then(|value| value.as_ref())
+        else {
             continue;
         };
         if task.id == *project {
@@ -259,11 +269,13 @@ pub fn group_tasks_by_project(
     let mut consumed = HashSet::new();
 
     for (_, project_id) in project_order {
+        let mut has_anchor = false;
         if let Some(&project_idx) = index_by_id.get(&project_id) {
             if consumed.insert(project_idx) {
                 if let Some(task) = slots[project_idx].take() {
                     grouped_tasks.push(task);
                     grouped_depths.push(0);
+                    has_anchor = true;
                 }
             }
         }
@@ -274,7 +286,8 @@ pub fn group_tasks_by_project(
                 }
                 if let Some(task) = slots[*idx].take() {
                     grouped_tasks.push(task);
-                    grouped_depths.push(depths.get(*idx).copied().unwrap_or(0) + 1);
+                    let extra_depth = if has_anchor { 1 } else { 0 };
+                    grouped_depths.push(depths.get(*idx).copied().unwrap_or(0) + extra_depth);
                 }
             }
         }
@@ -291,6 +304,39 @@ pub fn group_tasks_by_project(
     }
 
     (grouped_tasks, grouped_depths, project_ids)
+}
+
+fn resolve_project_for_task(
+    idx: usize,
+    tasks: &[TaskRecord],
+    index_by_id: &HashMap<String, usize>,
+    cache: &mut [Option<Option<String>>],
+    visiting: &mut HashSet<usize>,
+) -> Option<String> {
+    if let Some(cached) = cache.get(idx).and_then(|value| value.as_ref()) {
+        return cached.clone();
+    }
+
+    if !visiting.insert(idx) {
+        return tasks.get(idx).and_then(|task| task.project.clone());
+    }
+
+    let resolved = if let Some(project) = tasks.get(idx).and_then(|task| task.project.clone()) {
+        Some(project)
+    } else if let Some(epic_idx) = tasks
+        .get(idx)
+        .and_then(|task| task.epic.as_ref())
+        .and_then(|epic_id| index_by_id.get(epic_id))
+        .copied()
+    {
+        resolve_project_for_task(epic_idx, tasks, index_by_id, cache, visiting)
+    } else {
+        None
+    };
+
+    visiting.remove(&idx);
+    cache[idx] = Some(resolved.clone());
+    resolved
 }
 
 fn fuzzy_match(value: &str, query: &str) -> bool {
@@ -326,14 +372,61 @@ pub fn filter_task_indices(
     let status_norm = status_filter.map(normalize_status);
     let epic_norm = epic_filter.map(normalize_text);
     let project_norm = project_filter.map(normalize_text);
+    let project_lookup = if project_norm.is_some() || projects_only {
+        let mut index_by_id = HashMap::new();
+        for (idx, task) in tasks.iter().enumerate() {
+            index_by_id.insert(task.id.clone(), idx);
+        }
+        Some(index_by_id)
+    } else {
+        None
+    };
+    let project_ids_norm = if projects_only {
+        Some(
+            project_ids
+                .iter()
+                .map(|candidate| normalize_text(candidate))
+                .collect::<HashSet<String>>(),
+        )
+    } else {
+        None
+    };
+    let mut project_cache: Option<Vec<Option<Option<String>>>> =
+        project_lookup.as_ref().map(|_| vec![None; tasks.len()]);
     let mut indices = Vec::new();
 
     for (idx, task) in tasks.iter().enumerate() {
         if epics_only && !epic_ids.contains(&task.id) {
             continue;
         }
-        if projects_only && !project_ids.contains(&task.id) {
-            continue;
+        let mut effective_project_norm: Option<String> = None;
+        if project_lookup.is_some() {
+            let mut task_project = task.project.as_ref().cloned();
+            if task_project.is_none() {
+                if let (Some(index_by_id), Some(cache)) =
+                    (project_lookup.as_ref(), project_cache.as_mut())
+                {
+                    task_project = resolve_project_for_task(
+                        idx,
+                        tasks,
+                        index_by_id,
+                        cache,
+                        &mut HashSet::new(),
+                    );
+                }
+            }
+            effective_project_norm = task_project.as_deref().map(normalize_text);
+        }
+
+        if projects_only {
+            let is_project_anchor = project_ids.contains(&task.id);
+            let has_project_membership = effective_project_norm
+                .as_deref()
+                .and_then(|project| project_ids_norm.as_ref().map(|set| set.contains(project)))
+                .unwrap_or(false);
+            if !is_project_anchor && !has_project_membership {
+                continue;
+            }
         }
 
         if let Some(status) = status_norm.as_deref() {
@@ -351,8 +444,7 @@ pub fn filter_task_indices(
         }
         if let Some(project) = project_norm.as_deref() {
             let task_id = normalize_text(&task.id);
-            let task_project = task.project.as_deref().map(normalize_text);
-            if task_id != project && task_project.as_deref() != Some(project) {
+            if task_id != project && effective_project_norm.as_deref() != Some(project) {
                 continue;
             }
         }
@@ -563,7 +655,60 @@ mod tests {
             false,
             true,
         );
-        assert_eq!(project_only, vec![0]);
+        assert_eq!(project_only, vec![0, 1]);
+    }
+
+    #[test]
+    fn filter_supports_project_inherited_from_epic() {
+        let now = Utc::now();
+        let mut project = task("sv-project", "Project", "open", "P1", now);
+        project.project = None;
+        let mut epic = task("sv-epic", "Epic", "open", "P1", now);
+        epic.project = Some("sv-project".to_string());
+        let mut child = task("sv-child", "Child", "open", "P2", now);
+        child.epic = Some("sv-epic".to_string());
+        let tasks = vec![project, epic, child];
+        let mut project_ids = HashSet::new();
+        project_ids.insert("sv-project".to_string());
+
+        let filtered = filter_task_indices(
+            &tasks,
+            "",
+            None,
+            None,
+            Some("sv-project"),
+            &HashSet::new(),
+            &project_ids,
+            false,
+            false,
+        );
+        assert_eq!(filtered, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn projects_only_mode_includes_non_anchor_project_members() {
+        let now = Utc::now();
+        let mut epic = task("sv-epic", "Epic", "open", "P1", now);
+        epic.project = Some("prj-alpha".to_string());
+        let mut child = task("sv-child", "Child", "open", "P2", now);
+        child.epic = Some("sv-epic".to_string());
+        let unrelated = task("sv-free", "Free", "open", "P2", now);
+        let tasks = vec![epic, child, unrelated];
+
+        let mut project_ids = HashSet::new();
+        project_ids.insert("prj-alpha".to_string());
+        let filtered = filter_task_indices(
+            &tasks,
+            "",
+            None,
+            None,
+            None,
+            &HashSet::new(),
+            &project_ids,
+            false,
+            true,
+        );
+        assert_eq!(filtered, vec![0, 1]);
     }
 
     #[test]
@@ -643,6 +788,58 @@ mod tests {
         assert_eq!(ids, vec!["sv-project", "sv-child", "sv-root"]);
         assert_eq!(depths, vec![0, 1, 0]);
         assert!(project_ids.contains("sv-project"));
+    }
+
+    #[test]
+    fn group_tasks_by_project_includes_epic_descendants_without_direct_project() {
+        let now = Utc::now();
+        let mut project = task("sv-project", "Project", "open", "P1", now);
+        project.project = None;
+
+        let mut epic_a = task("sv-epic-a", "Epic A", "open", "P1", now);
+        epic_a.project = Some("sv-project".to_string());
+        let mut epic_b = task("sv-epic-b", "Epic B", "open", "P1", now);
+        epic_b.project = Some("sv-project".to_string());
+
+        let mut task_a = task("sv-task-a", "Task A", "open", "P2", now);
+        task_a.epic = Some("sv-epic-a".to_string());
+        let mut task_b = task("sv-task-b", "Task B", "open", "P2", now);
+        task_b.epic = Some("sv-epic-b".to_string());
+
+        let (epic_grouped, epic_depths, _) = group_tasks_by_epic(
+            vec![project, epic_a, epic_b, task_a, task_b],
+            vec![0, 0, 0, 0, 0],
+        );
+        let (grouped, depths, project_ids) = group_tasks_by_project(epic_grouped, epic_depths);
+
+        let ids: Vec<&str> = grouped.iter().map(|task| task.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "sv-project",
+                "sv-epic-a",
+                "sv-task-a",
+                "sv-epic-b",
+                "sv-task-b"
+            ]
+        );
+        assert_eq!(depths, vec![0, 1, 2, 1, 2]);
+        assert!(project_ids.contains("sv-project"));
+    }
+
+    #[test]
+    fn group_tasks_by_project_without_anchor_keeps_root_depth() {
+        let now = Utc::now();
+        let mut epic = task("sv-epic", "Epic", "open", "P1", now);
+        epic.project = Some("prj-alpha".to_string());
+        let mut child = task("sv-child", "Child", "open", "P2", now);
+        child.epic = Some("sv-epic".to_string());
+
+        let (grouped, depths, project_ids) = group_tasks_by_project(vec![epic, child], vec![0, 1]);
+        let ids: Vec<&str> = grouped.iter().map(|task| task.id.as_str()).collect();
+        assert_eq!(ids, vec!["sv-epic", "sv-child"]);
+        assert_eq!(depths, vec![0, 1]);
+        assert!(project_ids.contains("prj-alpha"));
     }
 
     #[test]

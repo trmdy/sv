@@ -456,6 +456,11 @@ pub fn change_status(
     status: &str,
 ) -> Result<ActionOutcome> {
     store.validate_status(status)?;
+    if is_closed_status(store, status) && is_project_grouping(store, task_id)? {
+        return Err(Error::InvalidArgument(
+            "project groups cannot be completed; close member tasks instead".to_string(),
+        ));
+    }
     let task = load_task(store, task_id)?;
     if task.status.eq_ignore_ascii_case(status) {
         return Ok(ActionOutcome {
@@ -519,6 +524,19 @@ fn resolve_task_list(store: &TaskStore, values: &[String]) -> Result<Vec<String>
         }
     }
     Ok(out)
+}
+
+fn is_closed_status(store: &TaskStore, status: &str) -> bool {
+    store
+        .config()
+        .closed_statuses
+        .iter()
+        .any(|entry| entry.eq_ignore_ascii_case(status.trim()))
+}
+
+fn is_project_grouping(store: &TaskStore, task_id: &str) -> Result<bool> {
+    let relations = store.relations(task_id)?;
+    Ok(!relations.project_tasks.is_empty())
 }
 
 fn diff_relation_sets(current: &[String], desired: &[String]) -> (Vec<String>, Vec<String>) {
@@ -746,5 +764,21 @@ mod tests {
         assert!(outcome.changed);
         let updated = load_task(&store, &task_id).expect("load");
         assert_eq!(updated.status, "in_progress");
+    }
+
+    #[test]
+    fn status_change_rejects_closed_status_for_project_grouping() {
+        let (_dir, store) = setup_store();
+        let project_id = seed_task(&store, "Project");
+        let child_id = seed_task(&store, "Child");
+        let mut event = TaskEvent::new(TaskEventType::TaskProjectSet, child_id);
+        event.related_task_id = Some(project_id.clone());
+        store.append_event(event).expect("project set");
+
+        let err = change_status(&store, None, &project_id, "closed").expect_err("status");
+        assert!(matches!(err, Error::InvalidArgument(_)));
+        assert!(err
+            .to_string()
+            .contains("project groups cannot be completed"));
     }
 }

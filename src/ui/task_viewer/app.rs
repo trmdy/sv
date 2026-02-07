@@ -103,6 +103,15 @@ struct Viewport {
     height: u16,
 }
 
+#[derive(Default, Clone)]
+struct SavedListState {
+    filter: String,
+    status_filter: Option<String>,
+    epic_filter: Option<String>,
+    project_filter: Option<String>,
+    selected_id: Option<String>,
+}
+
 pub struct AppState {
     pub(crate) tasks: Vec<TaskRecord>,
     pub(crate) task_depths: Vec<usize>,
@@ -130,6 +139,9 @@ pub struct AppState {
     pub(crate) list_mode: ListMode,
     pub(crate) epic_ids: HashSet<String>,
     pub(crate) project_ids: HashSet<String>,
+    tasks_mode_state: SavedListState,
+    epics_mode_state: SavedListState,
+    projects_mode_state: SavedListState,
     detail_cache: HashMap<String, TaskDetails>,
     pending_details: HashSet<String>,
     status_message: Option<String>,
@@ -149,6 +161,13 @@ impl AppState {
         epic_filter: Option<String>,
         project_filter: Option<String>,
     ) -> Self {
+        let tasks_mode_state = SavedListState {
+            filter: String::new(),
+            status_filter: None,
+            epic_filter: epic_filter.clone(),
+            project_filter: project_filter.clone(),
+            selected_id: None,
+        };
         Self {
             tasks: Vec::new(),
             task_depths: Vec::new(),
@@ -176,6 +195,9 @@ impl AppState {
             list_mode: ListMode::Tasks,
             epic_ids: HashSet::new(),
             project_ids: HashSet::new(),
+            tasks_mode_state,
+            epics_mode_state: SavedListState::default(),
+            projects_mode_state: SavedListState::default(),
             detail_cache: HashMap::new(),
             pending_details: HashSet::new(),
             status_message: None,
@@ -229,6 +251,57 @@ impl AppState {
         } else {
             "Tasks"
         }
+    }
+
+    fn saved_state_mut(&mut self, mode: ListMode) -> &mut SavedListState {
+        match mode {
+            ListMode::Tasks => &mut self.tasks_mode_state,
+            ListMode::Epics => &mut self.epics_mode_state,
+            ListMode::Projects => &mut self.projects_mode_state,
+        }
+    }
+
+    fn saved_state(&self, mode: ListMode) -> &SavedListState {
+        match mode {
+            ListMode::Tasks => &self.tasks_mode_state,
+            ListMode::Epics => &self.epics_mode_state,
+            ListMode::Projects => &self.projects_mode_state,
+        }
+    }
+
+    fn save_active_mode_state(&mut self) {
+        let selected_id = self.selected_task().map(|task| task.id.clone());
+        let mode = self.list_mode;
+        let filter = self.filter.clone();
+        let status_filter = self.status_filter.clone();
+        let epic_filter = self.epic_filter.clone();
+        let project_filter = self.project_filter.clone();
+        let state = self.saved_state_mut(mode);
+        state.filter = filter;
+        state.status_filter = status_filter;
+        state.epic_filter = epic_filter;
+        state.project_filter = project_filter;
+        state.selected_id = selected_id;
+    }
+
+    fn restore_mode_state(&mut self, mode: ListMode) {
+        let state = self.saved_state(mode).clone();
+        self.filter = state.filter;
+        self.status_filter = state.status_filter;
+        self.epic_filter = state.epic_filter;
+        self.project_filter = state.project_filter;
+    }
+
+    fn set_list_mode(&mut self, mode: ListMode, req_tx: &Sender<LoadRequest>) {
+        if self.list_mode == mode {
+            return;
+        }
+        self.save_active_mode_state();
+        self.list_mode = mode;
+        self.restore_mode_state(mode);
+        let previous = self.saved_state(mode).selected_id.clone();
+        self.apply_filter(previous);
+        self.queue_detail_load(req_tx);
     }
 
     pub(crate) fn is_epic_task(&self, task_id: &str) -> bool {
@@ -310,7 +383,7 @@ impl AppState {
         if self.filter_active {
             return "type filter  backspace delete  tab status  enter done  esc clear".to_string();
         }
-        "j/k move  / filter  x epic filter  y project filter  v view mode  enter details  ? help  esc/q quit"
+        "j/k move  / filter  x epic filter  y project filter  1/2/3 views  v cycle  enter details  ? help  esc/q quit"
             .to_string()
     }
 
@@ -332,20 +405,7 @@ impl AppState {
             return format!("current epics: {current}  completed epics: {completed}");
         }
         if self.is_projects_mode() {
-            let closed_statuses = &self.config.closed_statuses;
-            let mut current = 0usize;
-            let mut completed = 0usize;
-            for task in &self.tasks {
-                if !self.is_project_task(&task.id) {
-                    continue;
-                }
-                if closed_statuses.iter().any(|status| status == &task.status) {
-                    completed += 1;
-                } else {
-                    current += 1;
-                }
-            }
-            return format!("current projects: {current}  completed projects: {completed}");
+            return format!("projects: {}", self.project_ids.len());
         }
 
         let open_status = self.config.default_status.as_str();
@@ -430,13 +490,19 @@ impl AppState {
             id: CLEAR_PROJECT_FILTER_ID.to_string(),
             title: CLEAR_PROJECT_FILTER_TITLE.to_string(),
         });
-        for task in &self.tasks {
-            if !self.is_project_task(&task.id) {
-                continue;
-            }
+        let title_by_id: HashMap<&str, &str> = self
+            .tasks
+            .iter()
+            .map(|task| (task.id.as_str(), task.title.as_str()))
+            .collect();
+        for project_id in &self.project_ids {
+            let title = title_by_id
+                .get(project_id.as_str())
+                .copied()
+                .unwrap_or(project_id.as_str());
             options.push(TaskOption {
-                id: task.id.clone(),
-                title: task.title.clone(),
+                id: project_id.clone(),
+                title: title.to_string(),
             });
         }
         options.sort_by(|left, right| {
@@ -1270,14 +1336,24 @@ fn handle_key(
             false
         }
         KeyCode::Char('v') => {
-            app.list_mode = match app.list_mode {
+            let next = match app.list_mode {
                 ListMode::Tasks => ListMode::Epics,
                 ListMode::Epics => ListMode::Projects,
                 ListMode::Projects => ListMode::Tasks,
             };
-            let previous = app.selected_task().map(|task| task.id.clone());
-            app.apply_filter(previous);
-            app.queue_detail_load(req_tx);
+            app.set_list_mode(next, req_tx);
+            false
+        }
+        KeyCode::Char('1') => {
+            app.set_list_mode(ListMode::Tasks, req_tx);
+            false
+        }
+        KeyCode::Char('2') => {
+            app.set_list_mode(ListMode::Epics, req_tx);
+            false
+        }
+        KeyCode::Char('3') => {
+            app.set_list_mode(ListMode::Projects, req_tx);
             false
         }
         KeyCode::Char('r') => {

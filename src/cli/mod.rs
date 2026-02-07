@@ -14,6 +14,7 @@ mod init;
 mod lease;
 mod onto;
 mod op;
+mod project;
 mod protect;
 mod release;
 mod status;
@@ -73,6 +74,7 @@ Commands (high level)
   sv protect status|add|off|rm Protected paths
   sv commit                 Commit with sv checks + Change-Id
   sv task new|list|ready|count|show|start|status|priority|edit|close|delete|comment|parent|epic|project|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
+  sv project new|list|show|edit|archive|unarchive|sync|migrate-legacy  Projects
   sv forge hooks install     Configure Forge task hooks
   sv risk                   Overlap/conflict analysis
   sv onto                   Rebase/merge current workspace onto another
@@ -213,7 +215,7 @@ Commands
   sv task parent clear <child>
   sv task epic set <task> <epic>
   sv task epic clear <task>
-  sv task project set <task> <project>
+  sv task project set <task> <project-id>
   sv task project clear <task>
   sv task block <blocker> <blocked>
   sv task unblock <blocker> <blocked>
@@ -230,6 +232,25 @@ Notes
   epic filter via --epic or SV_EPIC
   project filter via --project or SV_PROJECT
   Use --json for machine output; use --events <path> with --json.
+"#;
+const PROJECT_ROBOT_HELP: &str = r#"sv project --robot-help
+
+Purpose
+  Manage standalone project entities (grouping only; not tasks).
+
+Commands
+  sv project new "<name>" [--description]
+  sv project list [--all]
+  sv project show <id>
+  sv project edit <id> [--name] [--description]
+  sv project archive <id>
+  sv project unarchive <id>
+  sv project sync
+  sv project migrate-legacy [--dry-run]
+
+Notes
+  Legacy task-backed project ids remain readable.
+  Use migrate-legacy to create standalone project entities from legacy ids.
 "#;
 const FORGE_ROBOT_HELP: &str = r#"sv forge --robot-help
 
@@ -528,6 +549,19 @@ Examples:
 
         #[command(subcommand)]
         command: Option<TaskCommands>,
+    },
+
+    /// Project entity management
+    #[command(long_about = r#"Manage standalone project entities.
+
+Examples:
+  sv project new "Platform"
+  sv project list
+  sv project migrate-legacy --dry-run
+"#)]
+    Project {
+        #[command(subcommand)]
+        command: Option<ProjectEntityCommands>,
     },
 
     /// Forge integration helpers
@@ -1466,7 +1500,7 @@ Examples:
         /// Task ID
         task: String,
 
-        /// Project task ID
+        /// Project ID
         project: String,
     },
 
@@ -1479,6 +1513,69 @@ Examples:
     Clear {
         /// Task ID
         task: String,
+    },
+}
+
+/// Standalone project entity subcommands
+#[derive(Subcommand, Debug)]
+pub enum ProjectEntityCommands {
+    /// Create a project
+    New {
+        /// Project name
+        name: String,
+
+        /// Optional description
+        #[arg(long)]
+        description: Option<String>,
+    },
+
+    /// List projects
+    List {
+        /// Include archived projects
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Show a project
+    Show {
+        /// Project ID (full or prefix)
+        id: String,
+    },
+
+    /// Edit a project
+    Edit {
+        /// Project ID
+        id: String,
+
+        /// New project name
+        #[arg(long)]
+        name: Option<String>,
+
+        /// New description (empty string clears)
+        #[arg(long)]
+        description: Option<String>,
+    },
+
+    /// Archive a project
+    Archive {
+        /// Project ID
+        id: String,
+    },
+
+    /// Unarchive a project
+    Unarchive {
+        /// Project ID
+        id: String,
+    },
+
+    /// Sync project logs and snapshots
+    Sync,
+
+    /// Convert legacy task-backed project ids into project entities
+    MigrateLegacy {
+        /// Show changes without writing
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -2526,6 +2623,7 @@ impl Cli {
                 Some(Commands::Protect { .. }) => PROTECT_ROBOT_HELP,
                 Some(Commands::Commit { .. }) => COMMIT_ROBOT_HELP,
                 Some(Commands::Task { .. }) => TASK_ROBOT_HELP,
+                Some(Commands::Project { .. }) => PROJECT_ROBOT_HELP,
                 Some(Commands::Forge { .. }) => FORGE_ROBOT_HELP,
                 Some(Commands::Risk { .. }) => RISK_ROBOT_HELP,
                 Some(Commands::Op { .. }) => OP_ROBOT_HELP,
@@ -3097,6 +3195,83 @@ impl Cli {
                     json,
                     quiet,
                 }),
+            },
+            Commands::Project { command } => match command {
+                Some(cmd) => match cmd {
+                    ProjectEntityCommands::New { name, description } => {
+                        project::run_new(project::NewOptions {
+                            name,
+                            description,
+                            actor,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    ProjectEntityCommands::List { all } => {
+                        project::run_list(project::ListOptions {
+                            all,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    ProjectEntityCommands::Show { id } => project::run_show(project::ShowOptions {
+                        id,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    ProjectEntityCommands::Edit {
+                        id,
+                        name,
+                        description,
+                    } => project::run_edit(project::EditOptions {
+                        id,
+                        name,
+                        description,
+                        actor,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    ProjectEntityCommands::Archive { id } => {
+                        project::run_archive(project::ArchiveOptions {
+                            id,
+                            actor,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    ProjectEntityCommands::Unarchive { id } => {
+                        project::run_unarchive(project::UnarchiveOptions {
+                            id,
+                            actor,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                    ProjectEntityCommands::Sync => {
+                        project::run_sync(project::SyncOptions { repo, json, quiet })
+                    }
+                    ProjectEntityCommands::MigrateLegacy { dry_run } => {
+                        project::run_migrate_legacy(project::MigrateLegacyOptions {
+                            dry_run,
+                            actor,
+                            repo,
+                            json,
+                            quiet,
+                        })
+                    }
+                },
+                None => {
+                    print_subcommand_help("project")?;
+                    Err(Error::InvalidArgument(
+                        "missing project command".to_string(),
+                    ))
+                }
             },
             Commands::Forge { command } => match command {
                 Some(cmd) => match cmd {
