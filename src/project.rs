@@ -478,9 +478,7 @@ impl ProjectStore {
 }
 
 fn normalize_description(description: Option<String>) -> Option<String> {
-    let Some(description) = description else {
-        return None;
-    };
+    let description = description?;
     if description.trim().is_empty() {
         None
     } else {
