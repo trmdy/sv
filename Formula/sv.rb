@@ -1,7 +1,7 @@
 class Sv < Formula
   desc "Simultaneous Versioning for multi-agent Git workflows"
   homepage "https://github.com/tOgg1/sv"
-  version "0.1.0"
+  version "0.2.1"
   license "MIT OR Apache-2.0"
 
   # TODO: update sha256 values for each release artifact.
