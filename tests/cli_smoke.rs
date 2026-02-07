@@ -13,7 +13,8 @@ fn sv_help_works() {
 #[test]
 fn subcommand_help_works() {
     let subcommands = [
-        "ws", "lease", "protect", "commit", "risk", "op", "undo", "actor", "init", "status",
+        "ws", "lease", "protect", "commit", "task", "forge", "risk", "op", "undo", "actor", "init",
+        "status",
     ];
 
     for cmd in subcommands {
@@ -33,7 +34,8 @@ fn task_robot_help_works() {
         .assert()
         .success()
         .stdout(contains("sv task --robot-help"))
-        .stdout(contains("sv task new"));
+        .stdout(contains("sv task new"))
+        .stdout(contains("sv task count"));
 }
 
 #[test]
@@ -45,4 +47,15 @@ fn ws_robot_help_works() {
         .success()
         .stdout(contains("sv ws --robot-help"))
         .stdout(contains("sv ws new"));
+}
+
+#[test]
+fn forge_robot_help_works() {
+    cargo_bin_cmd!("sv")
+        .arg("forge")
+        .arg("--robot-help")
+        .assert()
+        .success()
+        .stdout(contains("sv forge --robot-help"))
+        .stdout(contains("sv forge hooks install"));
 }
