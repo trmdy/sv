@@ -42,8 +42,7 @@ pub fn run_set(options: SetOptions) -> Result<()> {
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let repository = git::open_repo(Some(start.as_path()))?;
-    let workdir = git::workdir(&repository)?;
+    let workdir = git::repo_root_by_fs(Some(start.as_path()))?;
 
     actor::persist_actor(&workdir, &options.name)?;
 
@@ -79,8 +78,7 @@ pub fn run_show(options: ShowOptions) -> Result<()> {
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let repository = git::open_repo(Some(start.as_path()))?;
-    let workdir = git::workdir(&repository)?;
+    let workdir = git::repo_root_by_fs(Some(start.as_path()))?;
 
     let actor_name = actor::resolve_actor(Some(&workdir), options.actor.as_deref())?;
 

@@ -26,6 +26,37 @@ pub struct HeadInfo {
     pub is_detached: bool,
 }
 
+/// Find the repository root (workdir) by walking up the filesystem looking for `.git`.
+///
+/// This avoids libgit2 repository discovery, and works for both normal checkouts
+/// (`.git/` directory) and worktrees (`.git` file).
+pub fn repo_root_by_fs(start: Option<&Path>) -> Result<PathBuf> {
+    let start_path = match start {
+        Some(path) => path.to_path_buf(),
+        None => std::env::current_dir()?,
+    };
+
+    let mut dir = start_path.clone();
+    if dir.is_file() {
+        if let Some(parent) = dir.parent() {
+            dir = parent.to_path_buf();
+        }
+    }
+
+    let mut cursor = dir.clone();
+    loop {
+        if cursor.join(".git").exists() {
+            return Ok(cursor);
+        }
+
+        if !cursor.pop() {
+            break;
+        }
+    }
+
+    Err(Error::RepoNotFound(start_path))
+}
+
 /// Discover a git repository from a starting path.
 pub fn discover_repo(start: Option<&Path>) -> Result<Repository> {
     let start_path = match start {
@@ -68,25 +99,8 @@ pub fn open_repo(start: Option<&Path>) -> Result<Repository> {
 
 #[cfg(windows)]
 fn discover_repo_by_fs(start_path: &Path) -> Result<Repository> {
-    let mut dir = start_path.to_path_buf();
-    if dir.is_file() {
-        if let Some(parent) = dir.parent() {
-            dir = parent.to_path_buf();
-        }
-    }
-
-    let mut cursor = dir.clone();
-    loop {
-        if cursor.join(".git").exists() {
-            return Repository::open(&cursor).map_err(Error::Git);
-        }
-
-        if !cursor.pop() {
-            break;
-        }
-    }
-
-    Err(Error::RepoNotFound(dir))
+    let repo_root = repo_root_by_fs(Some(start_path))?;
+    Repository::open(repo_root).map_err(Error::Git)
 }
 
 /// Return the repository workdir (root of the working tree).
