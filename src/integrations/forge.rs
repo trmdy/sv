@@ -157,14 +157,11 @@ fn run_shell(repo_root: &Path, cmd: &str) -> std::io::Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let message = first_non_empty(stderr.trim(), stdout.trim()).unwrap_or("unknown error");
 
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        format!(
-            "exit={} msg={}",
-            output.status.code().unwrap_or(-1),
-            truncate(message, 400)
-        ),
-    ))
+    Err(std::io::Error::other(format!(
+        "exit={} msg={}",
+        output.status.code().unwrap_or(-1),
+        truncate(message, 400)
+    )))
 }
 
 fn build_shell_command(cmd: &str) -> Command {

@@ -15,6 +15,12 @@ use crate::error::{Error, Result};
 use crate::lock::{FileLock, DEFAULT_LOCK_TIMEOUT_MS};
 use crate::storage::Storage;
 
+type BlockedAndParents = (
+    HashSet<String>,
+    HashMap<String, String>,
+    HashMap<String, String>,
+);
+
 const TASKS_DIR: &str = ".tasks";
 const TASKS_LOG: &str = "tasks.jsonl";
 const TASKS_SNAPSHOT: &str = "tasks.snapshot.json";
@@ -376,13 +382,7 @@ impl TaskStore {
         self.blocked_task_ids_with_statuses(&status_by_id)
     }
 
-    pub fn blocked_and_parents(
-        &self,
-    ) -> Result<(
-        HashSet<String>,
-        HashMap<String, String>,
-        HashMap<String, String>,
-    )> {
+    pub fn blocked_and_parents(&self) -> Result<BlockedAndParents> {
         let events = self.load_merged_events()?;
         let state = build_relation_state(&events)?;
         let snapshot = self.load_snapshot_prefer_shared()?;
