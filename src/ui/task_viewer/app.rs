@@ -19,6 +19,7 @@ use tempfile::NamedTempFile;
 
 use crate::actor;
 use crate::error::{Error, Result};
+use crate::project::ProjectStore;
 use crate::task::{TaskDetails, TaskRecord, TaskStore};
 
 use super::actions::{self, ActionOutcome, EditTaskInput, NewTaskInput};
@@ -52,6 +53,7 @@ enum UiMsg {
         Vec<TaskRecord>,
         HashSet<String>,
         Option<String>,
+        HashMap<String, String>,
         HashMap<String, String>,
         HashMap<String, String>,
     ),
@@ -139,6 +141,8 @@ pub struct AppState {
     pub(crate) list_mode: ListMode,
     pub(crate) epic_ids: HashSet<String>,
     pub(crate) project_ids: HashSet<String>,
+    pub(crate) project_names: HashMap<String, String>,
+    pub(crate) task_project_ids: Vec<Option<String>>,
     tasks_mode_state: SavedListState,
     epics_mode_state: SavedListState,
     projects_mode_state: SavedListState,
@@ -195,6 +199,8 @@ impl AppState {
             list_mode: ListMode::Tasks,
             epic_ids: HashSet::new(),
             project_ids: HashSet::new(),
+            project_names: HashMap::new(),
+            task_project_ids: Vec::new(),
             tasks_mode_state,
             epics_mode_state: SavedListState::default(),
             projects_mode_state: SavedListState::default(),
@@ -308,8 +314,20 @@ impl AppState {
         self.epic_ids.contains(task_id)
     }
 
-    pub(crate) fn is_project_task(&self, task_id: &str) -> bool {
-        self.project_ids.contains(task_id)
+    pub(crate) fn task_project_id(&self, task_idx: usize) -> Option<&str> {
+        self.task_project_ids
+            .get(task_idx)
+            .and_then(|project| project.as_deref())
+    }
+
+    pub(crate) fn project_title_for_id(&self, project_id: Option<&str>) -> String {
+        let Some(project_id) = project_id else {
+            return "No project".to_string();
+        };
+        match self.project_names.get(project_id) {
+            Some(name) if !name.trim().is_empty() => format!("{name} ({project_id})"),
+            _ => project_id.to_string(),
+        }
     }
 
     pub(crate) fn status_line(&self) -> Option<(String, StatusKind)> {
@@ -490,19 +508,15 @@ impl AppState {
             id: CLEAR_PROJECT_FILTER_ID.to_string(),
             title: CLEAR_PROJECT_FILTER_TITLE.to_string(),
         });
-        let title_by_id: HashMap<&str, &str> = self
-            .tasks
-            .iter()
-            .map(|task| (task.id.as_str(), task.title.as_str()))
-            .collect();
         for project_id in &self.project_ids {
-            let title = title_by_id
-                .get(project_id.as_str())
-                .copied()
-                .unwrap_or(project_id.as_str());
+            let title = self
+                .project_names
+                .get(project_id)
+                .cloned()
+                .unwrap_or_else(|| project_id.clone());
             options.push(TaskOption {
                 id: project_id.clone(),
-                title: title.to_string(),
+                title,
             });
         }
         options.sort_by(|left, right| {
@@ -805,16 +819,20 @@ fn handle_ui_msg(app: &mut AppState, msg: UiMsg, req_tx: &Sender<LoadRequest>) {
             blocked_error,
             parent_by_child,
             _epic_by_task,
+            project_names,
         ) => {
             model::sort_tasks(&mut tasks, &app.config, &blocked_ids);
             let (tasks, depths) = model::nest_tasks(tasks, &parent_by_child);
             let (tasks, depths, epic_ids) = model::group_tasks_by_epic(tasks, depths);
-            let (tasks, depths, project_ids) = model::group_tasks_by_project(tasks, depths);
+            let (tasks, depths, mut project_ids) = model::group_tasks_by_project(tasks, depths);
+            project_ids.extend(project_names.keys().cloned());
             let previous_id = app.selected_task().map(|task| task.id.clone());
             app.tasks = tasks;
             app.task_depths = depths;
+            app.task_project_ids = model::effective_project_ids(&app.tasks);
             app.epic_ids = epic_ids;
             app.project_ids = project_ids;
+            app.project_names = project_names;
             app.blocked_ids = blocked_ids;
             app.detail_cache.clear();
             app.pending_details.clear();
@@ -1459,7 +1477,7 @@ fn spawn_loader(store: TaskStore, req_rx: Receiver<LoadRequest>, ui_tx: Sender<U
             match req {
                 LoadRequest::Reload => match store.list(None) {
                     Ok(tasks) => {
-                        let (blocked_ids, blocked_error, parent_by_child, epic_by_task) =
+                        let (blocked_ids, mut blocked_error, parent_by_child, epic_by_task) =
                             match store.blocked_and_parents() {
                                 Ok((blocked_ids, parent_by_child, epic_by_task)) => {
                                     (blocked_ids, None, parent_by_child, epic_by_task)
@@ -1471,12 +1489,28 @@ fn spawn_loader(store: TaskStore, req_rx: Receiver<LoadRequest>, ui_tx: Sender<U
                                     HashMap::new(),
                                 ),
                             };
+                        let project_names =
+                            match ProjectStore::new(store.storage().clone()).list(false) {
+                                Ok(projects) => projects
+                                    .into_iter()
+                                    .map(|project| (project.id, project.name))
+                                    .collect::<HashMap<_, _>>(),
+                                Err(err) => {
+                                    let message = format!("project load error: {err}");
+                                    blocked_error = Some(match blocked_error {
+                                        Some(existing) => format!("{existing}; {message}"),
+                                        None => message,
+                                    });
+                                    HashMap::new()
+                                }
+                            };
                         let _ = ui_tx.send(UiMsg::DataLoaded(
                             tasks,
                             blocked_ids,
                             blocked_error,
                             parent_by_child,
                             epic_by_task,
+                            project_names,
                         ));
                     }
                     Err(err) => {

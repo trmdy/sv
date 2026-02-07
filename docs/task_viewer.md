@@ -62,6 +62,8 @@ Narrow view:
 - Sort: status rank -> priority rank -> readiness -> updated_at desc -> id.
 - Readiness: default status and not blocked.
 - Parent nesting: children render directly under parent with indentation.
+- Tasks view default grouping: project header separator rows (`-- <project name/id>`) before each project slice.
+- Project headers are non-task rows (no status/progress markers).
 - Highlight selected row.
 - Subtle ready marker for open + unblocked tasks.
 
@@ -118,6 +120,7 @@ Narrow view:
 ## Data sources
 - Prefer `.git/sv/tasks.snapshot.json`.
 - Fallback to `.tasks/tasks.snapshot.json`.
+- Load standalone project entities from project snapshots/logs for project names and filter options.
 - If no snapshot: fold log (warn in status line).
 - Keep selection by task id on reload.
 - Sort: status rank -> priority rank -> readiness -> updated_at desc -> id.

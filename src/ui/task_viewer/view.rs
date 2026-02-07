@@ -223,14 +223,27 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
             .selected
             .and_then(|idx| app.filtered.iter().position(|candidate| *candidate == idx));
         let (start, end) = list_window(app.filtered.len(), selected_pos, list_height);
+        let mut previous_project = if app.list_mode == ListMode::Tasks && start > 0 {
+            app.task_project_id(app.filtered[start - 1])
+                .map(|value| value.to_string())
+        } else {
+            None
+        };
         for pos in start..end {
             let idx = app.filtered[pos];
             if let Some(task) = app.tasks.get(idx) {
+                if app.list_mode == ListMode::Tasks {
+                    let current_project = app.task_project_id(idx).map(|value| value.to_string());
+                    if current_project != previous_project {
+                        let title = app.project_title_for_id(current_project.as_deref());
+                        lines.push(render_project_group_row(&title, content_width));
+                    }
+                    previous_project = current_project;
+                }
                 let selected = app.selected == Some(idx);
                 let ready = app.is_task_ready(task);
                 let depth = app.task_depths.get(idx).copied().unwrap_or(0);
                 let is_epic = app.is_epic_task(&task.id);
-                let is_project = app.is_project_task(&task.id);
                 lines.push(render_list_row(
                     task,
                     selected,
@@ -238,7 +251,6 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
                     depth,
                     content_width,
                     is_epic,
-                    is_project,
                 ));
             }
         }
@@ -919,7 +931,6 @@ fn render_list_row(
     depth: usize,
     width: usize,
     is_epic: bool,
-    is_project: bool,
 ) -> Line<'static> {
     let status_label = format_status_label(&task.status);
     let status_text = pad_text_center(&status_label, STATUS_WIDTH);
@@ -932,15 +943,13 @@ fn render_list_row(
     };
     let indent_width = indent_prefix.len();
     let epic_marker_width = if is_epic { 2 } else { 0 };
-    let project_marker_width = if is_project { 2 } else { 0 };
     let used = STATUS_WIDTH
         + READY_WIDTH
         + ID_WIDTH
         + PRIORITY_WIDTH
         + 5
         + indent_width
-        + epic_marker_width
-        + project_marker_width;
+        + epic_marker_width;
     let title_width = width.saturating_sub(used);
     let title = truncate_text(&task.title, title_width);
 
@@ -979,14 +988,6 @@ fn render_list_row(
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    if is_project {
-        spans.push(Span::styled(
-            "P ",
-            Style::default()
-                .fg(COLOR_SUCCESS)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
     spans.push(Span::raw(title));
 
     if selected {
@@ -996,6 +997,19 @@ fn render_list_row(
     }
 
     Line::from(spans)
+}
+
+fn render_project_group_row(title: &str, width: usize) -> Line<'static> {
+    let header = format!("-- {title}");
+    let fill_len = width.saturating_sub(header.len());
+    let mut text = header;
+    text.push_str(&"-".repeat(fill_len));
+    Line::from(Span::styled(
+        truncate_text(&text, width),
+        Style::default()
+            .fg(COLOR_SUCCESS)
+            .add_modifier(Modifier::BOLD),
+    ))
 }
 
 fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
@@ -1128,7 +1142,7 @@ fn append_relations(lines: &mut Vec<Line<'static>>, relations: &crate::task::Tas
     if !relations.project_tasks.is_empty() {
         any = true;
         lines.push(Line::from(vec![
-            label_span("Project tasks: "),
+            label_span("Project members: "),
             Span::styled(relations.project_tasks.join(", "), id_style()),
         ]));
     }

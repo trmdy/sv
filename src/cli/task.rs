@@ -2118,7 +2118,10 @@ fn push_task_summary(human: &mut HumanOutput, details: &TaskDetails) {
         human.push_summary("Project", project.clone());
     }
     if !details.relations.project_tasks.is_empty() {
-        human.push_summary("Project tasks", details.relations.project_tasks.join(", "));
+        human.push_summary(
+            "Project members",
+            details.relations.project_tasks.join(", "),
+        );
     }
     if let Some(parent) = details.relations.parent.as_ref() {
         human.push_summary("Parent", parent.clone());
