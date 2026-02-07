@@ -36,6 +36,8 @@ const EVENT_POLL_MS: u64 = 120;
 const WATCH_DEBOUNCE_MS: u64 = 200;
 const CLEAR_PARENT_ID: &str = "<none>";
 const CLEAR_PARENT_TITLE: &str = "No parent";
+const CLEAR_EPIC_FILTER_ID: &str = "<all>";
+const CLEAR_EPIC_FILTER_TITLE: &str = "All epics";
 
 enum LoadRequest {
     Reload,
@@ -48,6 +50,7 @@ enum UiMsg {
         Vec<TaskRecord>,
         HashSet<String>,
         Option<String>,
+        HashMap<String, String>,
         HashMap<String, String>,
     ),
     LoadError(String),
@@ -85,6 +88,12 @@ pub(crate) struct DeleteConfirmState {
     pub(crate) title: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListMode {
+    Tasks,
+    Epics,
+}
+
 #[derive(Default, Clone, Copy)]
 struct Viewport {
     width: u16,
@@ -99,11 +108,13 @@ pub struct AppState {
     pub(crate) filter: String,
     pub(crate) filter_active: bool,
     pub(crate) status_filter: Option<String>,
+    pub(crate) epic_filter: Option<String>,
     pub(crate) blocked_ids: HashSet<String>,
     pub(crate) editor: Option<EditorState>,
     pub(crate) priority_picker: Option<PriorityPicker>,
     pub(crate) editor_priority_picker: Option<PriorityPicker>,
     pub(crate) parent_picker: Option<TaskPicker>,
+    pub(crate) epic_picker: Option<TaskPicker>,
     pub(crate) children_picker: Option<MultiTaskPicker>,
     pub(crate) blocks_picker: Option<MultiTaskPicker>,
     pub(crate) blocked_by_picker: Option<MultiTaskPicker>,
@@ -111,6 +122,8 @@ pub struct AppState {
     pub(crate) delete_confirm: Option<DeleteConfirmState>,
     pub(crate) info_message: Option<String>,
     pub(crate) help_context: HelpContext,
+    pub(crate) list_mode: ListMode,
+    pub(crate) epic_ids: HashSet<String>,
     detail_cache: HashMap<String, TaskDetails>,
     pending_details: HashSet<String>,
     status_message: Option<String>,
@@ -124,7 +137,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    fn new(store: TaskStore, actor: Option<String>) -> Self {
+    fn new(store: TaskStore, actor: Option<String>, epic_filter: Option<String>) -> Self {
         Self {
             tasks: Vec::new(),
             task_depths: Vec::new(),
@@ -133,11 +146,13 @@ impl AppState {
             filter: String::new(),
             filter_active: false,
             status_filter: None,
+            epic_filter,
             blocked_ids: HashSet::new(),
             editor: None,
             priority_picker: None,
             editor_priority_picker: None,
             parent_picker: None,
+            epic_picker: None,
             children_picker: None,
             blocks_picker: None,
             blocked_by_picker: None,
@@ -145,6 +160,8 @@ impl AppState {
             delete_confirm: None,
             info_message: None,
             help_context: HelpContext::None,
+            list_mode: ListMode::Tasks,
+            epic_ids: HashSet::new(),
             detail_cache: HashMap::new(),
             pending_details: HashSet::new(),
             status_message: None,
@@ -182,6 +199,22 @@ impl AppState {
         self.detail_cache.get(&task.id)
     }
 
+    pub(crate) fn is_epics_mode(&self) -> bool {
+        self.list_mode == ListMode::Epics
+    }
+
+    pub(crate) fn list_title(&self) -> &'static str {
+        if self.is_epics_mode() {
+            "Epics"
+        } else {
+            "Tasks"
+        }
+    }
+
+    pub(crate) fn is_epic_task(&self, task_id: &str) -> bool {
+        self.epic_ids.contains(task_id)
+    }
+
     pub(crate) fn status_line(&self) -> Option<(String, StatusKind)> {
         if let Some(message) = self.status_message.as_ref() {
             return Some((message.clone(), StatusKind::Error));
@@ -194,6 +227,9 @@ impl AppState {
         }
         if !self.filter.is_empty() {
             return Some((format!("filter: {}", self.filter), StatusKind::Info));
+        }
+        if let Some(epic) = self.epic_filter.as_ref() {
+            return Some((format!("epic: {epic}"), StatusKind::Info));
         }
         None
     }
@@ -214,6 +250,9 @@ impl AppState {
             return "y confirm delete  esc cancel".to_string();
         }
         if self.parent_picker.is_some() {
+            return "type to filter  j/k move  enter apply  esc cancel".to_string();
+        }
+        if self.epic_picker.is_some() {
             return "type to filter  j/k move  enter apply  esc cancel".to_string();
         }
         if self.children_picker.is_some()
@@ -237,10 +276,28 @@ impl AppState {
         if self.filter_active {
             return "type filter  backspace delete  tab status  enter done  esc clear".to_string();
         }
-        "j/k move  enter details  ? help  esc/q quit".to_string()
+        "j/k move  / filter  x epic filter  v view mode  enter details  ? help  esc/q quit"
+            .to_string()
     }
 
     pub(crate) fn task_count_summary(&self) -> String {
+        if self.is_epics_mode() {
+            let closed_statuses = &self.config.closed_statuses;
+            let mut current = 0usize;
+            let mut completed = 0usize;
+            for task in &self.tasks {
+                if !self.is_epic_task(&task.id) {
+                    continue;
+                }
+                if closed_statuses.iter().any(|status| status == &task.status) {
+                    completed += 1;
+                } else {
+                    current += 1;
+                }
+            }
+            return format!("current epics: {current}  completed epics: {completed}");
+        }
+
         let open_status = self.config.default_status.as_str();
         let closed_statuses = &self.config.closed_statuses;
         let mut open = 0usize;
@@ -290,6 +347,33 @@ impl AppState {
         options
     }
 
+    fn epic_picker_options(&self) -> Vec<TaskOption> {
+        let mut options = Vec::new();
+        options.push(TaskOption {
+            id: CLEAR_EPIC_FILTER_ID.to_string(),
+            title: CLEAR_EPIC_FILTER_TITLE.to_string(),
+        });
+        for task in &self.tasks {
+            if !self.is_epic_task(&task.id) {
+                continue;
+            }
+            options.push(TaskOption {
+                id: task.id.clone(),
+                title: task.title.clone(),
+            });
+        }
+        options.sort_by(|left, right| {
+            if left.id == CLEAR_EPIC_FILTER_ID {
+                std::cmp::Ordering::Less
+            } else if right.id == CLEAR_EPIC_FILTER_ID {
+                std::cmp::Ordering::Greater
+            } else {
+                left.id.cmp(&right.id)
+            }
+        });
+        options
+    }
+
     fn status_options(&self, include_all: bool) -> Vec<String> {
         let mut options = Vec::new();
         if include_all {
@@ -300,8 +384,14 @@ impl AppState {
     }
 
     fn apply_filter(&mut self, previous_id: Option<String>) {
-        self.filtered =
-            model::filter_task_indices(&self.tasks, &self.filter, self.status_filter.as_deref());
+        self.filtered = model::filter_task_indices(
+            &self.tasks,
+            &self.filter,
+            self.status_filter.as_deref(),
+            self.epic_filter.as_deref(),
+            &self.epic_ids,
+            self.is_epics_mode(),
+        );
         self.selected = model::select_by_id(&self.tasks, &self.filtered, previous_id.as_deref());
     }
 
@@ -336,6 +426,10 @@ impl AppState {
         self.status_filter = status;
     }
 
+    fn set_epic_filter(&mut self, epic: Option<String>) {
+        self.epic_filter = epic;
+    }
+
     fn set_error(&mut self, message: String) {
         self.status_message = Some(message);
         self.info_message = None;
@@ -355,7 +449,11 @@ impl AppState {
 
     fn list_jump(&self) -> isize {
         let mut height = self.viewport.height.saturating_sub(4);
-        if self.filter_active || !self.filter.is_empty() || self.status_filter.is_some() {
+        if self.filter_active
+            || !self.filter.is_empty()
+            || self.status_filter.is_some()
+            || self.epic_filter.is_some()
+        {
             height = height.saturating_sub(2);
         }
         let jump = (height / 2).max(1);
@@ -363,7 +461,7 @@ impl AppState {
     }
 }
 
-pub fn run(store: TaskStore) -> Result<()> {
+pub fn run(store: TaskStore, epic_filter: Option<String>) -> Result<()> {
     let actor = actor::resolve_actor_optional(Some(store.storage().workspace_root()), None)?;
     let (ui_tx, ui_rx) = mpsc::channel();
     let (req_tx, req_rx) = mpsc::channel();
@@ -377,7 +475,7 @@ pub fn run(store: TaskStore) -> Result<()> {
         ));
     }
 
-    let mut app = AppState::new(store, actor);
+    let mut app = AppState::new(store, actor, epic_filter);
     run_terminal(&mut app, ui_rx, req_tx)
 }
 
@@ -546,12 +644,20 @@ fn split_editor_command(value: &str) -> Vec<String> {
 
 fn handle_ui_msg(app: &mut AppState, msg: UiMsg, req_tx: &Sender<LoadRequest>) {
     match msg {
-        UiMsg::DataLoaded(mut tasks, blocked_ids, blocked_error, parent_by_child) => {
+        UiMsg::DataLoaded(
+            mut tasks,
+            blocked_ids,
+            blocked_error,
+            parent_by_child,
+            _epic_by_task,
+        ) => {
             model::sort_tasks(&mut tasks, &app.config, &blocked_ids);
             let (tasks, depths) = model::nest_tasks(tasks, &parent_by_child);
+            let (tasks, depths, epic_ids) = model::group_tasks_by_epic(tasks, depths);
             let previous_id = app.selected_task().map(|task| task.id.clone());
             app.tasks = tasks;
             app.task_depths = depths;
+            app.epic_ids = epic_ids;
             app.blocked_ids = blocked_ids;
             app.detail_cache.clear();
             app.pending_details.clear();
@@ -680,6 +786,34 @@ fn handle_key(
         return false;
     }
 
+    if app.epic_picker.is_some() {
+        let mut picker = app.epic_picker.take().unwrap();
+        let action = picker.handle_key(key);
+        match action {
+            TaskPickerAction::None => {
+                app.epic_picker = Some(picker);
+            }
+            TaskPickerAction::Cancel => {
+                app.epic_picker = None;
+            }
+            TaskPickerAction::Confirm => {
+                app.epic_picker = None;
+                if let Some(option) = picker.selected_option() {
+                    let next_epic = if option.id == CLEAR_EPIC_FILTER_ID {
+                        None
+                    } else {
+                        Some(option.id.clone())
+                    };
+                    app.set_epic_filter(next_epic);
+                    let previous = app.selected_task().map(|task| task.id.clone());
+                    app.apply_filter(previous);
+                    app.queue_detail_load(req_tx);
+                }
+            }
+        }
+        return false;
+    }
+
     if app.children_picker.is_some() {
         let mut picker = app.children_picker.take().unwrap();
         let action = picker.handle_key(key);
@@ -776,6 +910,7 @@ fn handle_key(
         if app.editor.is_none()
             && app.status_picker.is_none()
             && app.parent_picker.is_none()
+            && app.epic_picker.is_none()
             && app.children_picker.is_none()
             && app.blocks_picker.is_none()
             && app.blocked_by_picker.is_none()
@@ -998,6 +1133,25 @@ fn handle_key(
             app.filter_active = true;
             false
         }
+        KeyCode::Char('x') => {
+            let mut picker = TaskPicker::new(app.epic_picker_options());
+            if let Some(current_epic) = app.epic_filter.as_ref() {
+                picker.set_query(current_epic.clone());
+            }
+            app.epic_picker = Some(picker);
+            false
+        }
+        KeyCode::Char('v') => {
+            app.list_mode = if app.is_epics_mode() {
+                ListMode::Tasks
+            } else {
+                ListMode::Epics
+            };
+            let previous = app.selected_task().map(|task| task.id.clone());
+            app.apply_filter(previous);
+            app.queue_detail_load(req_tx);
+            false
+        }
         KeyCode::Char('r') => {
             let _ = req_tx.send(LoadRequest::Reload);
             false
@@ -1101,14 +1255,15 @@ fn spawn_loader(store: TaskStore, req_rx: Receiver<LoadRequest>, ui_tx: Sender<U
             match req {
                 LoadRequest::Reload => match store.list(None) {
                     Ok(tasks) => {
-                        let (blocked_ids, blocked_error, parent_by_child) =
+                        let (blocked_ids, blocked_error, parent_by_child, epic_by_task) =
                             match store.blocked_and_parents() {
-                                Ok((blocked_ids, parent_by_child)) => {
-                                    (blocked_ids, None, parent_by_child)
+                                Ok((blocked_ids, parent_by_child, epic_by_task)) => {
+                                    (blocked_ids, None, parent_by_child, epic_by_task)
                                 }
                                 Err(err) => (
                                     HashSet::new(),
                                     Some(format!("ready calc error: {err}")),
+                                    HashMap::new(),
                                     HashMap::new(),
                                 ),
                             };
@@ -1117,6 +1272,7 @@ fn spawn_loader(store: TaskStore, req_rx: Receiver<LoadRequest>, ui_tx: Sender<U
                             blocked_ids,
                             blocked_error,
                             parent_by_child,
+                            epic_by_task,
                         ));
                     }
                     Err(err) => {

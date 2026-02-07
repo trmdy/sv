@@ -61,7 +61,10 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
         render_priority_modal(frame, area, picker);
     }
     if let Some(picker) = app.parent_picker.as_ref() {
-        render_task_picker_modal(frame, area, picker);
+        render_task_picker_modal(frame, area, picker, "Parent");
+    }
+    if let Some(picker) = app.epic_picker.as_ref() {
+        render_task_picker_modal(frame, area, picker, "Epic Filter");
     }
     if let Some(picker) = app.children_picker.as_ref() {
         render_multi_picker_modal(frame, area, picker, "Children");
@@ -98,7 +101,11 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
         help_lines.len() + 1
     };
 
-    if app.filter_active || !app.filter.is_empty() || app.status_filter.is_some() {
+    if app.filter_active
+        || !app.filter.is_empty()
+        || app.status_filter.is_some()
+        || app.epic_filter.is_some()
+    {
         let filter_label = if app.filter_active && app.filter.is_empty() {
             "filter: _".to_string()
         } else if app.filter.is_empty() {
@@ -110,17 +117,25 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
             Some(value) => format!("status: {value}"),
             None => "status: all".to_string(),
         };
+        let epic_label = match app.epic_filter.as_deref() {
+            Some(value) => format!("epic: {value}"),
+            None => "epic: all".to_string(),
+        };
         lines.push(Line::from(vec![
             Span::styled(filter_label, Style::default().fg(COLOR_INFO)),
             Span::raw("  "),
             Span::styled(status_label, Style::default().fg(COLOR_WARNING)),
+            Span::raw("  "),
+            Span::styled(epic_label, Style::default().fg(COLOR_ACCENT)),
         ]));
         lines.push(Line::from(""));
     }
 
     if app.filtered.is_empty() {
-        if !app.filter.is_empty() || app.status_filter.is_some() {
+        if !app.filter.is_empty() || app.status_filter.is_some() || app.epic_filter.is_some() {
             lines.push(Line::from("No matches"));
+        } else if app.is_epics_mode() {
+            lines.push(Line::from("No epics"));
         } else {
             lines.push(Line::from("No tasks"));
         }
@@ -140,7 +155,15 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 let selected = app.selected == Some(idx);
                 let ready = app.is_task_ready(task);
                 let depth = app.task_depths.get(idx).copied().unwrap_or(0);
-                lines.push(render_list_row(task, selected, ready, depth, content_width));
+                let is_epic = app.is_epic_task(&task.id);
+                lines.push(render_list_row(
+                    task,
+                    selected,
+                    ready,
+                    depth,
+                    content_width,
+                    is_epic,
+                ));
             }
         }
     }
@@ -154,7 +177,7 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Tasks")
+                .title(app.list_title())
                 .border_style(Style::default().fg(COLOR_BORDER_LIST)),
         )
         .wrap(Wrap { trim: true });
@@ -284,7 +307,7 @@ fn render_status_modal(frame: &mut Frame, area: Rect, picker: &StatusPicker, tit
     frame.render_widget(widget, modal);
 }
 
-fn render_task_picker_modal(frame: &mut Frame, area: Rect, picker: &TaskPicker) {
+fn render_task_picker_modal(frame: &mut Frame, area: Rect, picker: &TaskPicker, title: &str) {
     let content_width = area.width.saturating_sub(6).min(72);
     let max_height = area.height.saturating_sub(6).max(8);
     let list_height = max_height.saturating_sub(6) as usize;
@@ -342,7 +365,7 @@ fn render_task_picker_modal(frame: &mut Frame, area: Rect, picker: &TaskPicker) 
         Style::default().fg(COLOR_MUTED_DARK),
     )));
     let widget = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title("Parent"))
+        .block(Block::default().borders(Borders::ALL).title(title))
         .wrap(Wrap { trim: true });
     frame.render_widget(widget, modal);
 }
@@ -684,6 +707,8 @@ fn build_list_help_lines(width: usize) -> Vec<Line<'static>> {
         help_line("s", "change status", width),
         help_line("b", "blocked by", width),
         help_line("/", "filter tasks", width),
+        help_line("x", "epic filter", width),
+        help_line("v", "toggle tasks/epics view", width),
         help_line("tab", "status filter while filtering", width),
         help_line("r", "reload tasks", width),
         help_line("ctrl+d/u", "page down/up", width),
@@ -815,6 +840,7 @@ fn render_list_row(
     ready: bool,
     depth: usize,
     width: usize,
+    is_epic: bool,
 ) -> Line<'static> {
     let status_label = format_status_label(&task.status);
     let status_text = pad_text_center(&status_label, STATUS_WIDTH);
@@ -826,7 +852,14 @@ fn render_list_row(
         String::new()
     };
     let indent_width = indent_prefix.len();
-    let used = STATUS_WIDTH + READY_WIDTH + ID_WIDTH + PRIORITY_WIDTH + 5 + indent_width;
+    let epic_marker_width = if is_epic { 2 } else { 0 };
+    let used = STATUS_WIDTH
+        + READY_WIDTH
+        + ID_WIDTH
+        + PRIORITY_WIDTH
+        + 5
+        + indent_width
+        + epic_marker_width;
     let title_width = width.saturating_sub(used);
     let title = truncate_text(&task.title, title_width);
 
@@ -856,8 +889,16 @@ fn render_list_row(
         priority_span,
         Span::raw(" "),
         Span::styled(indent_prefix, Style::default().fg(COLOR_MUTED_DARK)),
-        Span::raw(title),
     ];
+    if is_epic {
+        spans.push(Span::styled(
+            "E ",
+            Style::default()
+                .fg(COLOR_ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans.push(Span::raw(title));
 
     if selected {
         for span in &mut spans {
@@ -903,6 +944,12 @@ fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
+    if let Some(epic) = task.epic.as_deref() {
+        lines.push(Line::from(vec![
+            label_span("Epic: "),
+            Span::styled(epic.to_string(), id_style()),
+        ]));
+    }
     lines.push(Line::from(vec![
         label_span("Updated: "),
         Span::styled(
@@ -974,6 +1021,13 @@ fn append_relations(lines: &mut Vec<Line<'static>>, relations: &crate::task::Tas
         lines.push(Line::from(vec![
             label_span("Parent: "),
             Span::styled(parent.to_string(), id_style()),
+        ]));
+    }
+    if !relations.epic_tasks.is_empty() {
+        any = true;
+        lines.push(Line::from(vec![
+            label_span("Epic tasks: "),
+            Span::styled(relations.epic_tasks.join(", "), id_style()),
         ]));
     }
     if !relations.children.is_empty() {

@@ -99,6 +99,100 @@ pub fn nest_tasks(
     (nested, depths)
 }
 
+pub fn group_tasks_by_epic(
+    tasks: Vec<TaskRecord>,
+    depths: Vec<usize>,
+) -> (Vec<TaskRecord>, Vec<usize>, HashSet<String>) {
+    if tasks.is_empty() {
+        return (tasks, depths, HashSet::new());
+    }
+
+    let mut index_by_id = HashMap::new();
+    for (idx, task) in tasks.iter().enumerate() {
+        index_by_id.insert(task.id.clone(), idx);
+    }
+
+    let all_epic_ids: HashSet<String> = tasks.iter().filter_map(|task| task.epic.clone()).collect();
+    let epic_ids: HashSet<String> = all_epic_ids
+        .iter()
+        .filter(|id| index_by_id.contains_key(*id))
+        .cloned()
+        .collect();
+    if epic_ids.is_empty() {
+        return (tasks, depths, epic_ids);
+    }
+
+    let mut members_by_epic: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, task) in tasks.iter().enumerate() {
+        let Some(epic) = task.epic.as_ref() else {
+            continue;
+        };
+        if task.id == *epic {
+            continue;
+        }
+        members_by_epic.entry(epic.clone()).or_default().push(idx);
+    }
+    for members in members_by_epic.values_mut() {
+        members.sort_unstable();
+    }
+
+    let mut epic_order: Vec<(usize, String)> = epic_ids
+        .iter()
+        .map(|epic| {
+            let order_key = index_by_id
+                .get(epic)
+                .copied()
+                .or_else(|| {
+                    members_by_epic
+                        .get(epic)
+                        .and_then(|ids| ids.first().copied())
+                })
+                .unwrap_or(usize::MAX);
+            (order_key, epic.clone())
+        })
+        .collect();
+    epic_order.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+    let mut slots: Vec<Option<TaskRecord>> = tasks.into_iter().map(Some).collect();
+    let mut grouped_tasks = Vec::with_capacity(slots.len());
+    let mut grouped_depths = Vec::with_capacity(slots.len());
+    let mut consumed = HashSet::new();
+
+    for (_, epic_id) in epic_order {
+        if let Some(&epic_idx) = index_by_id.get(&epic_id) {
+            if consumed.insert(epic_idx) {
+                if let Some(task) = slots[epic_idx].take() {
+                    grouped_tasks.push(task);
+                    grouped_depths.push(0);
+                }
+            }
+        }
+        if let Some(member_indices) = members_by_epic.get(&epic_id) {
+            for idx in member_indices {
+                if !consumed.insert(*idx) {
+                    continue;
+                }
+                if let Some(task) = slots[*idx].take() {
+                    grouped_tasks.push(task);
+                    grouped_depths.push(depths.get(*idx).copied().unwrap_or(0) + 1);
+                }
+            }
+        }
+    }
+
+    for (idx, depth) in depths.into_iter().enumerate() {
+        if !consumed.insert(idx) {
+            continue;
+        }
+        if let Some(task) = slots[idx].take() {
+            grouped_tasks.push(task);
+            grouped_depths.push(depth);
+        }
+    }
+
+    (grouped_tasks, grouped_depths, epic_ids)
+}
+
 fn fuzzy_match(value: &str, query: &str) -> bool {
     if query.is_empty() {
         return true;
@@ -120,14 +214,30 @@ pub fn filter_task_indices(
     tasks: &[TaskRecord],
     query: &str,
     status_filter: Option<&str>,
+    epic_filter: Option<&str>,
+    epic_ids: &HashSet<String>,
+    epics_only: bool,
 ) -> Vec<usize> {
     let query_norm = normalize_text(query);
     let status_norm = status_filter.map(normalize_status);
+    let epic_norm = epic_filter.map(normalize_text);
     let mut indices = Vec::new();
 
     for (idx, task) in tasks.iter().enumerate() {
+        if epics_only && !epic_ids.contains(&task.id) {
+            continue;
+        }
+
         if let Some(status) = status_norm.as_deref() {
             if normalize_status(&task.status) != status {
+                continue;
+            }
+        }
+
+        if let Some(epic) = epic_norm.as_deref() {
+            let task_id = normalize_text(&task.id);
+            let task_epic = task.epic.as_deref().map(normalize_text);
+            if task_id != epic && task_epic.as_deref() != Some(epic) {
                 continue;
             }
         }
@@ -196,6 +306,7 @@ mod tests {
             created_by: None,
             updated_by: None,
             body: None,
+            epic: None,
             workspace_id: None,
             workspace: None,
             branch: None,
@@ -215,10 +326,10 @@ mod tests {
             task("sv-aaa", "Fix Sync", "open", "P2", now),
             task("sv-bbb", "Add watcher", "open", "P2", now),
         ];
-        let indices = filter_task_indices(&tasks, "SYNC", None);
+        let indices = filter_task_indices(&tasks, "SYNC", None, None, &HashSet::new(), false);
         assert_eq!(indices, vec![0]);
 
-        let indices = filter_task_indices(&tasks, "watch", None);
+        let indices = filter_task_indices(&tasks, "watch", None, None, &HashSet::new(), false);
         assert_eq!(indices, vec![1]);
     }
 
@@ -229,8 +340,27 @@ mod tests {
             task("sv-aaa", "Fix Sync", "open", "P2", now),
             task("sv-bbb", "Fix Sync", "closed", "P2", now),
         ];
-        let indices = filter_task_indices(&tasks, "sync", Some("open"));
+        let indices =
+            filter_task_indices(&tasks, "sync", Some("open"), None, &HashSet::new(), false);
         assert_eq!(indices, vec![0]);
+    }
+
+    #[test]
+    fn filter_supports_epic_and_epics_only_mode() {
+        let now = Utc::now();
+        let mut epic = task("sv-epic", "Epic", "open", "P1", now);
+        epic.epic = None;
+        let mut child = task("sv-child", "Child", "open", "P2", now);
+        child.epic = Some("sv-epic".to_string());
+        let tasks = vec![epic, child];
+        let mut epic_ids = HashSet::new();
+        epic_ids.insert("sv-epic".to_string());
+
+        let filtered = filter_task_indices(&tasks, "", None, Some("sv-epic"), &epic_ids, false);
+        assert_eq!(filtered, vec![0, 1]);
+
+        let epic_only = filter_task_indices(&tasks, "", None, None, &epic_ids, true);
+        assert_eq!(epic_only, vec![0]);
     }
 
     #[test]
@@ -276,6 +406,23 @@ mod tests {
         let ids: Vec<&str> = nested.iter().map(|task| task.id.as_str()).collect();
         assert_eq!(ids, vec!["sv-parent", "sv-child", "sv-grand", "sv-root"]);
         assert_eq!(depths, vec![0, 1, 2, 0]);
+    }
+
+    #[test]
+    fn group_tasks_by_epic_places_members_under_epic() {
+        let now = Utc::now();
+        let mut epic = task("sv-epic", "Epic", "open", "P1", now);
+        epic.epic = None;
+        let mut child = task("sv-child", "Child", "open", "P2", now);
+        child.epic = Some("sv-epic".to_string());
+        let root = task("sv-root", "Root", "open", "P2", now);
+
+        let (grouped, depths, epic_ids) =
+            group_tasks_by_epic(vec![root, child, epic], vec![0, 0, 0]);
+        let ids: Vec<&str> = grouped.iter().map(|task| task.id.as_str()).collect();
+        assert_eq!(ids, vec!["sv-epic", "sv-child", "sv-root"]);
+        assert_eq!(depths, vec![0, 1, 0]);
+        assert!(epic_ids.contains("sv-epic"));
     }
 
     #[test]
