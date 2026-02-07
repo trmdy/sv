@@ -58,6 +58,8 @@ pub enum EventKind {
     TaskClosed,
     TaskDeleted,
     TaskCommented,
+    TaskEpicSet,
+    TaskEpicCleared,
     TaskParentSet,
     TaskParentCleared,
     TaskBlocked,
