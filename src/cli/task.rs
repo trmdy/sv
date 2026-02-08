@@ -14,6 +14,7 @@ use crate::git;
 use crate::integrations::forge as forge_integration;
 use crate::output::{emit_success, HumanOutput, OutputOptions};
 use crate::project::ProjectStore;
+use crate::repo_stats;
 use crate::storage::{Storage, WorkspaceEntry};
 use crate::task::{
     CompactionPolicy, TaskDetails, TaskEvent, TaskEventType, TaskRecord, TaskRelations, TaskStore,
@@ -68,6 +69,12 @@ pub struct CountOptions {
     pub actor: Option<String>,
     pub updated_since: Option<String>,
     pub limit: Option<usize>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct StatsOptions {
     pub repo: Option<PathBuf>,
     pub json: bool,
     pub quiet: bool,
@@ -525,6 +532,84 @@ pub fn run_count(options: CountOptions) -> Result<()> {
         },
         "task count",
         &output,
+        Some(&human),
+    )
+}
+
+pub fn run_stats(options: StatsOptions) -> Result<()> {
+    let ctx = load_context(options.repo, None, false)?;
+    let project_store = ProjectStore::new(ctx.store.storage().clone());
+    let stats = repo_stats::compute(&ctx.store, &project_store)?;
+
+    let mut human = HumanOutput::new("Repo stats");
+    human.push_summary("Tasks", stats.tasks_total.to_string());
+    human.push_summary("Ready", stats.ready_tasks.to_string());
+    human.push_summary("Blocked", stats.blocked_tasks.to_string());
+    human.push_summary("Epics", stats.epics_total.to_string());
+    human.push_summary("Project groups", stats.project_groups_total.to_string());
+    human.push_summary("Project entities", stats.project_entities_total.to_string());
+    human.push_summary("Events", stats.events_total.to_string());
+    human.push_summary("Task events", stats.task_events_total.to_string());
+    human.push_summary("Project events", stats.project_events_total.to_string());
+    human.push_summary(
+        "SV data size",
+        repo_stats::format_bytes(stats.disk_usage_bytes),
+    );
+    human.push_summary(
+        "Compaction removable events",
+        stats.compaction.removable_events.to_string(),
+    );
+    human.push_summary(
+        "Compaction estimated savings",
+        format!(
+            "{} ({:.2}%)",
+            repo_stats::format_bytes(stats.compaction.estimated_bytes_saved),
+            stats.compaction.estimated_percent_saved
+        ),
+    );
+    human.push_summary(
+        "Throughput 1h",
+        format!(
+            "{:.2}/h completed, {:.2}/h created",
+            stats.throughput_last_hour.completed_per_hour,
+            stats.throughput_last_hour.created_per_hour
+        ),
+    );
+    human.push_summary(
+        "Throughput 24h",
+        format!(
+            "{:.2}/h completed, {:.2}/h created",
+            stats.throughput_last_24_hours.completed_per_hour,
+            stats.throughput_last_24_hours.created_per_hour
+        ),
+    );
+
+    if !stats.task_statuses.is_empty() {
+        human.push_detail(format!(
+            "Task statuses: {}",
+            format_status_counts(&stats.task_statuses)
+        ));
+    }
+    if !stats.epic_statuses.is_empty() {
+        human.push_detail(format!(
+            "Epic statuses: {}",
+            format_status_counts(&stats.epic_statuses)
+        ));
+    }
+    if !stats.project_group_statuses.is_empty() {
+        human.push_detail(format!(
+            "Project group statuses: {}",
+            format_status_counts(&stats.project_group_statuses)
+        ));
+    }
+
+    emit_success(
+        OutputOptions {
+            json: options.json,
+            quiet: options.quiet,
+        },
+        "task stats",
+        &stats,
         Some(&human),
     )
 }
@@ -2051,6 +2136,14 @@ fn open_task_event_sink(events: Option<&str>) -> Result<(Option<crate::events::E
     let sink = destination.as_ref().map(|dest| dest.open()).transpose()?;
     let events_to_stdout = matches!(destination, Some(EventDestination::Stdout));
     Ok((sink, events_to_stdout))
+}
+
+fn format_status_counts(counts: &[repo_stats::StatusCount]) -> String {
+    counts
+        .iter()
+        .map(|entry| format!("{}={}", entry.status, entry.count))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn emit_task_event(

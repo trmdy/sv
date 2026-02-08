@@ -20,6 +20,7 @@ use tempfile::NamedTempFile;
 use crate::actor;
 use crate::error::{Error, Result};
 use crate::project::ProjectStore;
+use crate::repo_stats::{self, RepoStats};
 use crate::task::{TaskDetails, TaskRecord, TaskStore};
 
 use super::actions::{self, ActionOutcome, EditTaskInput, NewTaskInput};
@@ -56,6 +57,7 @@ enum UiMsg {
         HashMap<String, String>,
         HashMap<String, String>,
         HashMap<String, String>,
+        Option<RepoStats>,
     ),
     LoadError(String),
     DetailsLoaded(String, TaskDetails),
@@ -97,6 +99,7 @@ pub(crate) enum ListMode {
     Tasks,
     Epics,
     Projects,
+    Stats,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -142,10 +145,12 @@ pub struct AppState {
     pub(crate) epic_ids: HashSet<String>,
     pub(crate) project_ids: HashSet<String>,
     pub(crate) project_names: HashMap<String, String>,
+    pub(crate) repo_stats: Option<RepoStats>,
     pub(crate) task_project_ids: Vec<Option<String>>,
     tasks_mode_state: SavedListState,
     epics_mode_state: SavedListState,
     projects_mode_state: SavedListState,
+    stats_mode_state: SavedListState,
     detail_cache: HashMap<String, TaskDetails>,
     pending_details: HashSet<String>,
     status_message: Option<String>,
@@ -200,10 +205,12 @@ impl AppState {
             epic_ids: HashSet::new(),
             project_ids: HashSet::new(),
             project_names: HashMap::new(),
+            repo_stats: None,
             task_project_ids: Vec::new(),
             tasks_mode_state,
             epics_mode_state: SavedListState::default(),
             projects_mode_state: SavedListState::default(),
+            stats_mode_state: SavedListState::default(),
             detail_cache: HashMap::new(),
             pending_details: HashSet::new(),
             status_message: None,
@@ -249,11 +256,17 @@ impl AppState {
         self.list_mode == ListMode::Projects
     }
 
+    pub(crate) fn is_stats_mode(&self) -> bool {
+        self.list_mode == ListMode::Stats
+    }
+
     pub(crate) fn list_title(&self) -> &'static str {
         if self.is_epics_mode() {
             "Epics"
         } else if self.is_projects_mode() {
             "Projects"
+        } else if self.is_stats_mode() {
+            "Stats"
         } else {
             "Tasks"
         }
@@ -264,6 +277,7 @@ impl AppState {
             ListMode::Tasks => &mut self.tasks_mode_state,
             ListMode::Epics => &mut self.epics_mode_state,
             ListMode::Projects => &mut self.projects_mode_state,
+            ListMode::Stats => &mut self.stats_mode_state,
         }
     }
 
@@ -272,6 +286,7 @@ impl AppState {
             ListMode::Tasks => &self.tasks_mode_state,
             ListMode::Epics => &self.epics_mode_state,
             ListMode::Projects => &self.projects_mode_state,
+            ListMode::Stats => &self.stats_mode_state,
         }
     }
 
@@ -408,11 +423,25 @@ impl AppState {
         if self.filter_active {
             return "type filter  backspace delete  tab status  enter done  esc clear".to_string();
         }
-        "j/k move  / filter  x epic filter  y project filter  1/2/3 views  v cycle  enter details  ? help  esc/q quit"
+        if self.is_stats_mode() {
+            return "1/2/3/4 views  v cycle  r reload  ? help  esc/q quit".to_string();
+        }
+        "j/k move  / filter  x epic filter  y project filter  1/2/3/4 views  v cycle  enter details  ? help  esc/q quit"
             .to_string()
     }
 
     pub(crate) fn task_count_summary(&self) -> String {
+        if self.is_stats_mode() {
+            if let Some(stats) = self.repo_stats.as_ref() {
+                return format!(
+                    "tasks: {}  events: {}  size: {}",
+                    stats.tasks_total,
+                    stats.events_total,
+                    repo_stats::format_bytes(stats.disk_usage_bytes)
+                );
+            }
+            return "stats: loading...".to_string();
+        }
         if self.is_epics_mode() {
             let closed_statuses = &self.config.closed_statuses;
             let mut current = 0usize;
@@ -548,6 +577,11 @@ impl AppState {
     }
 
     fn apply_filter(&mut self, previous_id: Option<String>) {
+        if self.is_stats_mode() {
+            self.filtered.clear();
+            self.selected = None;
+            return;
+        }
         self.filtered = model::filter_task_indices(
             &self.tasks,
             &self.filter,
@@ -563,6 +597,9 @@ impl AppState {
     }
 
     fn move_selection(&mut self, delta: isize, req_tx: &Sender<LoadRequest>) {
+        if self.is_stats_mode() {
+            return;
+        }
         if self.filtered.is_empty() {
             self.selected = None;
             return;
@@ -578,6 +615,9 @@ impl AppState {
     }
 
     fn queue_detail_load(&mut self, req_tx: &Sender<LoadRequest>) {
+        if self.is_stats_mode() {
+            return;
+        }
         let Some(task) = self.selected_task() else {
             return;
         };
@@ -827,6 +867,7 @@ fn handle_ui_msg(app: &mut AppState, msg: UiMsg, req_tx: &Sender<LoadRequest>) {
             parent_by_child,
             _epic_by_task,
             project_names,
+            repo_stats,
         ) => {
             model::sort_tasks(&mut tasks, &app.config, &blocked_ids);
             let (tasks, depths) = model::nest_tasks(tasks, &parent_by_child);
@@ -840,6 +881,7 @@ fn handle_ui_msg(app: &mut AppState, msg: UiMsg, req_tx: &Sender<LoadRequest>) {
             app.epic_ids = epic_ids;
             app.project_ids = project_ids;
             app.project_names = project_names;
+            app.repo_stats = repo_stats;
             app.blocked_ids = blocked_ids;
             app.detail_cache.clear();
             app.pending_details.clear();
@@ -1341,10 +1383,16 @@ fn handle_key(
             false
         }
         KeyCode::Char('/') => {
+            if app.is_stats_mode() {
+                return false;
+            }
             app.filter_active = true;
             false
         }
         KeyCode::Char('x') => {
+            if app.is_stats_mode() {
+                return false;
+            }
             let mut picker = TaskPicker::new(app.epic_picker_options());
             if let Some(current_epic) = app.epic_filter.as_ref() {
                 picker.set_query(current_epic.clone());
@@ -1353,6 +1401,9 @@ fn handle_key(
             false
         }
         KeyCode::Char('y') => {
+            if app.is_stats_mode() {
+                return false;
+            }
             let mut picker = TaskPicker::new(app.project_picker_options());
             if let Some(current_project) = app.project_filter.as_ref() {
                 picker.set_query(current_project.clone());
@@ -1364,7 +1415,8 @@ fn handle_key(
             let next = match app.list_mode {
                 ListMode::Tasks => ListMode::Epics,
                 ListMode::Epics => ListMode::Projects,
-                ListMode::Projects => ListMode::Tasks,
+                ListMode::Projects => ListMode::Stats,
+                ListMode::Stats => ListMode::Tasks,
             };
             app.set_list_mode(next, req_tx);
             false
@@ -1379,6 +1431,10 @@ fn handle_key(
         }
         KeyCode::Char('3') => {
             app.set_list_mode(ListMode::Projects, req_tx);
+            false
+        }
+        KeyCode::Char('4') => {
+            app.set_list_mode(ListMode::Stats, req_tx);
             false
         }
         KeyCode::Char('r') => {
@@ -1496,21 +1552,32 @@ fn spawn_loader(store: TaskStore, req_rx: Receiver<LoadRequest>, ui_tx: Sender<U
                                     HashMap::new(),
                                 ),
                             };
-                        let project_names =
-                            match ProjectStore::new(store.storage().clone()).list(false) {
-                                Ok(projects) => projects
-                                    .into_iter()
-                                    .map(|project| (project.id, project.name))
-                                    .collect::<HashMap<_, _>>(),
-                                Err(err) => {
-                                    let message = format!("project load error: {err}");
-                                    blocked_error = Some(match blocked_error {
-                                        Some(existing) => format!("{existing}; {message}"),
-                                        None => message,
-                                    });
-                                    HashMap::new()
-                                }
-                            };
+                        let project_store = ProjectStore::new(store.storage().clone());
+                        let project_names = match project_store.list(false) {
+                            Ok(projects) => projects
+                                .into_iter()
+                                .map(|project| (project.id, project.name))
+                                .collect::<HashMap<_, _>>(),
+                            Err(err) => {
+                                let message = format!("project load error: {err}");
+                                blocked_error = Some(match blocked_error {
+                                    Some(existing) => format!("{existing}; {message}"),
+                                    None => message,
+                                });
+                                HashMap::new()
+                            }
+                        };
+                        let repo_stats = match repo_stats::compute(&store, &project_store) {
+                            Ok(stats) => Some(stats),
+                            Err(err) => {
+                                let message = format!("stats load error: {err}");
+                                blocked_error = Some(match blocked_error {
+                                    Some(existing) => format!("{existing}; {message}"),
+                                    None => message,
+                                });
+                                None
+                            }
+                        };
                         let _ = ui_tx.send(UiMsg::DataLoaded(
                             tasks,
                             blocked_ids,
@@ -1518,6 +1585,7 @@ fn spawn_loader(store: TaskStore, req_rx: Receiver<LoadRequest>, ui_tx: Sender<U
                             parent_by_child,
                             epic_by_task,
                             project_names,
+                            repo_stats,
                         ));
                     }
                     Err(err) => {

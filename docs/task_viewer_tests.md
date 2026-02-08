@@ -29,6 +29,7 @@ Unit tests for pure logic and cache behavior. No heavy end-to-end UI tests.
 - Selection adjusts when filter changes to exclude selected.
 - Epics-only mode shows only tasks that own epic groups.
 - Projects-only mode shows only tasks that own project groups.
+- Stats mode renders without requiring a selected task.
 
 ### Cache invalidation
 - Width change invalidates list + detail caches.
@@ -55,6 +56,7 @@ Unit tests for pure logic and cache behavior. No heavy end-to-end UI tests.
 - Live reload during sync.
 - Large list scroll smoothness.
 - Watch error banner and manual reload recovery.
+- Stats view values update after task/project changes.
 
 ## Notes
 - Initial tests should live beside model logic (e.g., `src/ui/task_viewer/model.rs`).

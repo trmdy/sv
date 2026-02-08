@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
+use crate::repo_stats;
 use crate::task::{TaskDetails, TaskRecord};
 
 use super::app::{AppState, DeleteConfirmState, HelpContext, ListMode, StatusKind};
@@ -50,7 +51,9 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
 
     render_tabs(frame, app, tabs);
 
-    if app.is_narrow() && !app.show_detail {
+    if app.is_stats_mode() {
+        render_stats(frame, app, main);
+    } else if app.is_narrow() && !app.show_detail {
         render_list(frame, app, main);
     } else if app.is_narrow() {
         render_detail(frame, app, main);
@@ -121,6 +124,15 @@ fn render_tabs(frame: &mut Frame, app: &AppState, area: Rect) {
             app.list_mode == ListMode::Projects,
             app.project_ids.len(),
             COLOR_SUCCESS,
+        ),
+        (
+            "4 Stats",
+            app.list_mode == ListMode::Stats,
+            app.repo_stats
+                .as_ref()
+                .map(|stats| stats.events_total)
+                .unwrap_or(0),
+            COLOR_MAGENTA,
         ),
     ];
 
@@ -313,6 +325,122 @@ fn render_detail(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 .border_style(Style::default().fg(COLOR_BORDER_DETAIL)),
         )
         .wrap(Wrap { trim: false });
+    frame.render_widget(widget, area);
+}
+
+fn render_stats(frame: &mut Frame, app: &AppState, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let Some(stats) = app.repo_stats.as_ref() else {
+        lines.push(Line::from(Span::styled(
+            "Loading stats...",
+            Style::default().fg(COLOR_MUTED_DARK),
+        )));
+        let widget = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Repo Stats")
+                    .border_style(Style::default().fg(COLOR_BORDER_DETAIL)),
+            )
+            .wrap(Wrap { trim: true });
+        frame.render_widget(widget, area);
+        return;
+    };
+
+    lines.push(Line::from(Span::styled(
+        "Overview",
+        Style::default()
+            .fg(COLOR_ACCENT)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(format!(
+        "tasks: {}  epics: {}  project groups: {}  project entities: {}",
+        stats.tasks_total,
+        stats.epics_total,
+        stats.project_groups_total,
+        stats.project_entities_total
+    )));
+    lines.push(Line::from(format!(
+        "ready: {}  blocked: {}  with workspace: {}",
+        stats.ready_tasks, stats.blocked_tasks, stats.tasks_with_workspace
+    )));
+    lines.push(Line::from(""));
+
+    lines.push(Line::from(Span::styled(
+        "Status Breakdown",
+        Style::default().fg(COLOR_INFO).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(format!(
+        "tasks: {}",
+        format_status_counts(&stats.task_statuses)
+    )));
+    lines.push(Line::from(format!(
+        "epics: {}",
+        format_status_counts(&stats.epic_statuses)
+    )));
+    lines.push(Line::from(format!(
+        "project groups: {}",
+        format_status_counts(&stats.project_group_statuses)
+    )));
+    lines.push(Line::from(""));
+
+    lines.push(Line::from(Span::styled(
+        "Events / Storage",
+        Style::default()
+            .fg(COLOR_WARNING)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(format!(
+        "events total: {}  task events: {}  project events: {}",
+        stats.events_total, stats.task_events_total, stats.project_events_total
+    )));
+    lines.push(Line::from(format!(
+        "data size: {}  task logs: {}  project logs: {}",
+        repo_stats::format_bytes(stats.disk_usage_bytes),
+        repo_stats::format_bytes(stats.task_log_bytes),
+        repo_stats::format_bytes(stats.project_log_bytes),
+    )));
+    lines.push(Line::from(format!(
+        "compaction estimate: remove {} events, save {} ({:.2}%)",
+        stats.compaction.removable_events,
+        repo_stats::format_bytes(stats.compaction.estimated_bytes_saved),
+        stats.compaction.estimated_percent_saved
+    )));
+    lines.push(Line::from(""));
+
+    lines.push(Line::from(Span::styled(
+        "Throughput",
+        Style::default()
+            .fg(COLOR_SUCCESS)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(format!(
+        "last 1h: completed {} ({:.2}/h), created {} ({:.2}/h)",
+        stats.throughput_last_hour.tasks_completed,
+        stats.throughput_last_hour.completed_per_hour,
+        stats.throughput_last_hour.tasks_created,
+        stats.throughput_last_hour.created_per_hour,
+    )));
+    lines.push(Line::from(format!(
+        "last 24h: completed {} ({:.2}/h), created {} ({:.2}/h)",
+        stats.throughput_last_24_hours.tasks_completed,
+        stats.throughput_last_24_hours.completed_per_hour,
+        stats.throughput_last_24_hours.tasks_created,
+        stats.throughput_last_24_hours.created_per_hour,
+    )));
+    lines.push(Line::from(format!(
+        "avg events per task: {:.2}",
+        stats.avg_task_events
+    )));
+
+    let widget = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Repo Stats")
+                .border_style(Style::default().fg(COLOR_BORDER_DETAIL)),
+        )
+        .wrap(Wrap { trim: true });
     frame.render_widget(widget, area);
 }
 
@@ -812,8 +940,8 @@ fn build_list_help_lines(width: usize) -> Vec<Line<'static>> {
         help_line("/", "filter tasks", width),
         help_line("x", "epic filter", width),
         help_line("y", "project filter", width),
-        help_line("1/2/3", "switch tasks/epics/projects view", width),
-        help_line("v", "toggle tasks/epics/projects view", width),
+        help_line("1/2/3/4", "switch tasks/epics/projects/stats view", width),
+        help_line("v", "toggle tasks/epics/projects/stats view", width),
         help_line("tab", "status filter while filtering", width),
         help_line("r", "reload tasks", width),
         help_line("ctrl+d/u", "page down/up", width),
@@ -821,6 +949,17 @@ fn build_list_help_lines(width: usize) -> Vec<Line<'static>> {
         help_line("q/esc", "quit", width),
         help_line("?", "hide help", width),
     ]
+}
+
+fn format_status_counts(counts: &[repo_stats::StatusCount]) -> String {
+    if counts.is_empty() {
+        return "none".to_string();
+    }
+    counts
+        .iter()
+        .map(|entry| format!("{}={}", entry.status, entry.count))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn build_editor_help_lines(width: usize) -> Vec<Line<'static>> {

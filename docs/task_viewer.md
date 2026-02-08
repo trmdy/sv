@@ -12,7 +12,7 @@
 
 ## Non-goals (v1)
 - No web UI.
-- No kanban, graph, or analytics dashboards.
+- No kanban or graph dashboards.
 
 ## CLI entrypoint
 - `sv task` with no subcommand launches the TUI.
@@ -22,7 +22,7 @@
 
 ## Layout
 - Default: split view.
-  - Top row: tabs with counts (`Tasks`, `Epics`, `Projects`).
+  - Top row: tabs with counts (`Tasks`, `Epics`, `Projects`, `Stats`).
   - Left: task list.
   - Right: detail panel.
 - Narrow terminals: single pane list, detail opens in place.
@@ -30,6 +30,7 @@
   - Tasks mode counts: open/ready/closed (`ready = open + not blocked`).
   - Epics mode counts: current/completed epics.
   - Projects mode counts: total projects (groupings).
+  - Stats mode counts: tasks/events/size snapshot.
   - Projects mode list: one row per project grouping (not all member tasks).
 
 ## Wireframes
@@ -73,6 +74,12 @@ Narrow view:
 - Body text, then comments (chronological).
 - Markdown render optional; fallback to wrapped plain text.
 
+## Stats screen
+- Repo snapshot: tasks, epics, project groups/entities.
+- Status breakdowns for tasks, epics, and project groups.
+- Event totals (task + project), storage usage, compaction estimate.
+- Throughput windows: last 1h + last 24h (created/completed and per-hour rates).
+
 ## Keymap (v1)
 - `j/k` or arrows: move selection.
 - `enter`: toggle detail in narrow mode.
@@ -82,8 +89,9 @@ Narrow view:
 - `r`: manual reload.
 - `x`: epic filter picker.
 - `y`: project filter picker.
-- `v`: toggle list mode (tasks/epics/projects).
-- `1/2/3`: jump directly to tasks/epics/projects view.
+- `4`: jump directly to stats view.
+- `v`: toggle list mode (tasks/epics/projects/stats).
+- `1/2/3/4`: jump directly to tasks/epics/projects/stats view.
 - `n`: new task wizard.
 - `e`: inline edit task.
 - `p`: change task priority.
@@ -98,8 +106,8 @@ Narrow view:
 | `/` | Focus filter |
 | `x` | Epic filter picker |
 | `y` | Project filter picker |
-| `1` / `2` / `3` | Switch tasks/epics/projects view |
-| `v` | Toggle tasks/epics/projects view |
+| `1` / `2` / `3` / `4` | Switch tasks/epics/projects/stats view |
+| `v` | Toggle tasks/epics/projects/stats view |
 | `esc` | Clear filter |
 | `o` | Filter open |
 | `i` | Filter in_progress |

@@ -74,7 +74,7 @@ Commands (high level)
   sv lease ls|who|renew|break|wait Inspect/manage leases
   sv protect status|add|off|rm Protected paths
   sv commit                 Commit with sv checks + Change-Id
-  sv task new|list|ready|count|show|start|status|priority|edit|close|delete|comment|parent|epic|project|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
+  sv task new|list|ready|count|stats|show|start|status|priority|edit|close|delete|comment|parent|epic|project|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
   sv project new|list|show|edit|archive|unarchive|sync|migrate-legacy  Projects
   sv forge hooks install     Configure Forge task hooks
   sv risk                   Overlap/conflict analysis
@@ -204,6 +204,7 @@ Commands
   sv task list [--status] [--priority] [--epic] [--project] [--workspace] [--updated-by] [--updated-since] [--limit]
   sv task ready [--priority] [--epic] [--project] [--workspace] [--updated-by] [--updated-since] [--limit]
   sv task count [--ready] [--status] [--priority] [--epic] [--project] [--workspace] [--updated-by] [--updated-since] [--limit]
+  sv task stats
   sv task show <id>
   sv task start <id>
   sv task status <id> <status>
@@ -1182,6 +1183,15 @@ Examples:
         #[arg(long)]
         limit: Option<usize>,
     },
+
+    /// Show repo task/project/event stats
+    #[command(long_about = r#"Show repository task statistics.
+
+Examples:
+  sv task stats
+  sv task stats --json
+"#)]
+    Stats,
 
     /// Show task details
     #[command(long_about = r#"Show a task by ID.
@@ -2989,6 +2999,9 @@ impl Cli {
                         json,
                         quiet,
                     }),
+                    TaskCommands::Stats => {
+                        task::run_stats(task::StatsOptions { repo, json, quiet })
+                    }
                     TaskCommands::Show { id } => task::run_show(task::ShowOptions {
                         id,
                         repo,

@@ -45,6 +45,7 @@ pub mod output;
 pub mod project;
 pub mod protect;
 pub mod refs;
+pub mod repo_stats;
 pub mod risk;
 pub mod selector;
 pub mod storage;
