@@ -44,6 +44,7 @@ Quickstart (typical agent flow)
 Environment
   SV_REPO   -> default repo path (otherwise current directory)
   SV_ACTOR  -> default actor name for leases/ops
+  SV_ACTOR_FILTER -> default actor filter for task list/ready/count
 
 Storage layout
   .sv.toml           Config (tracked)
@@ -200,9 +201,9 @@ Quickstart
 Commands
   sv task [--epic <id>] [--project <id>]  Open task TUI
   sv task new "<title>" [--status] [--priority P0-P4] [--body]
-  sv task list [--status] [--priority] [--epic] [--project] [--workspace] [--actor] [--updated-since] [--limit]
-  sv task ready [--priority] [--epic] [--project] [--workspace] [--actor] [--updated-since] [--limit]
-  sv task count [--ready] [--status] [--priority] [--epic] [--project] [--workspace] [--actor] [--updated-since] [--limit]
+  sv task list [--status] [--priority] [--epic] [--project] [--workspace] [--updated-by] [--updated-since] [--limit]
+  sv task ready [--priority] [--epic] [--project] [--workspace] [--updated-by] [--updated-since] [--limit]
+  sv task count [--ready] [--status] [--priority] [--epic] [--project] [--workspace] [--updated-by] [--updated-since] [--limit]
   sv task show <id>
   sv task start <id>
   sv task status <id> <status>
@@ -1039,7 +1040,7 @@ Examples:
   sv task list --epic sv-abc
   sv task list --project sv-proj
   sv task list --workspace agent1
-  sv task list --actor alice --updated-since 2025-01-01T00:00:00Z
+  sv task list --updated-by alice --updated-since 2025-01-01T00:00:00Z
   sv task list --limit 20
 "#)]
     #[command(visible_alias = "ls")]
@@ -1065,7 +1066,11 @@ Examples:
         workspace: Option<String>,
 
         /// Filter by last updated actor
-        #[arg(long)]
+        #[arg(
+            long = "updated-by",
+            env = "SV_ACTOR_FILTER",
+            id = "task_list_updated_by"
+        )]
         actor: Option<String>,
 
         /// Filter by updated timestamp (RFC3339)
@@ -1086,7 +1091,7 @@ Examples:
   sv task ready --epic sv-abc
   sv task ready --project sv-proj
   sv task ready --workspace agent1
-  sv task ready --actor alice --updated-since 2025-01-01T00:00:00Z
+  sv task ready --updated-by alice --updated-since 2025-01-01T00:00:00Z
   sv task ready --limit 20
 "#)]
     Ready {
@@ -1107,7 +1112,11 @@ Examples:
         workspace: Option<String>,
 
         /// Filter by last updated actor
-        #[arg(long)]
+        #[arg(
+            long = "updated-by",
+            env = "SV_ACTOR_FILTER",
+            id = "task_ready_updated_by"
+        )]
         actor: Option<String>,
 
         /// Filter by updated timestamp (RFC3339)
@@ -1130,7 +1139,7 @@ Examples:
   sv task count --epic sv-abc
   sv task count --project sv-proj
   sv task count --workspace agent1
-  sv task count --actor alice --updated-since 2025-01-01T00:00:00Z
+  sv task count --updated-by alice --updated-since 2025-01-01T00:00:00Z
 "#)]
     Count {
         /// Count ready tasks only (open and unblocked)
@@ -1158,7 +1167,11 @@ Examples:
         workspace: Option<String>,
 
         /// Filter by last updated actor
-        #[arg(long)]
+        #[arg(
+            long = "updated-by",
+            env = "SV_ACTOR_FILTER",
+            id = "task_count_updated_by"
+        )]
         actor: Option<String>,
 
         /// Filter by updated timestamp (RFC3339)
