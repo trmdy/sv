@@ -232,6 +232,21 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
         for pos in start..end {
             let idx = app.filtered[pos];
             if let Some(task) = app.tasks.get(idx) {
+                if app.is_projects_mode() {
+                    let Some(project_id) = app.task_project_id(idx) else {
+                        continue;
+                    };
+                    let title = app.project_title_for_id(Some(project_id));
+                    let members = app.project_member_count(project_id);
+                    lines.push(render_project_list_row(
+                        project_id,
+                        &title,
+                        members,
+                        app.selected == Some(idx),
+                        content_width,
+                    ));
+                    continue;
+                }
                 if app.list_mode == ListMode::Tasks {
                     let current_project = app.task_project_id(idx).map(|value| value.to_string());
                     if current_project != previous_project {
@@ -1012,7 +1027,39 @@ fn render_project_group_row(title: &str, width: usize) -> Line<'static> {
     ))
 }
 
+fn render_project_list_row(
+    project_id: &str,
+    title: &str,
+    members: usize,
+    selected: bool,
+    width: usize,
+) -> Line<'static> {
+    let members_text = format!("{members} task{}", if members == 1 { "" } else { "s" });
+    let used = ID_WIDTH + members_text.len() + 3;
+    let title_width = width.saturating_sub(used);
+    let mut spans = vec![
+        Span::styled(pad_text(project_id, ID_WIDTH), id_style()),
+        Span::raw(" "),
+        Span::styled(members_text, Style::default().fg(COLOR_WARNING)),
+        Span::raw(" "),
+        Span::styled(
+            truncate_text(title, title_width),
+            Style::default().fg(COLOR_TEXT),
+        ),
+    ];
+    if selected {
+        for span in &mut spans {
+            span.style = span.style.add_modifier(Modifier::REVERSED);
+        }
+    }
+    Line::from(spans)
+}
+
 fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
+    if app.is_projects_mode() {
+        return build_project_detail_lines(app, width);
+    }
+
     let Some(task) = app.selected_task() else {
         return vec![Line::from("No task selected")];
     };
@@ -1117,6 +1164,72 @@ fn build_detail_lines(app: &mut AppState, width: usize) -> Vec<Line<'static>> {
     }
 
     app.cache.detail.insert(cache_key, lines.clone());
+    lines
+}
+
+fn build_project_detail_lines(app: &AppState, width: usize) -> Vec<Line<'static>> {
+    let Some(selected_idx) = app.selected else {
+        return vec![Line::from("No project selected")];
+    };
+    let Some(project_id) = app.task_project_id(selected_idx) else {
+        return vec![Line::from("No project selected")];
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(vec![
+        label_span("Project: "),
+        Span::styled(app.project_title_for_id(Some(project_id)), id_style()),
+    ]));
+    lines.push(Line::from(vec![
+        label_span("ID: "),
+        Span::styled(project_id.to_string(), id_style()),
+    ]));
+
+    let mut members: Vec<&TaskRecord> = app
+        .tasks
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, task)| {
+            if app.task_project_id(idx) == Some(project_id) {
+                Some(task)
+            } else {
+                None
+            }
+        })
+        .collect();
+    members.sort_by(|left, right| left.id.cmp(&right.id));
+
+    lines.push(Line::from(vec![
+        label_span("Members: "),
+        Span::styled(
+            members.len().to_string(),
+            Style::default().fg(COLOR_WARNING),
+        ),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(section_header("## Tasks"));
+
+    if members.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No tasks assigned.",
+            Style::default().fg(COLOR_MUTED_DARK),
+        )));
+        return lines;
+    }
+
+    let id_width = ID_WIDTH.min(width.saturating_sub(8));
+    let title_width = width.saturating_sub(id_width + 3);
+    for task in members {
+        lines.push(Line::from(vec![
+            Span::styled("- ", Style::default().fg(COLOR_MUTED_DARK)),
+            Span::styled(pad_text(&task.id, id_width), id_style()),
+            Span::raw(" "),
+            Span::styled(
+                truncate_text(&task.title, title_width),
+                Style::default().fg(COLOR_TEXT),
+            ),
+        ]));
+    }
     lines
 }
 

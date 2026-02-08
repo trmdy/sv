@@ -30,6 +30,7 @@
   - Tasks mode counts: open/ready/closed (`ready = open + not blocked`).
   - Epics mode counts: current/completed epics.
   - Projects mode counts: total projects (groupings).
+  - Projects mode list: one row per project grouping (not all member tasks).
 
 ## Wireframes
 Split view (default):

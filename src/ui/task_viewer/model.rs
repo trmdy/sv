@@ -535,6 +535,24 @@ pub fn filter_task_indices(
         }
     }
 
+    if projects_only {
+        let mut seen = HashSet::new();
+        let mut collapsed = Vec::new();
+        for idx in indices {
+            let Some(project_id) = effective_projects
+                .as_ref()
+                .and_then(|projects| projects.get(idx))
+                .and_then(|project| project.as_ref())
+            else {
+                continue;
+            };
+            if seen.insert(project_id.clone()) {
+                collapsed.push(idx);
+            }
+        }
+        return collapsed;
+    }
+
     indices
 }
 
@@ -805,7 +823,36 @@ mod tests {
             false,
             true,
         );
-        assert_eq!(filtered, vec![0, 1]);
+        assert_eq!(filtered, vec![0]);
+    }
+
+    #[test]
+    fn projects_only_mode_shows_one_row_per_project() {
+        let now = Utc::now();
+        let mut epic_a = task("sv-epic-a", "Epic A", "open", "P1", now);
+        epic_a.project = Some("prj-alpha".to_string());
+        let mut child_a = task("sv-child-a", "Child A", "open", "P2", now);
+        child_a.epic = Some("sv-epic-a".to_string());
+
+        let mut epic_b = task("sv-epic-b", "Epic B", "open", "P1", now);
+        epic_b.project = Some("prj-beta".to_string());
+        let mut child_b = task("sv-child-b", "Child B", "open", "P2", now);
+        child_b.epic = Some("sv-epic-b".to_string());
+
+        let tasks = vec![epic_a, child_a, epic_b, child_b];
+        let project_ids = HashSet::from(["prj-alpha".to_string(), "prj-beta".to_string()]);
+        let filtered = filter_task_indices(
+            &tasks,
+            "",
+            None,
+            None,
+            None,
+            &HashSet::new(),
+            &project_ids,
+            false,
+            true,
+        );
+        assert_eq!(filtered, vec![0, 2]);
     }
 
     #[test]

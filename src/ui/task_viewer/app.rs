@@ -330,6 +330,13 @@ impl AppState {
         }
     }
 
+    pub(crate) fn project_member_count(&self, project_id: &str) -> usize {
+        self.task_project_ids
+            .iter()
+            .filter(|candidate| candidate.as_deref() == Some(project_id))
+            .count()
+    }
+
     pub(crate) fn status_line(&self) -> Option<(String, StatusKind)> {
         if let Some(message) = self.status_message.as_ref() {
             return Some((message.clone(), StatusKind::Error));
