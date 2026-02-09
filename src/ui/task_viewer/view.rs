@@ -231,54 +231,75 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
             .saturating_sub(2)
             .saturating_sub(lines.len() as u16)
             .saturating_sub(help_reserved as u16) as usize;
-        let selected_pos = app
-            .selected
-            .and_then(|idx| app.filtered.iter().position(|candidate| *candidate == idx));
-        let (start, end) = list_window(app.filtered.len(), selected_pos, list_height);
-        let mut previous_project = if app.list_mode == ListMode::Tasks && start > 0 {
-            app.task_project_id(app.filtered[start - 1])
-                .map(|value| value.to_string())
-        } else {
-            None
-        };
-        for pos in start..end {
-            let idx = app.filtered[pos];
-            if let Some(task) = app.tasks.get(idx) {
-                if app.is_projects_mode() {
-                    let Some(project_id) = app.task_project_id(idx) else {
-                        continue;
-                    };
-                    let title = app.project_title_for_id(Some(project_id));
-                    let members = app.project_member_count(project_id);
-                    lines.push(render_project_list_row(
-                        project_id,
-                        &title,
-                        members,
-                        app.selected == Some(idx),
-                        content_width,
-                    ));
-                    continue;
-                }
-                if app.list_mode == ListMode::Tasks {
-                    let current_project = app.task_project_id(idx).map(|value| value.to_string());
-                    if current_project != previous_project {
-                        let title = app.project_title_for_id(current_project.as_deref());
+        if app.list_mode == ListMode::Tasks {
+            let projects: Vec<Option<String>> = app
+                .filtered
+                .iter()
+                .map(|idx| app.task_project_id(*idx).map(|value| value.to_string()))
+                .collect();
+            let (rows, selected_row) =
+                build_grouped_task_rows(&app.filtered, app.selected, &projects);
+            let (start, end) = list_window(rows.len(), selected_row, list_height);
+            for row in rows.into_iter().skip(start).take(end.saturating_sub(start)) {
+                match row {
+                    GroupedTaskRow::Header(project_id) => {
+                        let title = app.project_title_for_id(project_id.as_deref());
                         lines.push(render_project_group_row(&title, content_width));
                     }
-                    previous_project = current_project;
+                    GroupedTaskRow::Task(idx) => {
+                        if let Some(task) = app.tasks.get(idx) {
+                            let selected = app.selected == Some(idx);
+                            let ready = app.is_task_ready(task);
+                            let depth = app.task_depths.get(idx).copied().unwrap_or(0);
+                            let is_epic = app.is_epic_task(&task.id);
+                            lines.push(render_list_row(
+                                task,
+                                selected,
+                                ready,
+                                depth,
+                                content_width,
+                                is_epic,
+                            ));
+                        }
+                    }
                 }
-                let selected = app.selected == Some(idx);
-                let ready = app.is_task_ready(task);
-                let depth = app.task_depths.get(idx).copied().unwrap_or(0);
-                let is_epic = app.is_epic_task(&task.id);
-                lines.push(render_list_row(
-                    task,
-                    selected,
-                    ready,
-                    depth,
-                    content_width,
-                    is_epic,
-                ));
+            }
+        } else {
+            let selected_pos = app
+                .selected
+                .and_then(|idx| app.filtered.iter().position(|candidate| *candidate == idx));
+            let (start, end) = list_window(app.filtered.len(), selected_pos, list_height);
+            for pos in start..end {
+                let idx = app.filtered[pos];
+                if let Some(task) = app.tasks.get(idx) {
+                    if app.is_projects_mode() {
+                        let Some(project_id) = app.task_project_id(idx) else {
+                            continue;
+                        };
+                        let title = app.project_title_for_id(Some(project_id));
+                        let members = app.project_member_count(project_id);
+                        lines.push(render_project_list_row(
+                            project_id,
+                            &title,
+                            members,
+                            app.selected == Some(idx),
+                            content_width,
+                        ));
+                        continue;
+                    }
+                    let selected = app.selected == Some(idx);
+                    let ready = app.is_task_ready(task);
+                    let depth = app.task_depths.get(idx).copied().unwrap_or(0);
+                    let is_epic = app.is_epic_task(&task.id);
+                    lines.push(render_list_row(
+                        task,
+                        selected,
+                        ready,
+                        depth,
+                        content_width,
+                        is_epic,
+                    ));
+                }
             }
         }
     }
@@ -1466,6 +1487,36 @@ fn append_comments(lines: &mut Vec<Line<'static>>, details: &TaskDetails) {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GroupedTaskRow {
+    Header(Option<String>),
+    Task(usize),
+}
+
+fn build_grouped_task_rows(
+    filtered: &[usize],
+    selected_task_idx: Option<usize>,
+    project_ids: &[Option<String>],
+) -> (Vec<GroupedTaskRow>, Option<usize>) {
+    let mut rows = Vec::new();
+    let mut selected_row = None;
+    let mut previous_project: Option<&str> = None;
+    for (pos, idx) in filtered.iter().copied().enumerate() {
+        let current_project = project_ids.get(pos).and_then(|value| value.as_deref());
+        if current_project != previous_project {
+            rows.push(GroupedTaskRow::Header(
+                current_project.map(|value| value.to_string()),
+            ));
+        }
+        if selected_task_idx == Some(idx) {
+            selected_row = Some(rows.len());
+        }
+        rows.push(GroupedTaskRow::Task(idx));
+        previous_project = current_project;
+    }
+    (rows, selected_row)
+}
+
 fn list_window(total: usize, selected: Option<usize>, height: usize) -> (usize, usize) {
     if total == 0 || height == 0 {
         return (0, 0);
@@ -1587,4 +1638,52 @@ fn id_style() -> Style {
     Style::default()
         .fg(COLOR_MUTED)
         .add_modifier(Modifier::BOLD)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_grouped_task_rows, list_window, GroupedTaskRow};
+
+    #[test]
+    fn grouped_rows_count_headers_when_computing_selected_row() {
+        let filtered = vec![10, 11, 12, 13];
+        let projects = vec![
+            Some("alpha".to_string()),
+            Some("alpha".to_string()),
+            Some("beta".to_string()),
+            Some("gamma".to_string()),
+        ];
+
+        let (rows, selected_row) = build_grouped_task_rows(&filtered, Some(13), &projects);
+
+        assert_eq!(
+            rows,
+            vec![
+                GroupedTaskRow::Header(Some("alpha".to_string())),
+                GroupedTaskRow::Task(10),
+                GroupedTaskRow::Task(11),
+                GroupedTaskRow::Header(Some("beta".to_string())),
+                GroupedTaskRow::Task(12),
+                GroupedTaskRow::Header(Some("gamma".to_string())),
+                GroupedTaskRow::Task(13),
+            ]
+        );
+        assert_eq!(selected_row, Some(6));
+    }
+
+    #[test]
+    fn selected_row_stays_inside_window_with_group_headers() {
+        let filtered = vec![10, 11, 12, 13];
+        let projects = vec![
+            Some("alpha".to_string()),
+            Some("alpha".to_string()),
+            Some("beta".to_string()),
+            Some("gamma".to_string()),
+        ];
+        let (rows, selected_row) = build_grouped_task_rows(&filtered, Some(13), &projects);
+        let (start, end) = list_window(rows.len(), selected_row, 4);
+
+        let selected_row = selected_row.expect("selected row should exist");
+        assert!(selected_row >= start && selected_row < end);
+    }
 }

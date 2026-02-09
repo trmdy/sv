@@ -27,6 +27,7 @@ Unit tests for pure logic and cache behavior. No heavy end-to-end UI tests.
 - Selection preserved by task id across reload.
 - If selected id missing, select first visible or none.
 - Selection adjusts when filter changes to exclude selected.
+- Grouped task list window counts project-header rows so selected task stays visible.
 - Epics-only mode shows only tasks that own epic groups.
 - Projects-only mode shows only tasks that own project groups.
 - Stats mode renders without requiring a selected task.
