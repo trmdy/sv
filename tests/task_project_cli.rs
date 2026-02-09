@@ -148,3 +148,49 @@ fn project_groupings_cannot_be_closed_or_set_to_closed_status(
 
     Ok(())
 }
+
+#[test]
+fn parent_set_rejects_project_group_parent() -> Result<(), Box<dyn std::error::Error>> {
+    let repo = TestRepo::init()?;
+
+    let project_id = new_task(&repo, "Project");
+    let member_id = new_task(&repo, "Member");
+    let child_id = new_task(&repo, "Child");
+
+    sv_cmd(&repo)
+        .args(["task", "project", "set", &member_id, &project_id])
+        .assert()
+        .success();
+
+    sv_cmd(&repo)
+        .args(["task", "parent", "set", &child_id, &project_id])
+        .assert()
+        .failure()
+        .stderr(contains("tasks cannot be children of project groups"));
+
+    Ok(())
+}
+
+#[test]
+fn project_set_rejects_legacy_project_with_children() -> Result<(), Box<dyn std::error::Error>> {
+    let repo = TestRepo::init()?;
+
+    let project_id = new_task(&repo, "Project");
+    let child_id = new_task(&repo, "Child");
+    let member_id = new_task(&repo, "Member");
+
+    sv_cmd(&repo)
+        .args(["task", "parent", "set", &child_id, &project_id])
+        .assert()
+        .success();
+
+    sv_cmd(&repo)
+        .args(["task", "project", "set", &member_id, &project_id])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "project groups cannot have child tasks; clear parent links first",
+        ));
+
+    Ok(())
+}

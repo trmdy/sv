@@ -48,6 +48,9 @@ pub fn create_task(
         .and_then(non_empty)
         .map(|value| store.resolve_task_id(&value))
         .transpose()?;
+    if let Some(parent_id) = parent.as_deref() {
+        ensure_parent_accepts_children(store, parent_id)?;
+    }
 
     let children = resolve_children(store, &input.children)?;
     let blocks = resolve_task_list(store, &input.blocks)?;
@@ -244,6 +247,7 @@ pub fn edit_task(
                         "parent cannot match child".to_string(),
                     ));
                 }
+                ensure_parent_accepts_children(store, &parent)?;
                 let mut event = TaskEvent::new(TaskEventType::TaskParentSet, task_id.to_string());
                 event.actor = actor.clone();
                 event.related_task_id = Some(parent);
@@ -261,6 +265,9 @@ pub fn edit_task(
         }
     }
 
+    if !children_to_add.is_empty() {
+        ensure_parent_accepts_children(store, task_id)?;
+    }
     for child in children_to_add {
         if child == task_id {
             return Err(Error::InvalidArgument(
@@ -539,6 +546,16 @@ fn is_project_grouping(store: &TaskStore, task_id: &str) -> Result<bool> {
     Ok(!relations.project_tasks.is_empty())
 }
 
+fn ensure_parent_accepts_children(store: &TaskStore, parent_id: &str) -> Result<()> {
+    let relations = store.relations(parent_id)?;
+    if relations.project_tasks.is_empty() {
+        return Ok(());
+    }
+    Err(Error::InvalidArgument(
+        "tasks cannot be children of project groups".to_string(),
+    ))
+}
+
 fn diff_relation_sets(current: &[String], desired: &[String]) -> (Vec<String>, Vec<String>) {
     let current_set: HashSet<String> = current.iter().cloned().collect();
     let desired_set: HashSet<String> = desired.iter().cloned().collect();
@@ -780,5 +797,71 @@ mod tests {
         assert!(err
             .to_string()
             .contains("project groups cannot be completed"));
+    }
+
+    #[test]
+    fn edit_task_rejects_project_group_parent() {
+        let (_dir, store) = setup_store();
+        let project_id = seed_task(&store, "Project");
+        let member_id = seed_task(&store, "Member");
+        let child_id = seed_task(&store, "Child");
+
+        let mut set_project = TaskEvent::new(TaskEventType::TaskProjectSet, member_id);
+        set_project.related_task_id = Some(project_id.clone());
+        store.append_event(set_project).expect("project set");
+
+        let err = edit_task(
+            &store,
+            None,
+            &child_id,
+            EditTaskInput {
+                title: "Child".to_string(),
+                priority: None,
+                parent: Some(project_id),
+                children: Vec::new(),
+                blocks: Vec::new(),
+                blocked_by: Vec::new(),
+                body: "".to_string(),
+            },
+        )
+        .expect_err("edit should fail");
+
+        assert!(matches!(err, Error::InvalidArgument(_)));
+        assert!(err
+            .to_string()
+            .contains("tasks cannot be children of project groups"));
+    }
+
+    #[test]
+    fn edit_task_rejects_children_for_project_group() {
+        let (_dir, store) = setup_store();
+        let project_id = seed_task(&store, "Project");
+        let member_id = seed_task(&store, "Member");
+        let child_id = seed_task(&store, "Child");
+
+        let mut set_project = TaskEvent::new(TaskEventType::TaskProjectSet, member_id);
+        set_project.related_task_id = Some(project_id.clone());
+        store.append_event(set_project).expect("project set");
+
+        let err = edit_task(
+            &store,
+            None,
+            &project_id,
+            EditTaskInput {
+                title: "Project".to_string(),
+                priority: None,
+                parent: None,
+                children: vec![child_id],
+                blocks: Vec::new(),
+                blocked_by: Vec::new(),
+                body: "".to_string(),
+            },
+        )
+        .expect_err("edit should fail");
+
+        assert!(matches!(err, Error::InvalidArgument(_)));
+        assert!(err
+            .to_string()
+            .contains("tasks cannot be children of project groups"));
     }
 }

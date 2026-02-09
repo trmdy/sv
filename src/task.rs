@@ -1648,7 +1648,18 @@ fn build_relation_state(events: &[TaskEvent]) -> Result<RelationState> {
     for event in &sorted {
         apply_relation_event(&mut state, event)?;
     }
+    prune_project_group_parent_links(&mut state);
     Ok(state)
+}
+
+fn prune_project_group_parent_links(state: &mut RelationState) {
+    let project_group_ids: HashSet<String> = state.project_by_task.values().cloned().collect();
+    if project_group_ids.is_empty() {
+        return;
+    }
+    state
+        .parent_by_child
+        .retain(|_, parent| !project_group_ids.contains(parent));
 }
 
 fn status_map_from_tasks(tasks: &[TaskRecord]) -> HashMap<String, String> {
@@ -2226,6 +2237,47 @@ mod tests {
     }
 
     #[test]
+    fn relations_ignore_children_for_project_group_parents() {
+        let now = Utc::now();
+        let mut events = Vec::new();
+
+        let mut project = TaskEvent::new(TaskEventType::TaskCreated, "task-project");
+        project.title = Some("Project".to_string());
+        project.timestamp = now;
+        events.push(project);
+
+        let mut member = TaskEvent::new(TaskEventType::TaskCreated, "task-member");
+        member.title = Some("Member".to_string());
+        member.timestamp = now + chrono::Duration::milliseconds(1);
+        events.push(member);
+
+        let mut child = TaskEvent::new(TaskEventType::TaskCreated, "task-child");
+        child.title = Some("Child".to_string());
+        child.timestamp = now + chrono::Duration::milliseconds(2);
+        events.push(child);
+
+        let mut set_project = TaskEvent::new(TaskEventType::TaskProjectSet, "task-member");
+        set_project.related_task_id = Some("task-project".to_string());
+        set_project.timestamp = now + chrono::Duration::milliseconds(3);
+        events.push(set_project);
+
+        let mut set_parent = TaskEvent::new(TaskEventType::TaskParentSet, "task-child");
+        set_parent.related_task_id = Some("task-project".to_string());
+        set_parent.timestamp = now + chrono::Duration::milliseconds(4);
+        events.push(set_parent);
+
+        let child_relations = build_relations("task-child", &events).expect("relations");
+        assert!(child_relations.parent.is_none());
+
+        let project_relations = build_relations("task-project", &events).expect("relations");
+        assert!(project_relations.children.is_empty());
+        assert_eq!(
+            project_relations.project_tasks,
+            vec!["task-member".to_string()]
+        );
+    }
+
+    #[test]
     fn apply_event_sets_and_clears_epic() {
         let config = default_config();
         let mut map = HashMap::new();
@@ -2518,6 +2570,55 @@ mod tests {
         let ready = store.list_ready().expect("list ready");
         let ids: HashSet<String> = ready.into_iter().map(|task| task.id).collect();
         assert!(ids.contains("task-parent"));
+        assert!(ids.contains("task-child"));
+    }
+
+    #[test]
+    fn blocked_project_group_does_not_cascade_to_legacy_children() {
+        let dir = tempdir().expect("tempdir");
+        let repo_root = dir.path().to_path_buf();
+        let storage = Storage::new(repo_root.clone(), repo_root.join(".git"), repo_root.clone());
+        let store = TaskStore::new(storage, TasksConfig::default());
+
+        let now = Utc::now();
+        let mut project = TaskEvent::new(TaskEventType::TaskCreated, "task-project");
+        project.title = Some("Project".to_string());
+        project.timestamp = now;
+        store.append_event(project).expect("create project");
+
+        let mut member = TaskEvent::new(TaskEventType::TaskCreated, "task-member");
+        member.title = Some("Member".to_string());
+        member.timestamp = now + chrono::Duration::milliseconds(1);
+        store.append_event(member).expect("create member");
+
+        let mut child = TaskEvent::new(TaskEventType::TaskCreated, "task-child");
+        child.title = Some("Child".to_string());
+        child.timestamp = now + chrono::Duration::milliseconds(2);
+        store.append_event(child).expect("create child");
+
+        let mut blocker = TaskEvent::new(TaskEventType::TaskCreated, "task-blocker");
+        blocker.title = Some("Blocker".to_string());
+        blocker.timestamp = now + chrono::Duration::milliseconds(3);
+        store.append_event(blocker).expect("create blocker");
+
+        let mut set_project = TaskEvent::new(TaskEventType::TaskProjectSet, "task-member");
+        set_project.related_task_id = Some("task-project".to_string());
+        set_project.timestamp = now + chrono::Duration::milliseconds(4);
+        store.append_event(set_project).expect("set project");
+
+        let mut set_parent = TaskEvent::new(TaskEventType::TaskParentSet, "task-child");
+        set_parent.related_task_id = Some("task-project".to_string());
+        set_parent.timestamp = now + chrono::Duration::milliseconds(5);
+        store.append_event(set_parent).expect("set parent");
+
+        let mut block = TaskEvent::new(TaskEventType::TaskBlocked, "task-blocker");
+        block.related_task_id = Some("task-project".to_string());
+        block.timestamp = now + chrono::Duration::milliseconds(6);
+        store.append_event(block).expect("block project");
+
+        let ready = store.list_ready().expect("list ready");
+        let ids: HashSet<String> = ready.into_iter().map(|task| task.id).collect();
+        assert!(!ids.contains("task-project"));
         assert!(ids.contains("task-child"));
     }
 

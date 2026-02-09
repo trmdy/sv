@@ -1150,6 +1150,7 @@ pub fn run_parent_set(options: ParentSetOptions) -> Result<()> {
             "parent cannot match child".to_string(),
         ));
     }
+    ensure_parent_accepts_children(&ctx.store, &parent)?;
 
     let relations = ctx.store.relations(&child)?;
     if relations.parent.as_deref() == Some(parent.as_str()) {
@@ -1348,6 +1349,9 @@ pub fn run_project_set(options: ProjectSetOptions) -> Result<()> {
         return Err(Error::InvalidArgument(
             "project cannot match task".to_string(),
         ));
+    }
+    if matches!(project_target, ProjectTarget::LegacyTask(_)) {
+        ensure_task_has_no_children(&ctx.store, &project)?;
     }
 
     let details = ctx.store.details(&task)?;
@@ -2248,6 +2252,26 @@ fn ensure_project_group_not_closed(store: &TaskStore, task_id: &str, status: &st
     }
     Err(Error::InvalidArgument(
         "project groups cannot be completed; close member tasks instead".to_string(),
+    ))
+}
+
+fn ensure_parent_accepts_children(store: &TaskStore, parent_id: &str) -> Result<()> {
+    let relations = store.relations(parent_id)?;
+    if relations.project_tasks.is_empty() {
+        return Ok(());
+    }
+    Err(Error::InvalidArgument(
+        "tasks cannot be children of project groups".to_string(),
+    ))
+}
+
+fn ensure_task_has_no_children(store: &TaskStore, task_id: &str) -> Result<()> {
+    let relations = store.relations(task_id)?;
+    if relations.children.is_empty() {
+        return Ok(());
+    }
+    Err(Error::InvalidArgument(
+        "project groups cannot have child tasks; clear parent links first".to_string(),
     ))
 }
 

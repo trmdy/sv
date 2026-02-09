@@ -20,3 +20,6 @@ Add short entries that prevent repeated failures.
 - **Symptom:** `sv task list/show/project set` fails or behaves inconsistently after log corruption with repeated `task_created` for one task.
   **Cause:** duplicate `task_created` events in `.tasks/tasks.jsonl` (same `task_id`, different `event_id`).
   **Fix:** run `sv task doctor`; preview cleanup with `sv task repair --dedupe-creates --dry-run`; apply with `sv task repair --dedupe-creates`; rerun `sv task doctor` to confirm clean log.
+- **Symptom:** task appears indented as a child under a project grouping task in TUI.
+  **Cause:** legacy `task_parent_set` links targeting a task later used as a project group.
+  **Fix:** now blocked for new writes (`sv task parent set` / TUI edit). Legacy links are ignored in relation resolution; optionally clear old links explicitly with `sv task parent clear <child>`.
