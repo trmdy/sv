@@ -72,7 +72,7 @@ older_than = "180d"
 - `sv task list [--status <s>] [--priority <P0-P4>] [--epic <id>] [--project <id>] [--workspace <name|id>] [--actor <name>] [--updated-since <rfc3339>] [--limit <n>] [--json]`
 - `sv task ready [--priority <P0-P4>] [--epic <id>] [--project <id>] [--workspace <name|id>] [--actor <name>] [--updated-since <rfc3339>] [--limit <n>] [--json]`
 - `sv task show <id> [--json]`
-- `sv task start <id>`
+- `sv task start <id> [--takeover]`
 - `sv task status <id> <status>`
 - `sv task priority <id> <P0-P4>`
 - `sv task edit <id> [--title <text>] [--body <text>]`
@@ -109,7 +109,9 @@ older_than = "180d"
 ## Workflows
 - Create task -> status `default_status`.
 - Create task -> priority `P2` unless specified.
-- Start task -> status `in_progress_status`, attach workspace + branch (multiple tasks per workspace allowed).
+- Start task -> status `in_progress_status`, attach workspace + branch.
+- Start ownership is exclusive by default: if another actor already owns an in-progress task, start fails unless `--takeover` is passed.
+- Re-start by the same actor is idempotent (no duplicate `task_started` event).
 - Close task -> status in `closed_statuses`, optional note.
 - Ready task -> status `default_status` and no blockers.
 - Relations: epic, project, parent, blocks, and described relations; use `sv task relations` to inspect.

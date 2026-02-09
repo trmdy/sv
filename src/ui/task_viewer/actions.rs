@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use crate::error::{Error, Result};
-use crate::task::{TaskEvent, TaskEventType, TaskRecord, TaskStore};
+use crate::task::{
+    StartTaskOutcome, StartTaskRequest, TaskEvent, TaskEventType, TaskRecord, TaskStore,
+};
 
 #[derive(Debug, Clone)]
 pub struct NewTaskInput {
@@ -463,6 +465,29 @@ pub fn change_status(
     status: &str,
 ) -> Result<ActionOutcome> {
     store.validate_status(status)?;
+    let in_progress = store.config().in_progress_status.as_str();
+    if status.eq_ignore_ascii_case(in_progress) {
+        let outcome = store.start_task(StartTaskRequest {
+            task_id: task_id.to_string(),
+            actor,
+            workspace_id: None,
+            workspace: None,
+            branch: None,
+            takeover: false,
+        })?;
+        return match outcome {
+            StartTaskOutcome::Started { .. } => Ok(ActionOutcome {
+                changed: true,
+                message: format!("status set to {in_progress}"),
+                task_id: Some(task_id.to_string()),
+            }),
+            StartTaskOutcome::AlreadyInProgressByActor => Ok(ActionOutcome {
+                changed: false,
+                message: "already in progress by you".to_string(),
+                task_id: Some(task_id.to_string()),
+            }),
+        };
+    }
     if is_closed_status(store, status) && is_project_grouping(store, task_id)? {
         return Err(Error::InvalidArgument(
             "project groups cannot be completed; close member tasks instead".to_string(),
@@ -781,6 +806,40 @@ mod tests {
         assert!(outcome.changed);
         let updated = load_task(&store, &task_id).expect("load");
         assert_eq!(updated.status, "in_progress");
+    }
+
+    #[test]
+    fn status_change_to_in_progress_is_idempotent_for_same_actor() {
+        let (_dir, store) = setup_store();
+        let task_id = seed_task(&store, "Keep");
+
+        let first = change_status(&store, Some("alice".to_string()), &task_id, "in_progress")
+            .expect("first start");
+        assert!(first.changed);
+
+        let second = change_status(&store, Some("alice".to_string()), &task_id, "in_progress")
+            .expect("second start");
+        assert!(!second.changed);
+        assert_eq!(second.message, "already in progress by you");
+
+        let details = store.details(&task_id).expect("details");
+        assert_eq!(details.events, 2);
+    }
+
+    #[test]
+    fn status_change_to_in_progress_blocks_other_actor() {
+        let (_dir, store) = setup_store();
+        let task_id = seed_task(&store, "Keep");
+
+        change_status(&store, Some("alice".to_string()), &task_id, "in_progress")
+            .expect("first start");
+
+        let err = change_status(&store, Some("bob".to_string()), &task_id, "in_progress")
+            .expect_err("other actor should be blocked");
+        assert!(matches!(err, Error::InvalidArgument(_)));
+        assert!(err
+            .to_string()
+            .contains("task already in progress by alice; use --takeover"));
     }
 
     #[test]

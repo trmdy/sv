@@ -352,6 +352,25 @@ pub struct CompactionPolicy {
     pub max_log_mb: Option<u64>,
 }
 
+#[derive(Debug, Clone)]
+pub struct StartTaskRequest {
+    pub task_id: String,
+    pub actor: Option<String>,
+    pub workspace_id: Option<String>,
+    pub workspace: Option<String>,
+    pub branch: Option<String>,
+    pub takeover: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum StartTaskOutcome {
+    Started {
+        event: TaskEvent,
+        previous_owner: Option<String>,
+    },
+    AlreadyInProgressByActor,
+}
+
 impl TaskStore {
     pub fn new(storage: Storage, config: TasksConfig) -> Self {
         Self { storage, config }
@@ -398,6 +417,70 @@ impl TaskStore {
         self.apply_event_to_snapshot(&self.tracked_snapshot_path(), &event)?;
         self.apply_event_to_snapshot(&self.shared_snapshot_path(), &event)?;
         Ok(())
+    }
+
+    pub fn start_task(&self, request: StartTaskRequest) -> Result<StartTaskOutcome> {
+        self.ensure_dirs()?;
+
+        let task_id = request.task_id;
+        let actor = normalize_actor(request.actor.as_deref());
+        let takeover = request.takeover;
+        let in_progress = self.config.in_progress_status.clone();
+        let tracked_log_path = self.tracked_log_path();
+        let shared_log_path = self.shared_log_path();
+        let tracked_snapshot_path = self.tracked_snapshot_path();
+        let shared_snapshot_path = self.shared_snapshot_path();
+
+        let lock_path = tracked_log_path.with_extension("lock");
+        let _lock = FileLock::acquire(&lock_path, DEFAULT_LOCK_TIMEOUT_MS)?;
+
+        let tracked = self.load_events(&tracked_log_path)?;
+        let shared = self.load_events(&shared_log_path)?;
+        let mut merged = merge_events(tracked, shared);
+        sort_events(&mut merged);
+        let snapshot = self.build_snapshot(&merged)?;
+
+        let task = snapshot
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .ok_or_else(|| Error::InvalidArgument(format!("task not found: {task_id}")))?;
+
+        let current_owner = normalize_actor(task.started_by.as_deref());
+        if task.status == in_progress {
+            if actor_matches(actor.as_deref(), current_owner.as_deref()) {
+                return Ok(StartTaskOutcome::AlreadyInProgressByActor);
+            }
+            if current_owner.is_some() && !takeover {
+                let owner = current_owner.as_deref().unwrap_or("unknown");
+                return Err(Error::InvalidArgument(format!(
+                    "task already in progress by {owner}; use --takeover to transfer ownership"
+                )));
+            }
+        }
+
+        let mut event = TaskEvent::new(TaskEventType::TaskStarted, task_id);
+        event.actor = actor;
+        event.workspace_id = request.workspace_id;
+        event.workspace = request.workspace;
+        event.branch = request.branch;
+        event.status = Some(in_progress);
+
+        self.storage.append_jsonl(&tracked_log_path, &event)?;
+        self.storage.append_jsonl(&shared_log_path, &event)?;
+        self.apply_event_to_snapshot(&tracked_snapshot_path, &event)?;
+        self.apply_event_to_snapshot(&shared_snapshot_path, &event)?;
+
+        let previous_owner = if task.status == self.config.in_progress_status {
+            current_owner
+        } else {
+            None
+        };
+
+        Ok(StartTaskOutcome::Started {
+            event,
+            previous_owner,
+        })
     }
 
     pub fn list(&self, status: Option<&str>) -> Result<Vec<TaskRecord>> {
@@ -1169,6 +1252,24 @@ fn normalize_priority(priority: &str) -> Result<String> {
         Err(Error::InvalidArgument(format!(
             "unknown task priority '{trimmed}' (expected P0-P4)"
         )))
+    }
+}
+
+fn normalize_actor(value: Option<&str>) -> Option<String> {
+    let value = value?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn actor_matches(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
+        (None, None) => true,
+        _ => false,
     }
 }
 
@@ -2652,6 +2753,131 @@ mod tests {
         let mut counts = HashMap::new();
         counts.insert(3, ulid_space_for_len(3) as usize);
         assert_eq!(TaskStore::select_task_suffix_len(3, &counts), 4);
+    }
+
+    #[test]
+    fn start_task_blocks_other_actor_without_takeover() {
+        let dir = tempdir().expect("tempdir");
+        let repo_root = dir.path().to_path_buf();
+        let storage = Storage::new(repo_root.clone(), repo_root.join(".git"), repo_root.clone());
+        let store = TaskStore::new(storage, TasksConfig::default());
+
+        let mut create = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
+        create.title = Some("Task 1".to_string());
+        store.append_event(create).expect("create");
+
+        let first = store
+            .start_task(StartTaskRequest {
+                task_id: "task-1".to_string(),
+                actor: Some("alice".to_string()),
+                workspace_id: Some("ws-1".to_string()),
+                workspace: Some("main".to_string()),
+                branch: Some("main".to_string()),
+                takeover: false,
+            })
+            .expect("start by alice");
+        assert!(matches!(first, StartTaskOutcome::Started { .. }));
+
+        let err = store
+            .start_task(StartTaskRequest {
+                task_id: "task-1".to_string(),
+                actor: Some("bob".to_string()),
+                workspace_id: Some("ws-1".to_string()),
+                workspace: Some("main".to_string()),
+                branch: Some("main".to_string()),
+                takeover: false,
+            })
+            .expect_err("bob should be blocked");
+        assert!(matches!(err, Error::InvalidArgument(_)));
+        assert!(err
+            .to_string()
+            .contains("task already in progress by alice; use --takeover"));
+    }
+
+    #[test]
+    fn start_task_takeover_transfers_owner() {
+        let dir = tempdir().expect("tempdir");
+        let repo_root = dir.path().to_path_buf();
+        let storage = Storage::new(repo_root.clone(), repo_root.join(".git"), repo_root.clone());
+        let store = TaskStore::new(storage, TasksConfig::default());
+
+        let mut create = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
+        create.title = Some("Task 1".to_string());
+        store.append_event(create).expect("create");
+
+        store
+            .start_task(StartTaskRequest {
+                task_id: "task-1".to_string(),
+                actor: Some("alice".to_string()),
+                workspace_id: Some("ws-1".to_string()),
+                workspace: Some("main".to_string()),
+                branch: Some("main".to_string()),
+                takeover: false,
+            })
+            .expect("start by alice");
+
+        let takeover = store
+            .start_task(StartTaskRequest {
+                task_id: "task-1".to_string(),
+                actor: Some("bob".to_string()),
+                workspace_id: Some("ws-1".to_string()),
+                workspace: Some("main".to_string()),
+                branch: Some("main".to_string()),
+                takeover: true,
+            })
+            .expect("takeover");
+        match takeover {
+            StartTaskOutcome::Started { previous_owner, .. } => {
+                assert_eq!(previous_owner.as_deref(), Some("alice"));
+            }
+            StartTaskOutcome::AlreadyInProgressByActor => {
+                panic!("expected takeover start");
+            }
+        }
+
+        let details = store.details("task-1").expect("details");
+        assert_eq!(details.task.status, "in_progress");
+        assert_eq!(details.task.started_by.as_deref(), Some("bob"));
+        assert_eq!(details.events, 3);
+    }
+
+    #[test]
+    fn start_task_same_actor_is_idempotent() {
+        let dir = tempdir().expect("tempdir");
+        let repo_root = dir.path().to_path_buf();
+        let storage = Storage::new(repo_root.clone(), repo_root.join(".git"), repo_root.clone());
+        let store = TaskStore::new(storage, TasksConfig::default());
+
+        let mut create = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
+        create.title = Some("Task 1".to_string());
+        store.append_event(create).expect("create");
+
+        let first = store
+            .start_task(StartTaskRequest {
+                task_id: "task-1".to_string(),
+                actor: Some("alice".to_string()),
+                workspace_id: Some("ws-1".to_string()),
+                workspace: Some("main".to_string()),
+                branch: Some("main".to_string()),
+                takeover: false,
+            })
+            .expect("first start");
+        assert!(matches!(first, StartTaskOutcome::Started { .. }));
+
+        let second = store
+            .start_task(StartTaskRequest {
+                task_id: "task-1".to_string(),
+                actor: Some("alice".to_string()),
+                workspace_id: Some("ws-1".to_string()),
+                workspace: Some("main".to_string()),
+                branch: Some("main".to_string()),
+                takeover: false,
+            })
+            .expect("second start");
+        assert!(matches!(second, StartTaskOutcome::AlreadyInProgressByActor));
+
+        let details = store.details("task-1").expect("details");
+        assert_eq!(details.events, 2);
     }
 
     #[test]

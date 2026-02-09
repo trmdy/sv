@@ -17,7 +17,8 @@ use crate::project::ProjectStore;
 use crate::repo_stats;
 use crate::storage::{Storage, WorkspaceEntry};
 use crate::task::{
-    CompactionPolicy, TaskDetails, TaskEvent, TaskEventType, TaskRecord, TaskRelations, TaskStore,
+    CompactionPolicy, StartTaskOutcome, StartTaskRequest, TaskDetails, TaskEvent, TaskEventType,
+    TaskRecord, TaskRelations, TaskStore,
 };
 
 pub struct NewOptions {
@@ -89,6 +90,7 @@ pub struct ShowOptions {
 
 pub struct StartOptions {
     pub id: String,
+    pub takeover: bool,
     pub actor: Option<String>,
     pub events: Option<String>,
     pub repo: Option<PathBuf>,
@@ -800,21 +802,15 @@ pub fn run_start(options: StartOptions) -> Result<()> {
         .workspace
         .ok_or_else(|| Error::OperationFailed("workspace not found for task start".to_string()))?;
 
-    let mut event = TaskEvent::new(TaskEventType::TaskStarted, resolved.clone());
-    event.actor = ctx.actor.clone();
-    event.workspace_id = Some(workspace.id.clone());
-    event.workspace = Some(workspace.name.clone());
-    event.branch = Some(workspace.branch.clone());
     let in_progress = ctx.store.config().in_progress_status.clone();
-    event.status = Some(in_progress.clone());
-    ctx.store.append_event(event.clone())?;
-    let event_warning = emit_task_event(&mut event_sink, EventKind::TaskStarted, &event);
-    let hook_warning = forge_integration::run_task_hook_best_effort(
-        &ctx.repo_root,
-        forge_integration::ForgeTaskHookKind::TaskStart,
-        &resolved,
-        ctx.actor.as_deref().unwrap_or("unknown"),
-    );
+    let start_outcome = ctx.store.start_task(StartTaskRequest {
+        task_id: resolved.clone(),
+        actor: ctx.actor.clone(),
+        workspace_id: Some(workspace.id.clone()),
+        workspace: Some(workspace.name.clone()),
+        branch: Some(workspace.branch.clone()),
+        takeover: options.takeover,
+    })?;
 
     let output = TaskStatusOutput {
         id: resolved.clone(),
@@ -822,11 +818,32 @@ pub fn run_start(options: StartOptions) -> Result<()> {
     };
 
     let mut human = HumanOutput::new("Task started");
-    if let Some(warning) = event_warning {
-        human.push_warning(warning);
-    }
-    if let Some(warning) = hook_warning {
-        human.push_warning(warning);
+    match start_outcome {
+        StartTaskOutcome::Started {
+            event,
+            previous_owner,
+        } => {
+            if let Some(owner) = previous_owner {
+                let next_owner = event.actor.as_deref().unwrap_or("unknown");
+                human.push_warning(format!("ownership takeover: {owner} -> {next_owner}"));
+            }
+            if let Some(warning) = emit_task_event(&mut event_sink, EventKind::TaskStarted, &event)
+            {
+                human.push_warning(warning);
+            }
+            if let Some(warning) = forge_integration::run_task_hook_best_effort(
+                &ctx.repo_root,
+                forge_integration::ForgeTaskHookKind::TaskStart,
+                &resolved,
+                ctx.actor.as_deref().unwrap_or("unknown"),
+            ) {
+                human.push_warning(warning);
+            }
+        }
+        StartTaskOutcome::AlreadyInProgressByActor => {
+            human = HumanOutput::new("Task already in progress");
+            human.push_summary("Info", "already in progress by you".to_string());
+        }
     }
     human.push_summary("ID", resolved);
     human.push_summary("Status", output.status.clone());

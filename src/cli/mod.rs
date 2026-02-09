@@ -1211,10 +1211,15 @@ Examples:
 
 Examples:
   sv task start 01HZ...
+  sv task start 01HZ... --takeover
 "#)]
     Start {
         /// Task ID
         id: String,
+
+        /// Take over an in-progress task owned by another actor
+        #[arg(long)]
+        takeover: bool,
     },
 
     /// Change task status
@@ -3036,8 +3041,9 @@ impl Cli {
                         json,
                         quiet,
                     }),
-                    TaskCommands::Start { id } => task::run_start(task::StartOptions {
+                    TaskCommands::Start { id, takeover } => task::run_start(task::StartOptions {
                         id,
+                        takeover,
                         actor,
                         events: events.clone(),
                         repo,

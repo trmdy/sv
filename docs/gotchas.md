@@ -23,3 +23,6 @@ Add short entries that prevent repeated failures.
 - **Symptom:** task appears indented as a child under a project grouping task in TUI.
   **Cause:** legacy `task_parent_set` links targeting a task later used as a project group.
   **Fix:** now blocked for new writes (`sv task parent set` / TUI edit). Legacy links are ignored in relation resolution; optionally clear old links explicitly with `sv task parent clear <child>`.
+- **Symptom:** `sv task start <id>` fails with `task already in progress by <actor>; use --takeover to transfer ownership`.
+  **Cause:** start ownership is now exclusive; another actor already owns the in-progress task.
+  **Fix:** use `sv task start <id> --takeover` to transfer ownership, or coordinate with current owner. Repeated start by the same actor is now a no-op.
