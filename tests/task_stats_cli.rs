@@ -99,6 +99,16 @@ fn task_stats_reports_repo_metrics() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(0)
             >= 1
     );
+    assert_eq!(
+        stats["throughput_last_3_hours"]["window_hours"].as_u64(),
+        Some(3)
+    );
+    assert!(
+        stats["throughput_last_3_hours"]["tasks_completed"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
 
     assert!(
         stats["compaction"]["before_events"].as_u64().unwrap_or(0)

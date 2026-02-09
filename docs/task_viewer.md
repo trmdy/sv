@@ -78,14 +78,14 @@ Narrow view:
 - Repo snapshot: tasks, epics, project groups/entities.
 - Status breakdowns for tasks, epics, and project groups.
 - Event totals (task + project), storage usage, compaction estimate.
-- Throughput windows: last 1h + last 24h (created/completed and per-hour rates).
+- Throughput windows: last 1h + last 3h + last 24h (created/completed and per-hour rates).
 
 ## Keymap (v1)
 - `j/k` or arrows: move selection.
 - `enter`: toggle detail in narrow mode.
 - `/`: start filter (fuzzy by id + title).
 - `esc`: clear filter or close filter input.
-- `o/i/c/a`: quick filter open / in_progress / closed / all.
+- `z`: toggle hide-done mode.
 - `r`: manual reload.
 - `x`: epic filter picker.
 - `y`: project filter picker.
@@ -104,15 +104,12 @@ Narrow view:
 | `↑` / `↓` | Move selection |
 | `enter` | Toggle detail (narrow) |
 | `/` | Focus filter |
+| `z` | Toggle hide-done mode |
 | `x` | Epic filter picker |
 | `y` | Project filter picker |
 | `1` / `2` / `3` / `4` | Switch tasks/epics/projects/stats view |
 | `v` | Toggle tasks/epics/projects/stats view |
 | `esc` | Clear filter |
-| `o` | Filter open |
-| `i` | Filter in_progress |
-| `c` | Filter closed |
-| `a` | Clear status filter |
 | `r` | Reload |
 | `n` | New task wizard |
 | `e` | Inline edit |
@@ -124,6 +121,8 @@ Narrow view:
 - While filter active, show input line under list header.
 - If filter yields no results, show "No matches".
 - Status filter, epic filter, and project filter combine with text filter (AND).
+- Hide-done mode removes tasks in closed statuses.
+- Exception: closed epics stay visible while they still have non-closed descendants in the epic tree (recursive).
 - Clear filter resets selection to first visible item.
 
 ## Data sources

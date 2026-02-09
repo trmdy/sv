@@ -452,6 +452,35 @@ fn fuzzy_match(value: &str, query: &str) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn filter_task_indices_with_done_filter(
+    tasks: &[TaskRecord],
+    query: &str,
+    status_filter: Option<&str>,
+    epic_filter: Option<&str>,
+    project_filter: Option<&str>,
+    epic_ids: &HashSet<String>,
+    project_ids: &HashSet<String>,
+    epics_only: bool,
+    projects_only: bool,
+    hide_done: bool,
+    closed_statuses: &HashSet<String>,
+) -> Vec<usize> {
+    filter_task_indices_impl(
+        tasks,
+        query,
+        status_filter,
+        epic_filter,
+        project_filter,
+        epic_ids,
+        project_ids,
+        epics_only,
+        projects_only,
+        hide_done,
+        closed_statuses,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn filter_task_indices(
     tasks: &[TaskRecord],
     query: &str,
@@ -463,10 +492,45 @@ pub fn filter_task_indices(
     epics_only: bool,
     projects_only: bool,
 ) -> Vec<usize> {
+    let empty_closed_statuses = HashSet::new();
+    filter_task_indices_impl(
+        tasks,
+        query,
+        status_filter,
+        epic_filter,
+        project_filter,
+        epic_ids,
+        project_ids,
+        epics_only,
+        projects_only,
+        false,
+        &empty_closed_statuses,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn filter_task_indices_impl(
+    tasks: &[TaskRecord],
+    query: &str,
+    status_filter: Option<&str>,
+    epic_filter: Option<&str>,
+    project_filter: Option<&str>,
+    epic_ids: &HashSet<String>,
+    project_ids: &HashSet<String>,
+    epics_only: bool,
+    projects_only: bool,
+    hide_done: bool,
+    closed_statuses: &HashSet<String>,
+) -> Vec<usize> {
     let query_norm = normalize_text(query);
     let status_norm = status_filter.map(normalize_status);
     let epic_norm = epic_filter.map(normalize_text);
     let project_norm = project_filter.map(normalize_text);
+    let keep_closed_epics = if hide_done {
+        keep_closed_epics_with_non_done_descendants(tasks, closed_statuses)
+    } else {
+        Vec::new()
+    };
     let effective_projects = if project_norm.is_some() || projects_only {
         Some(effective_project_ids(tasks))
     } else {
@@ -488,6 +552,14 @@ pub fn filter_task_indices(
         if epics_only && !epic_ids.contains(&task.id) {
             continue;
         }
+        if hide_done
+            && status_is_closed(&task.status, closed_statuses)
+            && !(epic_ids.contains(&task.id)
+                && keep_closed_epics.get(idx).copied().unwrap_or(false))
+        {
+            continue;
+        }
+
         let effective_project_norm = effective_projects
             .as_ref()
             .and_then(|projects| projects.get(idx))
@@ -556,6 +628,96 @@ pub fn filter_task_indices(
     indices
 }
 
+fn status_is_closed(status: &str, closed_statuses: &HashSet<String>) -> bool {
+    closed_statuses.contains(&normalize_status(status))
+}
+
+fn keep_closed_epics_with_non_done_descendants(
+    tasks: &[TaskRecord],
+    closed_statuses: &HashSet<String>,
+) -> Vec<bool> {
+    if tasks.is_empty() {
+        return Vec::new();
+    }
+
+    let mut index_by_id = HashMap::new();
+    for (idx, task) in tasks.iter().enumerate() {
+        index_by_id.insert(task.id.clone(), idx);
+    }
+
+    let mut children_by_epic: Vec<Vec<usize>> = vec![Vec::new(); tasks.len()];
+    for (idx, task) in tasks.iter().enumerate() {
+        let Some(epic_id) = task.epic.as_ref() else {
+            continue;
+        };
+        let Some(parent_idx) = index_by_id.get(epic_id).copied() else {
+            continue;
+        };
+        if parent_idx == idx {
+            continue;
+        }
+        children_by_epic[parent_idx].push(idx);
+    }
+
+    let mut memo: Vec<Option<bool>> = vec![None; tasks.len()];
+    let mut visiting = HashSet::new();
+    for idx in 0..tasks.len() {
+        let _ = has_non_done_epic_descendant(
+            idx,
+            tasks,
+            &children_by_epic,
+            closed_statuses,
+            &mut memo,
+            &mut visiting,
+        );
+    }
+
+    memo.into_iter()
+        .map(|value| value.unwrap_or(false))
+        .collect()
+}
+
+fn has_non_done_epic_descendant(
+    idx: usize,
+    tasks: &[TaskRecord],
+    children_by_epic: &[Vec<usize>],
+    closed_statuses: &HashSet<String>,
+    memo: &mut [Option<bool>],
+    visiting: &mut HashSet<usize>,
+) -> bool {
+    if let Some(cached) = memo.get(idx).and_then(|value| *value) {
+        return cached;
+    }
+    if !visiting.insert(idx) {
+        return false;
+    }
+
+    let mut found = false;
+    if let Some(children) = children_by_epic.get(idx) {
+        for child_idx in children {
+            if !status_is_closed(&tasks[*child_idx].status, closed_statuses) {
+                found = true;
+                break;
+            }
+            if has_non_done_epic_descendant(
+                *child_idx,
+                tasks,
+                children_by_epic,
+                closed_statuses,
+                memo,
+                visiting,
+            ) {
+                found = true;
+                break;
+            }
+        }
+    }
+
+    visiting.remove(&idx);
+    memo[idx] = Some(found);
+    found
+}
+
 pub fn select_by_id(
     tasks: &[TaskRecord],
     filtered: &[usize],
@@ -617,6 +779,10 @@ mod tests {
             comments_count: 0,
             last_comment_at: None,
         }
+    }
+
+    fn closed_statuses(values: &[&str]) -> HashSet<String> {
+        values.iter().map(|value| normalize_status(value)).collect()
     }
 
     #[test]
@@ -775,6 +941,84 @@ mod tests {
             false,
         );
         assert_eq!(filtered, vec![1, 2]);
+    }
+
+    #[test]
+    fn done_filter_hides_closed_non_epic_tasks() {
+        let now = Utc::now();
+        let tasks = vec![
+            task("sv-open", "Open", "open", "P2", now),
+            task("sv-done", "Done", "done", "P2", now),
+        ];
+
+        let filtered = filter_task_indices_with_done_filter(
+            &tasks,
+            "",
+            None,
+            None,
+            None,
+            &HashSet::new(),
+            &HashSet::new(),
+            false,
+            false,
+            true,
+            &closed_statuses(&["done"]),
+        );
+        assert_eq!(filtered, vec![0]);
+    }
+
+    #[test]
+    fn done_filter_keeps_closed_epics_with_open_descendants_recursively() {
+        let now = Utc::now();
+        let mut root = task("sv-root", "Root", "done", "P1", now);
+        root.epic = None;
+        let mut child_epic = task("sv-child-epic", "Child Epic", "done", "P1", now);
+        child_epic.epic = Some("sv-root".to_string());
+        let mut leaf = task("sv-leaf", "Leaf", "open", "P2", now);
+        leaf.epic = Some("sv-child-epic".to_string());
+        let tasks = vec![root, child_epic, leaf];
+        let epic_ids = HashSet::from(["sv-root".to_string(), "sv-child-epic".to_string()]);
+
+        let filtered = filter_task_indices_with_done_filter(
+            &tasks,
+            "",
+            None,
+            None,
+            None,
+            &epic_ids,
+            &HashSet::new(),
+            false,
+            false,
+            true,
+            &closed_statuses(&["done"]),
+        );
+        assert_eq!(filtered, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn done_filter_hides_closed_epics_when_all_descendants_are_closed() {
+        let now = Utc::now();
+        let mut root = task("sv-root", "Root", "done", "P1", now);
+        root.epic = None;
+        let mut child = task("sv-child", "Child", "done", "P2", now);
+        child.epic = Some("sv-root".to_string());
+        let tasks = vec![root, child];
+        let epic_ids = HashSet::from(["sv-root".to_string()]);
+
+        let filtered = filter_task_indices_with_done_filter(
+            &tasks,
+            "",
+            None,
+            None,
+            None,
+            &epic_ids,
+            &HashSet::new(),
+            false,
+            false,
+            true,
+            &closed_statuses(&["done"]),
+        );
+        assert!(filtered.is_empty());
     }
 
     #[test]

@@ -54,6 +54,7 @@ pub struct RepoStats {
     pub project_log_bytes: u64,
     pub compaction: CompactionEstimate,
     pub throughput_last_hour: ThroughputWindow,
+    pub throughput_last_3_hours: ThroughputWindow,
     pub throughput_last_24_hours: ThroughputWindow,
     pub avg_task_events: f64,
 }
@@ -155,6 +156,7 @@ pub fn compute(task_store: &TaskStore, project_store: &ProjectStore) -> Result<R
     };
 
     let throughput_last_hour = throughput_window(&task_events, Duration::hours(1), task_store);
+    let throughput_last_3_hours = throughput_window(&task_events, Duration::hours(3), task_store);
     let throughput_last_24_hours = throughput_window(&task_events, Duration::hours(24), task_store);
 
     let avg_task_events = if tasks_total == 0 {
@@ -185,6 +187,7 @@ pub fn compute(task_store: &TaskStore, project_store: &ProjectStore) -> Result<R
         project_log_bytes,
         compaction,
         throughput_last_hour,
+        throughput_last_3_hours,
         throughput_last_24_hours,
         avg_task_events,
     })

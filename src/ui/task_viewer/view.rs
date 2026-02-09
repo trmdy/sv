@@ -179,6 +179,7 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
         || app.status_filter.is_some()
         || app.epic_filter.is_some()
         || app.project_filter.is_some()
+        || app.hide_done
     {
         let filter_label = if app.filter_active && app.filter.is_empty() {
             "filter: _".to_string()
@@ -199,6 +200,11 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
             Some(value) => format!("project: {value}"),
             None => "project: all".to_string(),
         };
+        let done_label = if app.hide_done {
+            "done: hidden"
+        } else {
+            "done: shown"
+        };
         lines.push(Line::from(vec![
             Span::styled(filter_label, Style::default().fg(COLOR_INFO)),
             Span::raw("  "),
@@ -207,6 +213,8 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
             Span::styled(epic_label, Style::default().fg(COLOR_ACCENT)),
             Span::raw("  "),
             Span::styled(project_label, Style::default().fg(COLOR_SUCCESS)),
+            Span::raw("  "),
+            Span::styled(done_label, Style::default().fg(COLOR_MUTED_DARK)),
         ]));
         lines.push(Line::from(""));
     }
@@ -216,6 +224,7 @@ fn render_list(frame: &mut Frame, app: &mut AppState, area: Rect) {
             || app.status_filter.is_some()
             || app.epic_filter.is_some()
             || app.project_filter.is_some()
+            || app.hide_done
         {
             lines.push(Line::from("No matches"));
         } else if app.is_epics_mode() {
@@ -441,6 +450,13 @@ fn render_stats(frame: &mut Frame, app: &AppState, area: Rect) {
         stats.throughput_last_hour.completed_per_hour,
         stats.throughput_last_hour.tasks_created,
         stats.throughput_last_hour.created_per_hour,
+    )));
+    lines.push(Line::from(format!(
+        "last 3h: completed {} ({:.2}/h), created {} ({:.2}/h)",
+        stats.throughput_last_3_hours.tasks_completed,
+        stats.throughput_last_3_hours.completed_per_hour,
+        stats.throughput_last_3_hours.tasks_created,
+        stats.throughput_last_3_hours.created_per_hour,
     )));
     lines.push(Line::from(format!(
         "last 24h: completed {} ({:.2}/h), created {} ({:.2}/h)",
@@ -959,6 +975,7 @@ fn build_list_help_lines(width: usize) -> Vec<Line<'static>> {
         help_line("s", "change status", width),
         help_line("b", "blocked by", width),
         help_line("/", "filter tasks", width),
+        help_line("z", "toggle hide done", width),
         help_line("x", "epic filter", width),
         help_line("y", "project filter", width),
         help_line("1/2/3/4", "switch tasks/epics/projects/stats view", width),

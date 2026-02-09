@@ -114,6 +114,7 @@ struct SavedListState {
     status_filter: Option<String>,
     epic_filter: Option<String>,
     project_filter: Option<String>,
+    hide_done: bool,
     selected_id: Option<String>,
 }
 
@@ -127,6 +128,7 @@ pub struct AppState {
     pub(crate) status_filter: Option<String>,
     pub(crate) epic_filter: Option<String>,
     pub(crate) project_filter: Option<String>,
+    pub(crate) hide_done: bool,
     pub(crate) blocked_ids: HashSet<String>,
     pub(crate) editor: Option<EditorState>,
     pub(crate) priority_picker: Option<PriorityPicker>,
@@ -159,6 +161,7 @@ pub struct AppState {
     pub(crate) show_detail: bool,
     pub(crate) cache: RenderCache,
     config: crate::config::TasksConfig,
+    closed_statuses_norm: HashSet<String>,
     store: TaskStore,
     actor: Option<String>,
 }
@@ -170,11 +173,18 @@ impl AppState {
         epic_filter: Option<String>,
         project_filter: Option<String>,
     ) -> Self {
+        let config = store.config().clone();
+        let closed_statuses_norm = config
+            .closed_statuses
+            .iter()
+            .map(|status| status.trim().to_ascii_lowercase())
+            .collect();
         let tasks_mode_state = SavedListState {
             filter: String::new(),
             status_filter: None,
             epic_filter: epic_filter.clone(),
             project_filter: project_filter.clone(),
+            hide_done: false,
             selected_id: None,
         };
         Self {
@@ -187,6 +197,7 @@ impl AppState {
             status_filter: None,
             epic_filter,
             project_filter,
+            hide_done: false,
             blocked_ids: HashSet::new(),
             editor: None,
             priority_picker: None,
@@ -218,7 +229,8 @@ impl AppState {
             viewport: Viewport::default(),
             show_detail: false,
             cache: RenderCache::new(),
-            config: store.config().clone(),
+            config,
+            closed_statuses_norm,
             store,
             actor,
         }
@@ -297,11 +309,13 @@ impl AppState {
         let status_filter = self.status_filter.clone();
         let epic_filter = self.epic_filter.clone();
         let project_filter = self.project_filter.clone();
+        let hide_done = self.hide_done;
         let state = self.saved_state_mut(mode);
         state.filter = filter;
         state.status_filter = status_filter;
         state.epic_filter = epic_filter;
         state.project_filter = project_filter;
+        state.hide_done = hide_done;
         state.selected_id = selected_id;
     }
 
@@ -311,6 +325,7 @@ impl AppState {
         self.status_filter = state.status_filter;
         self.epic_filter = state.epic_filter;
         self.project_filter = state.project_filter;
+        self.hide_done = state.hide_done;
     }
 
     fn set_list_mode(&mut self, mode: ListMode, req_tx: &Sender<LoadRequest>) {
@@ -365,13 +380,16 @@ impl AppState {
         if !self.filter.is_empty() {
             return Some((format!("filter: {}", self.filter), StatusKind::Info));
         }
-        if self.epic_filter.is_some() || self.project_filter.is_some() {
+        if self.epic_filter.is_some() || self.project_filter.is_some() || self.hide_done {
             let mut segments = Vec::new();
             if let Some(epic) = self.epic_filter.as_ref() {
                 segments.push(format!("epic: {epic}"));
             }
             if let Some(project) = self.project_filter.as_ref() {
                 segments.push(format!("project: {project}"));
+            }
+            if self.hide_done {
+                segments.push("done: hidden".to_string());
             }
             return Some((segments.join("  "), StatusKind::Info));
         }
@@ -426,7 +444,7 @@ impl AppState {
         if self.is_stats_mode() {
             return "1/2/3/4 views  v cycle  r reload  ? help  esc/q quit".to_string();
         }
-        "j/k move  / filter  x epic filter  y project filter  1/2/3/4 views  v cycle  enter details  ? help  esc/q quit"
+        "j/k move  / filter  z hide done  x epic filter  y project filter  1/2/3/4 views  v cycle  enter details  ? help  esc/q quit"
             .to_string()
     }
 
@@ -582,7 +600,7 @@ impl AppState {
             self.selected = None;
             return;
         }
-        self.filtered = model::filter_task_indices(
+        self.filtered = model::filter_task_indices_with_done_filter(
             &self.tasks,
             &self.filter,
             self.status_filter.as_deref(),
@@ -592,6 +610,8 @@ impl AppState {
             &self.project_ids,
             self.is_epics_mode(),
             self.is_projects_mode(),
+            self.hide_done,
+            &self.closed_statuses_norm,
         );
         self.selected = model::select_by_id(&self.tasks, &self.filtered, previous_id.as_deref());
     }
@@ -665,6 +685,7 @@ impl AppState {
             || self.status_filter.is_some()
             || self.epic_filter.is_some()
             || self.project_filter.is_some()
+            || self.hide_done
         {
             height = height.saturating_sub(2);
         }
@@ -1387,6 +1408,21 @@ fn handle_key(
                 return false;
             }
             app.filter_active = true;
+            false
+        }
+        KeyCode::Char('z') => {
+            if app.is_stats_mode() {
+                return false;
+            }
+            app.hide_done = !app.hide_done;
+            let previous = app.selected_task().map(|task| task.id.clone());
+            app.apply_filter(previous);
+            app.queue_detail_load(req_tx);
+            if app.hide_done {
+                app.set_info("done hidden".to_string());
+            } else {
+                app.set_info("done shown".to_string());
+            }
             false
         }
         KeyCode::Char('x') => {

@@ -154,19 +154,29 @@ pub struct TaskRecord {
 pub fn sort_tasks(tasks: &mut [TaskRecord], config: &TasksConfig, blocked_ids: &HashSet<String>) {
     let ready_status = config.default_status.as_str();
     tasks.sort_by(|left, right| {
+        let left_closed = status_is_closed(&left.status, config);
+        let right_closed = status_is_closed(&right.status, config);
+        let left_done = is_done_status(&left.status);
+        let right_done = is_done_status(&right.status);
         let left_status = status_rank(&left.status, config);
         let right_status = status_rank(&right.status, config);
         let left_priority = priority_rank(&left.priority);
         let right_priority = priority_rank(&right.priority);
         let left_ready = readiness_rank(left, ready_status, blocked_ids);
         let right_ready = readiness_rank(right, ready_status, blocked_ids);
-        left_status
-            .cmp(&right_status)
+        left_closed
+            .cmp(&right_closed)
+            .then_with(|| left_done.cmp(&right_done))
+            .then_with(|| left_status.cmp(&right_status))
             .then_with(|| left_priority.cmp(&right_priority))
             .then_with(|| left_ready.cmp(&right_ready))
             .then_with(|| right.updated_at.cmp(&left.updated_at))
             .then_with(|| left.id.cmp(&right.id))
     });
+}
+
+fn is_done_status(status: &str) -> bool {
+    status.trim().eq_ignore_ascii_case("done")
 }
 
 fn status_rank(status: &str, config: &TasksConfig) -> usize {
@@ -1705,6 +1715,94 @@ mod tests {
 
     fn default_config() -> TasksConfig {
         TasksConfig::default()
+    }
+
+    fn task_record(
+        id: &str,
+        status: &str,
+        priority: &str,
+        updated_at: DateTime<Utc>,
+    ) -> TaskRecord {
+        TaskRecord {
+            id: id.to_string(),
+            title: id.to_string(),
+            status: status.to_string(),
+            priority: priority.to_string(),
+            created_at: updated_at,
+            updated_at,
+            created_by: None,
+            updated_by: None,
+            body: None,
+            epic: None,
+            project: None,
+            workspace_id: None,
+            workspace: None,
+            branch: None,
+            started_at: None,
+            started_by: None,
+            closed_at: None,
+            closed_by: None,
+            comments_count: 0,
+            last_comment_at: None,
+        }
+    }
+
+    #[test]
+    fn sort_tasks_pushes_closed_statuses_to_end() {
+        let mut config = default_config();
+        config.statuses = vec![
+            "open".to_string(),
+            "done".to_string(),
+            "in_progress".to_string(),
+        ];
+        config.closed_statuses = vec!["done".to_string()];
+        let now = Utc::now();
+        let mut tasks = vec![
+            task_record(
+                "task-done",
+                "done",
+                "P1",
+                now + chrono::Duration::minutes(2),
+            ),
+            task_record(
+                "task-open",
+                "open",
+                "P1",
+                now + chrono::Duration::minutes(1),
+            ),
+            task_record("task-progress", "in_progress", "P1", now),
+        ];
+
+        sort_tasks(&mut tasks, &config, &HashSet::new());
+        let ids: Vec<String> = tasks.into_iter().map(|task| task.id).collect();
+        assert_eq!(ids, vec!["task-open", "task-progress", "task-done"]);
+    }
+
+    #[test]
+    fn sort_tasks_places_done_after_other_closed_statuses() {
+        let mut config = default_config();
+        config.statuses = vec!["open".to_string(), "done".to_string(), "closed".to_string()];
+        config.closed_statuses = vec!["closed".to_string(), "done".to_string()];
+        let now = Utc::now();
+        let mut tasks = vec![
+            task_record(
+                "task-done",
+                "done",
+                "P1",
+                now + chrono::Duration::minutes(2),
+            ),
+            task_record(
+                "task-closed",
+                "closed",
+                "P1",
+                now + chrono::Duration::minutes(1),
+            ),
+            task_record("task-open", "open", "P1", now),
+        ];
+
+        sort_tasks(&mut tasks, &config, &HashSet::new());
+        let ids: Vec<String> = tasks.into_iter().map(|task| task.id).collect();
+        assert_eq!(ids, vec!["task-open", "task-closed", "task-done"]);
     }
 
     #[test]

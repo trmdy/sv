@@ -576,6 +576,14 @@ pub fn run_stats(options: StatsOptions) -> Result<()> {
         ),
     );
     human.push_summary(
+        "Throughput 3h",
+        format!(
+            "{:.2}/h completed, {:.2}/h created",
+            stats.throughput_last_3_hours.completed_per_hour,
+            stats.throughput_last_3_hours.created_per_hour
+        ),
+    );
+    human.push_summary(
         "Throughput 24h",
         format!(
             "{:.2}/h completed, {:.2}/h created",
