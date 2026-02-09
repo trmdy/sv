@@ -237,6 +237,20 @@ pub struct SyncOptions {
     pub quiet: bool,
 }
 
+pub struct DoctorOptions {
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct RepairOptions {
+    pub dedupe_creates: bool,
+    pub dry_run: bool,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
 pub struct PriorityOptions {
     pub id: String,
     pub priority: String,
@@ -1717,12 +1731,26 @@ pub fn run_sync(options: SyncOptions) -> Result<()> {
     let ctx = load_context(options.repo, None, false)?;
     let policy = ctx.store.auto_compaction_policy()?;
     let report = ctx.store.sync(policy)?;
+    let duplicate_creates = ctx.store.duplicate_creates().unwrap_or_default();
 
     let mut human = HumanOutput::new("Task sync complete");
     human.push_summary("Events", report.total_events.to_string());
     human.push_summary("Tasks", report.total_tasks.to_string());
     if report.compacted {
         human.push_summary("Compacted", report.removed_events.to_string());
+    }
+    if !duplicate_creates.is_empty() {
+        let task_ids = duplicate_creates
+            .iter()
+            .map(|entry| entry.task_id.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        human.push_warning(format!(
+            "duplicate task_created events detected for {} task(s): {}",
+            duplicate_creates.len(),
+            task_ids
+        ));
+        human.push_next_step("Run: sv task doctor".to_string());
     }
 
     emit_success(
@@ -1732,6 +1760,101 @@ pub fn run_sync(options: SyncOptions) -> Result<()> {
         },
         "task sync",
         &report,
+        Some(&human),
+    )
+}
+
+pub fn run_doctor(options: DoctorOptions) -> Result<()> {
+    let ctx = load_context(options.repo, None, false)?;
+    let report = ctx.store.doctor()?;
+
+    let output = TaskDoctorOutput {
+        duplicate_creates: report.duplicate_creates.clone(),
+        malformed_events: report.malformed_events.clone(),
+    };
+
+    let mut human = HumanOutput::new("Task doctor report");
+    human.push_summary(
+        "Duplicate creates",
+        report.duplicate_creates.len().to_string(),
+    );
+    human.push_summary(
+        "Malformed events",
+        report.malformed_events.len().to_string(),
+    );
+
+    for entry in &report.duplicate_creates {
+        human.push_detail(format!(
+            "{} keep={} drop={}",
+            entry.task_id,
+            entry.kept_event_id,
+            entry.duplicate_event_ids.join(",")
+        ));
+    }
+    for entry in &report.malformed_events {
+        human.push_detail(format!("{}:{} {}", entry.log_path, entry.line, entry.error));
+    }
+    if !report.duplicate_creates.is_empty() {
+        human.push_next_step("Run: sv task repair --dedupe-creates --dry-run".to_string());
+    }
+
+    emit_success(
+        OutputOptions {
+            json: options.json,
+            quiet: options.quiet,
+        },
+        "task doctor",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_repair(options: RepairOptions) -> Result<()> {
+    if !options.dedupe_creates {
+        return Err(Error::InvalidArgument(
+            "no repair action selected; use --dedupe-creates".to_string(),
+        ));
+    }
+
+    let ctx = load_context(options.repo, None, false)?;
+    let report = ctx.store.repair_dedupe_creates(options.dry_run)?;
+
+    let output = TaskRepairOutput {
+        before_events: report.before_events,
+        after_events: report.after_events,
+        removed_events: report.removed_events,
+        affected_tasks: report.affected_tasks,
+        dry_run: report.dry_run,
+        duplicate_creates: report.duplicate_creates.clone(),
+    };
+
+    let header = if options.dry_run {
+        "Task repair plan"
+    } else {
+        "Task repair complete"
+    };
+    let mut human = HumanOutput::new(header);
+    human.push_summary("Before", report.before_events.to_string());
+    human.push_summary("After", report.after_events.to_string());
+    human.push_summary("Removed", report.removed_events.to_string());
+    human.push_summary("Affected tasks", report.affected_tasks.to_string());
+    if report.removed_events == 0 {
+        human.push_detail("No duplicate task_created events found".to_string());
+    }
+    if options.dry_run && report.removed_events > 0 {
+        human.push_next_step("Run: sv task repair --dedupe-creates".to_string());
+    }
+    if !options.dry_run && report.removed_events > 0 {
+        human.push_next_step("Run: sv task doctor".to_string());
+    }
+
+    emit_success(
+        OutputOptions {
+            json: options.json,
+            quiet: options.quiet,
+        },
+        "task repair",
+        &output,
         Some(&human),
     )
 }
@@ -2012,6 +2135,23 @@ struct TaskCompactOutput {
     after_events: usize,
     removed_events: usize,
     compacted_tasks: usize,
+}
+
+#[derive(serde::Serialize)]
+struct TaskDoctorOutput {
+    duplicate_creates: Vec<crate::task::TaskDuplicateCreate>,
+    malformed_events: Vec<crate::task::TaskMalformedEvent>,
+}
+
+#[derive(serde::Serialize)]
+struct TaskRepairOutput {
+    before_events: usize,
+    after_events: usize,
+    removed_events: usize,
+    affected_tasks: usize,
+    dry_run: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    duplicate_creates: Vec<crate::task::TaskDuplicateCreate>,
 }
 
 #[derive(serde::Serialize)]

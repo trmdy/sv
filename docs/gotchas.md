@@ -1,7 +1,7 @@
 # Gotchas / Pitfalls
 
 Status: evolving
-Last verified: 2026-01-20
+Last verified: 2026-02-09
 
 Add short entries that prevent repeated failures.
 
@@ -17,3 +17,6 @@ Add short entries that prevent repeated failures.
 - **Symptom:** after `sv hoist` on the current branch, `git status` shows widespread deletions or missing files even though HEAD advanced.
   **Cause:** worktree checkout skipped because local changes blocked a safe checkout or checkout failed.
   **Fix:** clean local changes and run `git restore --source=HEAD --staged --worktree .` (or rerun hoist with a clean worktree).
+- **Symptom:** `sv task list/show/project set` fails or behaves inconsistently after log corruption with repeated `task_created` for one task.
+  **Cause:** duplicate `task_created` events in `.tasks/tasks.jsonl` (same `task_id`, different `event_id`).
+  **Fix:** run `sv task doctor`; preview cleanup with `sv task repair --dedupe-creates --dry-run`; apply with `sv task repair --dedupe-creates`; rerun `sv task doctor` to confirm clean log.

@@ -38,6 +38,7 @@ fn task_robot_help_works() {
         .stdout(contains("sv task count"))
         .stdout(contains("sv task stats"))
         .stdout(contains("sv task project set"))
+        .stdout(contains("sv task doctor"))
         .stdout(contains("SV_PROJECT"));
 }
 

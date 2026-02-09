@@ -4,6 +4,8 @@
 //! and `.git/sv/tasks.jsonl` (shared across worktrees in a clone).
 
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -301,6 +303,39 @@ pub struct TaskSyncReport {
     pub total_tasks: usize,
     pub compacted: bool,
     pub removed_events: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TaskDuplicateCreate {
+    pub task_id: String,
+    pub kept_event_id: String,
+    pub duplicate_event_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TaskMalformedEvent {
+    pub log_path: String,
+    pub line: usize,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct TaskDoctorReport {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub duplicate_creates: Vec<TaskDuplicateCreate>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub malformed_events: Vec<TaskMalformedEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskRepairReport {
+    pub before_events: usize,
+    pub after_events: usize,
+    pub removed_events: usize,
+    pub affected_tasks: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub duplicate_creates: Vec<TaskDuplicateCreate>,
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -649,6 +684,57 @@ impl TaskStore {
         })
     }
 
+    pub fn doctor(&self) -> Result<TaskDoctorReport> {
+        self.ensure_dirs()?;
+        let (tracked_events, mut malformed) =
+            self.load_events_with_diagnostics(&self.tracked_log_path())?;
+        let (shared_events, mut shared_malformed) =
+            self.load_events_with_diagnostics(&self.shared_log_path())?;
+        malformed.append(&mut shared_malformed);
+
+        let mut merged = merge_events(tracked_events, shared_events);
+        sort_events(&mut merged);
+
+        Ok(TaskDoctorReport {
+            duplicate_creates: duplicate_creates(&merged),
+            malformed_events: malformed,
+        })
+    }
+
+    pub fn duplicate_creates(&self) -> Result<Vec<TaskDuplicateCreate>> {
+        let events = self.load_merged_events()?;
+        Ok(duplicate_creates(&events))
+    }
+
+    pub fn repair_dedupe_creates(&self, dry_run: bool) -> Result<TaskRepairReport> {
+        let mut events = self.load_merged_events()?;
+        let duplicates = duplicate_creates(&events);
+        let dropped_ids: HashSet<String> = duplicates
+            .iter()
+            .flat_map(|entry| entry.duplicate_event_ids.iter().cloned())
+            .collect();
+
+        let before_events = events.len();
+        if !dropped_ids.is_empty() {
+            events.retain(|event| !dropped_ids.contains(&event.event_id));
+        }
+        let after_events = events.len();
+        let removed_events = before_events.saturating_sub(after_events);
+
+        if !dry_run && removed_events > 0 {
+            self.replace_events(&events)?;
+        }
+
+        Ok(TaskRepairReport {
+            before_events,
+            after_events,
+            removed_events,
+            affected_tasks: duplicates.len(),
+            duplicate_creates: duplicates,
+            dry_run,
+        })
+    }
+
     pub fn compact(&self, policy: CompactionPolicy) -> Result<(Vec<TaskEvent>, TaskCompactReport)> {
         let events = self.load_merged_events()?;
         self.compact_events(&events, policy)
@@ -902,6 +988,39 @@ impl TaskStore {
         self.storage.read_jsonl(path)
     }
 
+    fn load_events_with_diagnostics(
+        &self,
+        path: &Path,
+    ) -> Result<(Vec<TaskEvent>, Vec<TaskMalformedEvent>)> {
+        if !path.exists() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut events = Vec::new();
+        let mut malformed = Vec::new();
+        let log_path = path.display().to_string();
+
+        for (idx, line) in reader.lines().enumerate() {
+            let line_number = idx + 1;
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<TaskEvent>(&line) {
+                Ok(event) => events.push(event),
+                Err(err) => malformed.push(TaskMalformedEvent {
+                    log_path: log_path.clone(),
+                    line: line_number,
+                    error: err.to_string(),
+                }),
+            }
+        }
+
+        Ok((events, malformed))
+    }
+
     fn write_events(&self, path: &Path, events: &[TaskEvent]) -> Result<()> {
         let lock_path = path.with_extension("lock");
         let _lock = FileLock::acquire(&lock_path, DEFAULT_LOCK_TIMEOUT_MS)?;
@@ -1003,6 +1122,38 @@ fn sort_events(events: &mut [TaskEvent]) {
     });
 }
 
+fn duplicate_creates(events: &[TaskEvent]) -> Vec<TaskDuplicateCreate> {
+    let mut seen: HashMap<String, String> = HashMap::new();
+    let mut index_by_task: HashMap<String, usize> = HashMap::new();
+    let mut duplicates: Vec<TaskDuplicateCreate> = Vec::new();
+
+    for event in events
+        .iter()
+        .filter(|event| event.event_type == TaskEventType::TaskCreated)
+    {
+        if let Some(kept_event_id) = seen.get(&event.task_id) {
+            if let Some(idx) = index_by_task.get(&event.task_id) {
+                duplicates[*idx]
+                    .duplicate_event_ids
+                    .push(event.event_id.clone());
+                continue;
+            }
+
+            index_by_task.insert(event.task_id.clone(), duplicates.len());
+            duplicates.push(TaskDuplicateCreate {
+                task_id: event.task_id.clone(),
+                kept_event_id: kept_event_id.clone(),
+                duplicate_event_ids: vec![event.event_id.clone()],
+            });
+            continue;
+        }
+
+        seen.insert(event.task_id.clone(), event.event_id.clone());
+    }
+
+    duplicates
+}
+
 fn normalize_priority(priority: &str) -> Result<String> {
     let trimmed = priority.trim();
     if trimmed.is_empty() {
@@ -1084,10 +1235,8 @@ fn apply_event(
     match event.event_type {
         TaskEventType::TaskCreated => {
             if map.contains_key(&event.task_id) {
-                return Err(Error::InvalidArgument(format!(
-                    "task already exists: {}",
-                    event.task_id
-                )));
+                // Keep first valid create event by timestamp/event_id order.
+                return Ok(());
             }
 
             let title = event.title.clone().ok_or_else(|| {
@@ -1826,6 +1975,54 @@ mod tests {
         assert_eq!(task.priority, DEFAULT_TASK_PRIORITY);
         assert_eq!(task.comments_count, 1);
         assert_eq!(task.workspace.as_deref(), Some("ws1"));
+    }
+
+    #[test]
+    fn apply_event_ignores_duplicate_task_created() {
+        let config = default_config();
+        let mut map = HashMap::new();
+        let now = Utc::now();
+
+        let mut create_a = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
+        create_a.event_id = "evt-001".to_string();
+        create_a.title = Some("First".to_string());
+        create_a.timestamp = now;
+        apply_event(&mut map, &create_a, &config).expect("create a");
+
+        let mut create_b = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
+        create_b.event_id = "evt-002".to_string();
+        create_b.title = Some("Duplicate".to_string());
+        create_b.timestamp = now + chrono::Duration::milliseconds(1);
+        apply_event(&mut map, &create_b, &config).expect("create b");
+
+        let task = map.get("task-1").expect("task");
+        assert_eq!(task.title, "First");
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn duplicate_creates_reports_kept_and_duplicate_event_ids() {
+        let now = Utc::now();
+        let mut first = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
+        first.event_id = "evt-001".to_string();
+        first.title = Some("First".to_string());
+        first.timestamp = now;
+
+        let mut second = TaskEvent::new(TaskEventType::TaskCreated, "task-1");
+        second.event_id = "evt-002".to_string();
+        second.title = Some("Second".to_string());
+        second.timestamp = now + chrono::Duration::milliseconds(1);
+
+        let events = vec![first, second];
+        let report = duplicate_creates(&events);
+        assert_eq!(
+            report,
+            vec![TaskDuplicateCreate {
+                task_id: "task-1".to_string(),
+                kept_event_id: "evt-001".to_string(),
+                duplicate_event_ids: vec!["evt-002".to_string()],
+            }]
+        );
     }
 
     #[test]

@@ -74,7 +74,7 @@ Commands (high level)
   sv lease ls|who|renew|break|wait Inspect/manage leases
   sv protect status|add|off|rm Protected paths
   sv commit                 Commit with sv checks + Change-Id
-  sv task new|list|ready|count|stats|show|start|status|priority|edit|close|delete|comment|parent|epic|project|block|unblock|relate|unrelate|relations|sync|compact|prefix  Tasks
+  sv task new|list|ready|count|stats|show|start|status|priority|edit|close|delete|comment|parent|epic|project|block|unblock|relate|unrelate|relations|sync|doctor|repair|compact|prefix  Tasks
   sv project new|list|show|edit|archive|unarchive|sync|migrate-legacy  Projects
   sv forge hooks install     Configure Forge task hooks
   sv risk                   Overlap/conflict analysis
@@ -225,6 +225,8 @@ Commands
   sv task unrelate <left> <right>
   sv task relations <id>
   sv task sync
+  sv task doctor
+  sv task repair --dedupe-creates [--dry-run]
   sv task compact [--older-than] [--max-log-mb] [--dry-run]
   sv task prefix [<prefix>]
 
@@ -1418,6 +1420,32 @@ Examples:
   sv task sync
 "#)]
     Sync,
+
+    /// Validate task logs for replay hazards
+    #[command(long_about = r#"Validate task logs for replay hazards.
+
+Examples:
+  sv task doctor
+  sv task doctor --json
+"#)]
+    Doctor,
+
+    /// Repair task logs
+    #[command(long_about = r#"Repair task logs.
+
+Examples:
+  sv task repair --dedupe-creates --dry-run
+  sv task repair --dedupe-creates
+"#)]
+    Repair {
+        /// Remove duplicate task_created events (keep earliest by timestamp,event_id)
+        #[arg(long)]
+        dedupe_creates: bool,
+
+        /// Dry run (no changes)
+        #[arg(long)]
+        dry_run: bool,
+    },
 
     /// Compact task log
     #[command(long_about = r#"Compact closed task history.
@@ -3195,6 +3223,19 @@ impl Cli {
                         quiet,
                     }),
                     TaskCommands::Sync => task::run_sync(task::SyncOptions { repo, json, quiet }),
+                    TaskCommands::Doctor => {
+                        task::run_doctor(task::DoctorOptions { repo, json, quiet })
+                    }
+                    TaskCommands::Repair {
+                        dedupe_creates,
+                        dry_run,
+                    } => task::run_repair(task::RepairOptions {
+                        dedupe_creates,
+                        dry_run,
+                        repo,
+                        json,
+                        quiet,
+                    }),
                     TaskCommands::Compact {
                         older_than,
                         max_log_mb,

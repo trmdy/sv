@@ -228,7 +228,23 @@ sv task list --actor alice --updated-since 2025-01-01T00:00:00Z
 sv task close acme-abc
 sv task delete acme-abc
 sv task sync
+
+# Diagnose + repair duplicate create events
+sv task doctor
+sv task repair --dedupe-creates --dry-run
+sv task repair --dedupe-creates
 ```
+
+### Task log troubleshooting
+
+If `task_created` events were accidentally duplicated for a task ID, task replay
+can become inconsistent across worktrees. Use:
+
+- `sv task doctor` to detect duplicates and malformed JSONL lines.
+- `sv task repair --dedupe-creates --dry-run` to preview exact removals.
+- `sv task repair --dedupe-creates` to remove duplicate create events and rebuild snapshots.
+
+`sv task sync` now warns when duplicate `task_created` events are present.
 
 ### Protected Paths
 
