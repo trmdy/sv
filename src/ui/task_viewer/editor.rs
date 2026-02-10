@@ -710,6 +710,16 @@ impl TaskPicker {
         self.rebuild_filter();
     }
 
+    pub fn select_by_id(&mut self, option_id: &str) {
+        if let Some(pos) = self.filtered.iter().position(|idx| {
+            self.options
+                .get(*idx)
+                .is_some_and(|option| option.id == option_id)
+        }) {
+            self.selected = pos;
+        }
+    }
+
     pub fn query(&self) -> &str {
         &self.query
     }

@@ -661,6 +661,22 @@ impl AppState {
         self.project_filter = project;
     }
 
+    fn open_epic_picker(&mut self) {
+        let mut picker = TaskPicker::new(self.epic_picker_options());
+        if let Some(current_epic) = self.epic_filter.as_deref() {
+            picker.select_by_id(current_epic);
+        }
+        self.epic_picker = Some(picker);
+    }
+
+    fn open_project_picker(&mut self) {
+        let mut picker = TaskPicker::new(self.project_picker_options());
+        if let Some(current_project) = self.project_filter.as_deref() {
+            picker.select_by_id(current_project);
+        }
+        self.project_picker = Some(picker);
+    }
+
     fn set_error(&mut self, message: String) {
         self.status_message = Some(message);
         self.info_message = None;
@@ -1429,22 +1445,14 @@ fn handle_key(
             if app.is_stats_mode() {
                 return false;
             }
-            let mut picker = TaskPicker::new(app.epic_picker_options());
-            if let Some(current_epic) = app.epic_filter.as_ref() {
-                picker.set_query(current_epic.clone());
-            }
-            app.epic_picker = Some(picker);
+            app.open_epic_picker();
             false
         }
         KeyCode::Char('y') => {
             if app.is_stats_mode() {
                 return false;
             }
-            let mut picker = TaskPicker::new(app.project_picker_options());
-            if let Some(current_project) = app.project_filter.as_ref() {
-                picker.set_query(current_project.clone());
-            }
-            app.project_picker = Some(picker);
+            app.open_project_picker();
             false
         }
         KeyCode::Char('v') => {
@@ -1713,4 +1721,118 @@ fn spawn_watch(store: TaskStore, req_tx: Sender<LoadRequest>, ui_tx: Sender<UiMs
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tempfile::tempdir;
+
+    use crate::config::TasksConfig;
+    use crate::storage::Storage;
+
+    fn make_app(epic_filter: Option<&str>, project_filter: Option<&str>) -> AppState {
+        let tmp = tempdir().expect("tempdir");
+        let storage = Storage::for_repo(tmp.path().to_path_buf());
+        let store = TaskStore::new(storage, TasksConfig::default());
+        AppState::new(
+            store,
+            None,
+            epic_filter.map(str::to_string),
+            project_filter.map(str::to_string),
+        )
+    }
+
+    #[test]
+    fn project_picker_keeps_all_option_visible_when_filter_active() {
+        let mut app = make_app(None, Some("prj-beta"));
+        app.project_ids = HashSet::from(["prj-alpha".to_string(), "prj-beta".to_string()]);
+        app.project_names
+            .insert("prj-alpha".to_string(), "Alpha".to_string());
+        app.project_names
+            .insert("prj-beta".to_string(), "Beta".to_string());
+
+        app.open_project_picker();
+        let picker = app.project_picker.as_ref().expect("project picker");
+
+        assert_eq!(picker.query(), "");
+        assert_eq!(picker.filtered_indices().len(), 3);
+        assert!(picker
+            .filtered_indices()
+            .iter()
+            .map(|idx| picker.options()[*idx].id.as_str())
+            .any(|id| id == CLEAR_PROJECT_FILTER_ID));
+        assert_eq!(
+            picker.selected_option().map(|option| option.id.as_str()),
+            Some("prj-beta")
+        );
+    }
+
+    #[test]
+    fn epic_picker_keeps_all_option_visible_when_filter_active() {
+        let mut app = make_app(Some("sv-epic-b"), None);
+        app.epic_ids = HashSet::from(["sv-epic-a".to_string(), "sv-epic-b".to_string()]);
+        app.tasks = vec![
+            TaskRecord {
+                id: "sv-epic-a".to_string(),
+                title: "Epic A".to_string(),
+                status: "open".to_string(),
+                priority: "P1".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                created_by: None,
+                updated_by: None,
+                body: None,
+                epic: None,
+                project: None,
+                workspace_id: None,
+                workspace: None,
+                branch: None,
+                started_at: None,
+                started_by: None,
+                closed_at: None,
+                closed_by: None,
+                comments_count: 0,
+                last_comment_at: None,
+            },
+            TaskRecord {
+                id: "sv-epic-b".to_string(),
+                title: "Epic B".to_string(),
+                status: "open".to_string(),
+                priority: "P1".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                created_by: None,
+                updated_by: None,
+                body: None,
+                epic: None,
+                project: None,
+                workspace_id: None,
+                workspace: None,
+                branch: None,
+                started_at: None,
+                started_by: None,
+                closed_at: None,
+                closed_by: None,
+                comments_count: 0,
+                last_comment_at: None,
+            },
+        ];
+
+        app.open_epic_picker();
+        let picker = app.epic_picker.as_ref().expect("epic picker");
+
+        assert_eq!(picker.query(), "");
+        assert_eq!(picker.filtered_indices().len(), 3);
+        assert!(picker
+            .filtered_indices()
+            .iter()
+            .map(|idx| picker.options()[*idx].id.as_str())
+            .any(|id| id == CLEAR_EPIC_FILTER_ID));
+        assert_eq!(
+            picker.selected_option().map(|option| option.id.as_str()),
+            Some("sv-epic-b")
+        );
+    }
 }
