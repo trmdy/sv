@@ -365,7 +365,7 @@ pub struct StartTaskRequest {
 #[derive(Debug, Clone)]
 pub enum StartTaskOutcome {
     Started {
-        event: TaskEvent,
+        event: Box<TaskEvent>,
         previous_owner: Option<String>,
     },
     AlreadyInProgressByActor,
@@ -478,7 +478,7 @@ impl TaskStore {
         };
 
         Ok(StartTaskOutcome::Started {
-            event,
+            event: Box::new(event),
             previous_owner,
         })
     }
