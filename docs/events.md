@@ -59,6 +59,8 @@ Fields:
 - `task_commented`: emitted after a task comment is added.
 - `task_epic_set`: emitted after a task epic is set.
 - `task_epic_cleared`: emitted after a task epic is cleared.
+- `task_epic_auto_close_set`: emitted after an epic auto-close policy is set.
+- `task_epic_auto_close_cleared`: emitted after an epic auto-close policy is cleared.
 - `task_project_set`: emitted after a task project is set.
 - `task_project_cleared`: emitted after a task project is cleared.
 - `task_parent_set`: emitted after a task parent is set.
@@ -69,6 +71,7 @@ Fields:
 - `task_unrelated`: emitted after tasks are unrelated.
 
 Relation events include `related_task_id`, and `relation_description` for `task_related`.
+Epic policy events include `epic_auto_close` (`true`/`false`) for `task_epic_auto_close_set`.
 
 As of v0.1, `sv take` emits `lease_created` and `sv release` emits
 `lease_released`. Other event kinds will be wired as their commands are

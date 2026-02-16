@@ -29,13 +29,14 @@
 ## Data model (event log)
 - Task ID: `<id_prefix>-<suffix>`, where suffix starts at `id_min_len` alphanum chars and grows as needed.
 - Event ID: ULID per event (dedup, merge safety).
-- Event types: `task_created`, `task_started`, `task_status_changed`, `task_priority_changed`, `task_edited`, `task_closed`, `task_deleted`, `task_commented`, `task_epic_set`, `task_epic_cleared`, `task_project_set`, `task_project_cleared`, `task_parent_set`, `task_parent_cleared`, `task_blocked`, `task_unblocked`, `task_related`, `task_unrelated`.
+- Event types: `task_created`, `task_started`, `task_status_changed`, `task_priority_changed`, `task_edited`, `task_closed`, `task_deleted`, `task_commented`, `task_epic_set`, `task_epic_cleared`, `task_epic_auto_close_set`, `task_epic_auto_close_cleared`, `task_project_set`, `task_project_cleared`, `task_parent_set`, `task_parent_cleared`, `task_blocked`, `task_unblocked`, `task_related`, `task_unrelated`.
 - Task state derived by folding events in order.
 
 ### Event fields (JSONL)
 - `event_id`, `task_id`, `event_type`
 - `related_task_id` (relations)
 - `relation_description` (non-blocking relations)
+- `epic_auto_close` (boolean on `task_epic_auto_close_set`)
 - `timestamp`, `actor`
 - `title`, `body` (create/edit)
 - `status` (status change)
@@ -60,6 +61,9 @@ default_status = "open"
 in_progress_status = "in_progress"
 closed_statuses = ["closed"]
 
+[tasks.epics]
+auto_close_when_all_tasks_closed = false # repo override; global fallback via SV_TASK_EPIC_AUTO_CLOSE
+
 [tasks.compaction]
 auto = false
 max_log_mb = 200
@@ -83,6 +87,7 @@ older_than = "180d"
 - `sv task parent clear <child>`
 - `sv task epic set <task> <epic>`
 - `sv task epic clear <task>`
+- `sv task epic auto-close <epic> <on|off|inherit>`
 - `sv task project set <task> <project>`
 - `sv task project clear <task>`
 - `sv task block <blocker> <blocked>`
@@ -113,6 +118,7 @@ older_than = "180d"
 - Start ownership is exclusive by default: if another actor already owns an in-progress task, start fails unless `--takeover` is passed.
 - Re-start by the same actor is idempotent (no duplicate `task_started` event).
 - Close task -> status in `closed_statuses`, optional note.
+- When enabled, closing the last open task in an epic auto-closes that epic.
 - Ready task -> status `default_status` and no blockers.
 - Relations: epic, project, parent, blocks, and described relations; use `sv task relations` to inspect.
 - Projects are standalone grouping entities (not tasks) and should not be completed.
