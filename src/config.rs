@@ -224,9 +224,28 @@ pub struct TasksConfig {
     #[serde(default = "default_task_closed_statuses")]
     pub closed_statuses: Vec<String>,
 
+    /// Epic-specific task behavior configuration
+    #[serde(default, skip_serializing_if = "TasksEpicConfig::is_empty")]
+    pub epics: TasksEpicConfig,
+
     /// Compaction policy
     #[serde(default)]
     pub compaction: TasksCompactionConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TasksEpicConfig {
+    /// When true, close epic automatically after all epic tasks are closed.
+    ///
+    /// `None` means "not set in repo config" so global defaults can apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_close_when_all_tasks_closed: Option<bool>,
+}
+
+impl TasksEpicConfig {
+    fn is_empty(value: &Self) -> bool {
+        value.auto_close_when_all_tasks_closed.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,6 +318,7 @@ impl Default for TasksConfig {
             default_status: default_task_status(),
             in_progress_status: default_task_in_progress_status(),
             closed_statuses: default_task_closed_statuses(),
+            epics: TasksEpicConfig::default(),
             compaction: TasksCompactionConfig::default(),
         }
     }
@@ -525,6 +545,7 @@ mod tests {
         assert_eq!(cfg.tasks.default_status, "open");
         assert_eq!(cfg.tasks.in_progress_status, "in_progress");
         assert_eq!(cfg.tasks.closed_statuses, vec!["closed".to_string()]);
+        assert_eq!(cfg.tasks.epics.auto_close_when_all_tasks_closed, None);
         assert!(!cfg.tasks.compaction.auto);
         assert_eq!(cfg.tasks.compaction.max_log_mb, 200);
         assert_eq!(cfg.tasks.compaction.older_than, "180d");
@@ -561,6 +582,9 @@ statuses = ["open", "review", "closed"]
 default_status = "open"
 in_progress_status = "review"
 closed_statuses = ["closed"]
+
+[tasks.epics]
+auto_close_when_all_tasks_closed = true
 
 [tasks.compaction]
 auto = true
@@ -605,6 +629,7 @@ older_than = "90d"
         assert_eq!(cfg.tasks.default_status, "open");
         assert_eq!(cfg.tasks.in_progress_status, "review");
         assert_eq!(cfg.tasks.closed_statuses, vec!["closed".to_string()]);
+        assert_eq!(cfg.tasks.epics.auto_close_when_all_tasks_closed, Some(true));
         assert!(cfg.tasks.compaction.auto);
         assert_eq!(cfg.tasks.compaction.max_log_mb, 50);
         assert_eq!(cfg.tasks.compaction.older_than, "90d");
