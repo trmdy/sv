@@ -52,6 +52,8 @@ pub enum TaskEventType {
     TaskCommented,
     TaskEpicSet,
     TaskEpicCleared,
+    TaskEpicAutoCloseSet,
+    TaskEpicAutoCloseCleared,
     TaskProjectSet,
     TaskProjectCleared,
     TaskParentSet,
@@ -91,6 +93,8 @@ pub struct TaskEvent {
     pub related_task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relation_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epic_auto_close: Option<bool>,
 }
 
 impl TaskEvent {
@@ -111,6 +115,7 @@ impl TaskEvent {
             comment: None,
             related_task_id: None,
             relation_description: None,
+            epic_auto_close: None,
         }
     }
 }
@@ -252,6 +257,8 @@ pub struct TaskRelations {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub epic_tasks: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub epic_auto_close: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub project_tasks: Vec<String>,
@@ -271,6 +278,7 @@ impl TaskRelations {
     fn is_empty(relations: &TaskRelations) -> bool {
         relations.epic.is_none()
             && relations.epic_tasks.is_empty()
+            && relations.epic_auto_close.is_none()
             && relations.project.is_none()
             && relations.project_tasks.is_empty()
             && relations.parent.is_none()
@@ -1309,6 +1317,8 @@ fn event_status(event: &TaskEvent, config: &TasksConfig) -> Result<Option<String
         | TaskEventType::TaskDeleted
         | TaskEventType::TaskEpicSet
         | TaskEventType::TaskEpicCleared
+        | TaskEventType::TaskEpicAutoCloseSet
+        | TaskEventType::TaskEpicAutoCloseCleared
         | TaskEventType::TaskProjectSet
         | TaskEventType::TaskProjectCleared
         | TaskEventType::TaskParentSet
@@ -1551,6 +1561,9 @@ fn apply_event(
                 touch_task_if_present(map, epic_id, event);
             }
         }
+        TaskEventType::TaskEpicAutoCloseSet | TaskEventType::TaskEpicAutoCloseCleared => {
+            touch_task_if_present(map, &event.task_id, event);
+        }
         TaskEventType::TaskProjectSet => {
             let Some(project_id) = relation_target(event) else {
                 return Ok(());
@@ -1639,6 +1652,8 @@ fn is_relation_event(event_type: TaskEventType) -> bool {
         event_type,
         TaskEventType::TaskEpicSet
             | TaskEventType::TaskEpicCleared
+            | TaskEventType::TaskEpicAutoCloseSet
+            | TaskEventType::TaskEpicAutoCloseCleared
             | TaskEventType::TaskProjectSet
             | TaskEventType::TaskProjectCleared
             | TaskEventType::TaskParentSet
@@ -1653,6 +1668,7 @@ fn is_relation_event(event_type: TaskEventType) -> bool {
 #[derive(Default)]
 struct RelationState {
     epic_by_task: HashMap<String, String>,
+    epic_auto_close_by_epic: HashMap<String, bool>,
     project_by_task: HashMap<String, String>,
     parent_by_child: HashMap<String, String>,
     blocks: HashSet<(String, String)>,
@@ -1671,6 +1687,23 @@ fn apply_relation_event(state: &mut RelationState, event: &TaskEvent) -> Result<
     if !is_relation_event(event.event_type) {
         return Ok(());
     }
+
+    match event.event_type {
+        TaskEventType::TaskEpicAutoCloseSet => {
+            if let Some(value) = event.epic_auto_close {
+                state
+                    .epic_auto_close_by_epic
+                    .insert(event.task_id.clone(), value);
+            }
+            return Ok(());
+        }
+        TaskEventType::TaskEpicAutoCloseCleared => {
+            state.epic_auto_close_by_epic.remove(&event.task_id);
+            return Ok(());
+        }
+        _ => {}
+    }
+
     let Some(related_task_id) = relation_target(event) else {
         return Ok(());
     };
@@ -1821,6 +1854,7 @@ fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations>
     let state = build_relation_state(events)?;
 
     let epic = state.epic_by_task.get(task_id).cloned();
+    let epic_auto_close = state.epic_auto_close_by_epic.get(task_id).copied();
     let mut epic_tasks: Vec<String> = state
         .epic_by_task
         .iter()
@@ -1911,6 +1945,7 @@ fn build_relations(task_id: &str, events: &[TaskEvent]) -> Result<TaskRelations>
     Ok(TaskRelations {
         epic,
         epic_tasks,
+        epic_auto_close,
         project,
         project_tasks,
         parent,
@@ -2306,6 +2341,31 @@ mod tests {
 
         let epic_relations = build_relations("task-epic", &events).expect("relations");
         assert_eq!(epic_relations.epic_tasks, vec!["task-child".to_string()]);
+    }
+
+    #[test]
+    fn relations_include_epic_auto_close_override() {
+        let now = Utc::now();
+        let mut events = Vec::new();
+        let mut epic = TaskEvent::new(TaskEventType::TaskCreated, "task-epic");
+        epic.title = Some("Epic".to_string());
+        epic.timestamp = now;
+        events.push(epic);
+
+        let mut set_policy = TaskEvent::new(TaskEventType::TaskEpicAutoCloseSet, "task-epic");
+        set_policy.epic_auto_close = Some(true);
+        set_policy.timestamp = now + chrono::Duration::milliseconds(1);
+        events.push(set_policy);
+
+        let epic_relations = build_relations("task-epic", &events).expect("relations");
+        assert_eq!(epic_relations.epic_auto_close, Some(true));
+
+        let mut clear_policy = TaskEvent::new(TaskEventType::TaskEpicAutoCloseCleared, "task-epic");
+        clear_policy.timestamp = now + chrono::Duration::milliseconds(2);
+        events.push(clear_policy);
+
+        let epic_relations = build_relations("task-epic", &events).expect("relations");
+        assert_eq!(epic_relations.epic_auto_close, None);
     }
 
     #[test]
