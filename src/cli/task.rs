@@ -1,7 +1,7 @@
 //! sv task command implementations.
 
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 
@@ -159,6 +159,16 @@ pub struct EpicSetOptions {
 
 pub struct EpicClearOptions {
     pub task: String,
+    pub actor: Option<String>,
+    pub events: Option<String>,
+    pub repo: Option<PathBuf>,
+    pub json: bool,
+    pub quiet: bool,
+}
+
+pub struct EpicAutoCloseOptions {
+    pub epic: String,
+    pub mode: String,
     pub actor: Option<String>,
     pub events: Option<String>,
     pub repo: Option<PathBuf>,
@@ -877,6 +887,17 @@ pub fn run_status(options: StatusOptions) -> Result<()> {
     ctx.store.append_event(event.clone())?;
     let event_warning = emit_task_event(&mut event_sink, EventKind::TaskStatusChanged, &event);
 
+    let mut auto_close_result = AutoCloseResult::default();
+    if status_is_closed(&ctx.store, &options.status) {
+        auto_close_result = maybe_auto_close_epic_chain(
+            &ctx.store,
+            &resolved,
+            ctx.actor.as_ref(),
+            ctx.workspace.as_ref(),
+            &mut event_sink,
+        )?;
+    }
+
     let output = TaskStatusOutput {
         id: resolved.clone(),
         status: options.status.clone(),
@@ -886,7 +907,16 @@ pub fn run_status(options: StatusOptions) -> Result<()> {
     if let Some(warning) = event_warning {
         human.push_warning(warning);
     }
+    for warning in auto_close_result.warnings {
+        human.push_warning(warning);
+    }
     human.push_summary("ID", resolved);
+    if !auto_close_result.closed_epics.is_empty() {
+        human.push_summary(
+            "Auto-closed epics",
+            auto_close_result.closed_epics.join(", "),
+        );
+    }
     human.push_summary("Status", output.status.clone());
 
     emit_success(
@@ -1031,6 +1061,18 @@ pub fn run_close(options: CloseOptions) -> Result<()> {
     }
     ctx.store.append_event(event.clone())?;
     let event_warning = emit_task_event(&mut event_sink, EventKind::TaskClosed, &event);
+
+    let mut auto_close_result = AutoCloseResult::default();
+    if status_is_closed(&ctx.store, &status) {
+        auto_close_result = maybe_auto_close_epic_chain(
+            &ctx.store,
+            &resolved,
+            ctx.actor.as_ref(),
+            ctx.workspace.as_ref(),
+            &mut event_sink,
+        )?;
+    }
+
     let hook_warning = forge_integration::run_task_hook_best_effort(
         &ctx.repo_root,
         forge_integration::ForgeTaskHookKind::TaskClose,
@@ -1047,10 +1089,19 @@ pub fn run_close(options: CloseOptions) -> Result<()> {
     if let Some(warning) = event_warning {
         human.push_warning(warning);
     }
+    for warning in auto_close_result.warnings {
+        human.push_warning(warning);
+    }
     if let Some(warning) = hook_warning {
         human.push_warning(warning);
     }
     human.push_summary("ID", resolved);
+    if !auto_close_result.closed_epics.is_empty() {
+        human.push_summary(
+            "Auto-closed epics",
+            auto_close_result.closed_epics.join(", "),
+        );
+    }
     human.push_summary("Status", status);
 
     emit_success(
@@ -1073,6 +1124,7 @@ pub fn run_delete(options: DeleteOptions) -> Result<()> {
     let relations = &details.relations;
     let has_relations = details.task.epic.is_some()
         || !relations.epic_tasks.is_empty()
+        || relations.epic_auto_close.is_some()
         || details.task.project.is_some()
         || !relations.project_tasks.is_empty()
         || relations.parent.is_some()
@@ -1342,6 +1394,67 @@ pub fn run_epic_clear(options: EpicClearOptions) -> Result<()> {
             quiet: options.quiet || events_to_stdout,
         },
         "task epic clear",
+        &output,
+        Some(&human),
+    )
+}
+
+pub fn run_epic_auto_close(options: EpicAutoCloseOptions) -> Result<()> {
+    let ctx = load_context(options.repo, options.actor, true)?;
+    let (mut event_sink, events_to_stdout) = open_task_event_sink(options.events.as_deref())?;
+    let epic = ctx.store.resolve_task_id(&options.epic)?;
+    let mode = parse_epic_auto_close_mode(&options.mode)?;
+
+    let current = ctx.store.relations(&epic)?.epic_auto_close;
+    if current == mode {
+        let mode_label = epic_auto_close_mode_label(mode);
+        return Err(Error::InvalidArgument(format!(
+            "epic auto-close already set to {mode_label}"
+        )));
+    }
+
+    let (event_type, event_kind) = match mode {
+        Some(_) => (
+            TaskEventType::TaskEpicAutoCloseSet,
+            EventKind::TaskEpicAutoCloseSet,
+        ),
+        None => (
+            TaskEventType::TaskEpicAutoCloseCleared,
+            EventKind::TaskEpicAutoCloseCleared,
+        ),
+    };
+
+    let mut event = TaskEvent::new(event_type, epic.clone());
+    event.actor = ctx.actor.clone();
+    event.epic_auto_close = mode;
+    if let Some(workspace) = ctx.workspace.as_ref() {
+        event.workspace_id = Some(workspace.id.clone());
+        event.workspace = Some(workspace.name.clone());
+        event.branch = Some(workspace.branch.clone());
+    }
+    ctx.store.append_event(event.clone())?;
+    let event_warning = emit_task_event(&mut event_sink, event_kind, &event);
+
+    let output = TaskEpicAutoCloseOutput {
+        epic: epic.clone(),
+        mode: epic_auto_close_mode_label(mode).to_string(),
+        effective: epic_auto_close_is_enabled(&ctx.store, &ctx.repo_root, mode),
+    };
+
+    let mut human = HumanOutput::new("Epic auto-close policy updated");
+    if let Some(warning) = event_warning {
+        human.push_warning(warning);
+    }
+    human.push_summary("Epic", epic);
+    human.push_summary("Mode", output.mode.clone());
+    human.push_summary("Effective", output.effective.to_string());
+
+    emit_success(
+        OutputOptions {
+            json: options.json && !events_to_stdout,
+            quiet: options.quiet || events_to_stdout,
+        },
+        "task epic auto-close",
         &output,
         Some(&human),
     )
@@ -2115,6 +2228,13 @@ struct TaskEpicOutput {
 }
 
 #[derive(serde::Serialize)]
+struct TaskEpicAutoCloseOutput {
+    epic: String,
+    mode: String,
+    effective: bool,
+}
+
+#[derive(serde::Serialize)]
 struct TaskProjectOutput {
     task: String,
     project: String,
@@ -2207,6 +2327,8 @@ struct TaskEventData {
     related_task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     relation_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    epic_auto_close: Option<bool>,
 }
 
 fn load_context(
@@ -2292,6 +2414,166 @@ fn ensure_task_has_no_children(store: &TaskStore, task_id: &str) -> Result<()> {
     ))
 }
 
+#[derive(Default)]
+struct AutoCloseResult {
+    closed_epics: Vec<String>,
+    warnings: Vec<String>,
+}
+
+fn maybe_auto_close_epic_chain(
+    store: &TaskStore,
+    closed_task_id: &str,
+    actor: Option<&String>,
+    workspace: Option<&WorkspaceEntry>,
+    event_sink: &mut Option<crate::events::EventSink>,
+) -> Result<AutoCloseResult> {
+    let mut result = AutoCloseResult::default();
+    let tasks = store.list(None)?;
+    let mut status_by_id: HashMap<String, String> = HashMap::new();
+    let mut epic_by_task: HashMap<String, Option<String>> = HashMap::new();
+    for task in tasks {
+        status_by_id.insert(task.id.clone(), task.status.clone());
+        epic_by_task.insert(task.id.clone(), task.epic.clone());
+    }
+
+    let mut queue = VecDeque::new();
+    if let Some(epic_id) = epic_by_task
+        .get(closed_task_id)
+        .and_then(|entry| entry.clone())
+    {
+        queue.push_back(epic_id);
+    }
+    if queue.is_empty() {
+        return Ok(result);
+    }
+
+    let mut seen = HashSet::new();
+    let close_status = store
+        .config()
+        .closed_statuses
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "closed".to_string());
+
+    while let Some(epic_id) = queue.pop_front() {
+        if !seen.insert(epic_id.clone()) {
+            continue;
+        }
+
+        let relations = match store.relations(&epic_id) {
+            Ok(relations) => relations,
+            Err(_) => continue,
+        };
+
+        if relations.epic_tasks.is_empty() {
+            continue;
+        }
+
+        if !epic_auto_close_is_enabled(
+            store,
+            store.storage().workspace_root(),
+            relations.epic_auto_close,
+        ) {
+            continue;
+        }
+
+        if status_by_id
+            .get(&epic_id)
+            .map(|status| status_is_closed(store, status))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        if !relations.project_tasks.is_empty() {
+            result.warnings.push(format!(
+                "auto-close skipped for epic {epic_id}: project groups cannot be completed"
+            ));
+            continue;
+        }
+
+        let all_children_closed = relations.epic_tasks.iter().all(|child_id| {
+            status_by_id
+                .get(child_id)
+                .map(|status| status_is_closed(store, status))
+                .unwrap_or(false)
+        });
+
+        if !all_children_closed {
+            continue;
+        }
+
+        let mut event = TaskEvent::new(TaskEventType::TaskClosed, epic_id.clone());
+        event.actor = actor.cloned();
+        event.status = Some(close_status.clone());
+        if let Some(workspace) = workspace {
+            event.workspace_id = Some(workspace.id.clone());
+            event.workspace = Some(workspace.name.clone());
+            event.branch = Some(workspace.branch.clone());
+        }
+        store.append_event(event.clone())?;
+        if let Some(warning) = emit_task_event(event_sink, EventKind::TaskClosed, &event) {
+            result.warnings.push(warning);
+        }
+
+        status_by_id.insert(epic_id.clone(), close_status.clone());
+        result.closed_epics.push(epic_id.clone());
+
+        if let Some(parent_epic_id) = epic_by_task.get(&epic_id).and_then(|entry| entry.clone()) {
+            queue.push_back(parent_epic_id);
+        }
+    }
+
+    Ok(result)
+}
+
+fn parse_epic_auto_close_mode(value: &str) -> Result<Option<bool>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(Error::InvalidArgument(
+            "epic auto-close mode cannot be empty (expected on|off|inherit)".to_string(),
+        ));
+    }
+
+    let normalized = trimmed.to_ascii_lowercase();
+    match normalized.as_str() {
+        "on" | "true" | "1" | "yes" => Ok(Some(true)),
+        "off" | "false" | "0" | "no" => Ok(Some(false)),
+        "inherit" | "default" | "repo" => Ok(None),
+        _ => Err(Error::InvalidArgument(format!(
+            "unknown epic auto-close mode '{trimmed}' (expected on|off|inherit)"
+        ))),
+    }
+}
+
+fn epic_auto_close_mode_label(mode: Option<bool>) -> &'static str {
+    match mode {
+        Some(true) => "on",
+        Some(false) => "off",
+        None => "inherit",
+    }
+}
+
+fn epic_auto_close_is_enabled(
+    store: &TaskStore,
+    repo_root: &Path,
+    epic_override: Option<bool>,
+) -> bool {
+    epic_override
+        .or(store.config().epics.auto_close_when_all_tasks_closed)
+        .or(global_epic_auto_close_setting(repo_root))
+        .unwrap_or(false)
+}
+
+fn global_epic_auto_close_setting(_repo_root: &Path) -> Option<bool> {
+    let raw = std::env::var("SV_TASK_EPIC_AUTO_CLOSE").ok()?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 fn resolve_epic_filter(store: &TaskStore, value: Option<&str>) -> Result<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
@@ -2371,6 +2653,7 @@ fn task_event_data(event: &TaskEvent) -> TaskEventData {
         comment: event.comment.clone(),
         related_task_id: event.related_task_id.clone(),
         relation_description: event.relation_description.clone(),
+        epic_auto_close: event.epic_auto_close,
     }
 }
 
@@ -2395,6 +2678,9 @@ fn push_task_summary(human: &mut HumanOutput, details: &TaskDetails) {
     }
     if !details.relations.epic_tasks.is_empty() {
         human.push_summary("Epic tasks", details.relations.epic_tasks.join(", "));
+    }
+    if let Some(value) = details.relations.epic_auto_close {
+        human.push_summary("Epic auto-close", value.to_string());
     }
     if let Some(project) = task.project.as_ref() {
         human.push_summary("Project", project.clone());

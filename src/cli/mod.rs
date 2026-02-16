@@ -109,6 +109,7 @@ Events (JSONL)
   lease_created, lease_released, workspace_created, workspace_removed,
   commit_blocked, commit_created, task_created, task_started,
   task_status_changed, task_priority_changed, task_edited, task_closed, task_deleted,
+  task_epic_auto_close_set, task_epic_auto_close_cleared,
   task_commented, task_epic_set, task_epic_cleared, task_project_set, task_project_cleared, task_parent_set, task_parent_cleared, task_blocked,
   task_unblocked, task_related, task_unrelated
 
@@ -217,6 +218,7 @@ Commands
   sv task parent clear <child>
   sv task epic set <task> <epic>
   sv task epic clear <task>
+  sv task epic auto-close <epic> <on|off|inherit>
   sv task project set <task> <project-id>
   sv task project clear <task>
   sv task block <blocker> <blocked>
@@ -1328,6 +1330,7 @@ Examples:
 Examples:
   sv task epic set 01HZ... 01HZ...
   sv task epic clear 01HZ...
+  sv task epic auto-close 01HZ... on
 "#)]
     Epic {
         #[command(subcommand)]
@@ -1540,6 +1543,22 @@ Examples:
     Clear {
         /// Task ID
         task: String,
+    },
+
+    /// Configure per-epic auto-close behavior
+    #[command(long_about = r#"Set per-epic auto-close behavior.
+
+Examples:
+  sv task epic auto-close 01HZ... on
+  sv task epic auto-close 01HZ... off
+  sv task epic auto-close 01HZ... inherit
+"#)]
+    AutoClose {
+        /// Epic task ID
+        epic: String,
+
+        /// Policy mode: on, off, or inherit
+        mode: String,
     },
 }
 
@@ -3145,6 +3164,17 @@ impl Cli {
                         EpicCommands::Clear { task: task_id } => {
                             task::run_epic_clear(task::EpicClearOptions {
                                 task: task_id,
+                                actor,
+                                events: events.clone(),
+                                repo,
+                                json,
+                                quiet,
+                            })
+                        }
+                        EpicCommands::AutoClose { epic, mode } => {
+                            task::run_epic_auto_close(task::EpicAutoCloseOptions {
+                                epic,
+                                mode,
                                 actor,
                                 events: events.clone(),
                                 repo,
