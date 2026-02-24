@@ -182,3 +182,60 @@ fn ws_clean_removes_merged_workspaces() -> Result<(), Box<dyn std::error::Error>
 
     Ok(())
 }
+
+#[test]
+fn ws_switch_resolves_workspace_path() -> Result<(), Box<dyn std::error::Error>> {
+    let repo = setup_repo()?;
+    let ws1_path = repo.path().join(".sv/worktrees/ws1");
+
+    sv_cmd(&repo)
+        .args(["ws", "new", "ws1", "--base", "HEAD"])
+        .assert()
+        .success();
+
+    let output = sv_cmd(&repo)
+        .args(["ws", "switch", "ws1", "--path"])
+        .output()?;
+    assert!(output.status.success());
+    let actual_path = std::path::PathBuf::from(String::from_utf8(output.stdout)?.trim());
+    assert_eq!(
+        std::fs::canonicalize(actual_path)?,
+        std::fs::canonicalize(ws1_path)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn ws_switch_prompts_when_name_missing() -> Result<(), Box<dyn std::error::Error>> {
+    let repo = setup_repo()?;
+    let ws2_path = repo.path().join(".sv/worktrees/ws2");
+
+    sv_cmd(&repo)
+        .args(["ws", "new", "ws1", "--base", "HEAD"])
+        .assert()
+        .success();
+    sv_cmd(&repo)
+        .args(["ws", "new", "ws2", "--base", "HEAD"])
+        .assert()
+        .success();
+
+    let output = sv_cmd(&repo)
+        .args(["ws", "switch", "--path"])
+        .write_stdin("2\n")
+        .output()?;
+
+    assert!(output.status.success());
+    let actual_path = std::path::PathBuf::from(String::from_utf8(output.stdout)?.trim());
+    assert_eq!(
+        std::fs::canonicalize(actual_path)?,
+        std::fs::canonicalize(ws2_path)?
+    );
+
+    let storage = Storage::for_repo(repo.path().to_path_buf());
+    let registry = storage.read_workspaces()?;
+    let ws2 = registry.find("ws2").expect("workspace ws2");
+    assert!(ws2.last_active.is_some());
+
+    Ok(())
+}

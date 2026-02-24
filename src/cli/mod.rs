@@ -67,7 +67,7 @@ Exit codes
 Commands (high level)
   sv init                   Initialize repo state
   sv actor set|show          Configure actor identity
-  sv ws new|list|info|rm|clean|here Workspace management
+  sv ws new|list|info|rm|clean|here|switch Workspace management
   sv switch                 Resolve workspace path for fast switching
   sv take                   Create leases on paths/globs
   sv release                Release leases
@@ -131,6 +131,7 @@ Commands
   sv ws info <name>
   sv ws rm <name> [--force]
   sv ws clean [--selector] [--dest] [--force] [--dry-run]
+  sv ws switch [name] [--path]
 
 Notes
   selector syntax: ws(active), ahead("main"), name~"agent*", touching("src/**")
@@ -324,7 +325,10 @@ Purpose
   Resolve workspace path for fast switching.
 
 Usage
-  sv switch <name> [--path]
+  sv switch [name] [--path]
+
+Notes
+  If name is omitted, sv shows active workspaces and prompts for a selection.
 "#;
 const ONTO_ROBOT_HELP: &str = r#"sv onto --robot-help
 
@@ -663,11 +667,12 @@ Examples:
 
 Examples:
   sv switch agent1
+  sv switch
   sv switch agent1 --path
 "#)]
     Switch {
-        /// Workspace name
-        name: String,
+        /// Workspace name (optional; choose interactively when omitted)
+        name: Option<String>,
 
         /// Print only the workspace path (for `cd $(sv switch <name> --path)`)
         #[arg(long)]
@@ -864,6 +869,26 @@ Examples:
         /// Dry run: show what would be removed without making changes
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// Resolve workspace path for quick directory switching
+    #[command(
+        alias = "cd",
+        long_about = r#"Resolve workspace path for quick directory switching.
+
+Examples:
+  sv ws switch agent1
+  sv ws switch
+  sv ws switch agent1 --path
+"#
+    )]
+    Switch {
+        /// Workspace name (optional; choose interactively when omitted)
+        name: Option<String>,
+
+        /// Print only the workspace path (for `cd $(sv ws switch <name> --path)`)
+        #[arg(long)]
+        path: bool,
     },
 }
 
@@ -2817,6 +2842,13 @@ impl Cli {
                         dest,
                         force,
                         dry_run,
+                        repo,
+                        json,
+                        quiet,
+                    }),
+                    WsCommands::Switch { name, path } => switch::run(switch::SwitchOptions {
+                        name,
+                        path_only: path,
                         repo,
                         json,
                         quiet,

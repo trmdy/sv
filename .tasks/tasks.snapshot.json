@@ -1,7 +1,25 @@
 {
   "schema_version": "sv.tasks.v1",
-  "generated_at": "2026-01-30T11:43:53.575349Z",
+  "generated_at": "2026-02-24T11:39:45.862781Z",
   "tasks": [
+    {
+      "id": "sv-01t",
+      "title": "EPIC: Ad functionality to sv workspaces",
+      "status": "closed",
+      "priority": "P0",
+      "created_at": "2026-02-24T11:29:11.311498Z",
+      "updated_at": "2026-02-24T11:39:45.851244Z",
+      "updated_by": "sv-dev",
+      "body": "Add a command for sv ws for changing your direcory to that of a workspace/worktree based on the workspace name. Allow for selecting from a list of the active workspaces if no name is given as a param\n",
+      "workspace_id": "eb1cebae-11a6-43c8-85b4-113e29d53767",
+      "workspace": "sv-1",
+      "branch": "main",
+      "started_at": "2026-02-24T11:35:11.876105Z",
+      "started_by": "sv-dev",
+      "closed_at": "2026-02-24T11:39:45.851244Z",
+      "closed_by": "sv-dev",
+      "comments_count": 0
+    },
     {
       "id": "sv-17z",
       "title": "Add 'b' command for 'Blocked by'",

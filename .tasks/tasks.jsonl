@@ -203,3 +203,6 @@
 {"event_id":"01KG7BENTRGGS03VYFEA6XB0CR","task_id":"sv-7rr","type":"task_blocked","timestamp":"2026-01-30T11:43:42.424823Z","related_task_id":"sv-17z"}
 {"event_id":"01KG7BF0P6C1QPZQY7BHT78R2K","task_id":"sv-7rr","type":"task_unblocked","timestamp":"2026-01-30T11:43:53.542161Z","related_task_id":"sv-17z"}
 {"event_id":"01KG7BF0PWCG1VF2PV0WYSFVGX","task_id":"sv-7rr","type":"task_deleted","timestamp":"2026-01-30T11:43:53.564313Z"}
+{"event_id":"01KJ7PJ24FATRR3K2J0A0H7T35","task_id":"sv-01t","type":"task_created","timestamp":"2026-02-24T11:29:11.311498Z","title":"EPIC: Ad functionality to sv workspaces","body":"Add a command for sv ws for changing your direcory to that of a workspace/worktree based on the workspace name. Allow for selecting from a list of the active workspaces if no name is given as a param\n","status":"open","priority":"P0"}
+{"event_id":"01KJ7PX2845QKREFVBM0BTXEAH","task_id":"sv-01t","type":"task_started","timestamp":"2026-02-24T11:35:11.876105Z","actor":"sv-dev","status":"in_progress","workspace_id":"eb1cebae-11a6-43c8-85b4-113e29d53767","workspace":"sv-1","branch":"main"}
+{"event_id":"01KJ7Q5DSVWA2Z7RMNM4X77HKY","task_id":"sv-01t","type":"task_closed","timestamp":"2026-02-24T11:39:45.851244Z","actor":"sv-dev","status":"closed","workspace_id":"eb1cebae-11a6-43c8-85b4-113e29d53767","workspace":"sv-1","branch":"main"}

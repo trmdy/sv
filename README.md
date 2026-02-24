@@ -155,7 +155,8 @@ sv ws new agent1                    # Create workspace with branch sv/ws/agent1
 sv ws new agent2 --base develop     # Use different base branch
 sv ws list                          # List all workspaces
 sv ws info agent1                   # Detailed info (branch, ahead/behind, leases)
-sv switch agent1 --path             # Print path for quick switching
+sv ws switch agent1 --path          # Print path for quick switching
+sv ws switch --path                 # Select workspace interactively, then print path
 sv ws here --name local             # Register current directory as workspace
 sv ws rm agent1                     # Remove workspace
 sv ws clean --dest main             # Remove merged workspaces
@@ -391,7 +392,7 @@ Task filters also support `SV_EPIC` and `SV_PROJECT` as defaults for `sv task li
 | `sv init` | Initialize sv in a repository |
 | `sv status` | Show current workspace summary |
 | `sv actor set\|show` | Manage actor identity |
-| `sv ws new\|list\|info\|rm\|here` | Workspace management |
+| `sv ws new\|list\|info\|rm\|clean\|here\|switch` | Workspace management |
 | `sv switch` | Resolve workspace path for fast switching |
 | `sv take` | Create lease reservations |
 | `sv release` | Release leases |

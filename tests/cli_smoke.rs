@@ -62,7 +62,8 @@ fn ws_robot_help_works() {
         .assert()
         .success()
         .stdout(contains("sv ws --robot-help"))
-        .stdout(contains("sv ws new"));
+        .stdout(contains("sv ws new"))
+        .stdout(contains("sv ws switch"));
 }
 
 #[test]
