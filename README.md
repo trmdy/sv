@@ -155,8 +155,9 @@ sv ws new agent1                    # Create workspace with branch sv/ws/agent1
 sv ws new agent2 --base develop     # Use different base branch
 sv ws list                          # List all workspaces
 sv ws info agent1                   # Detailed info (branch, ahead/behind, leases)
-sv ws switch agent1 --path          # Print path for quick switching
-sv ws switch --path                 # Select workspace interactively, then print path
+sv ws switch agent1                 # Print workspace path for quick switching
+cd "$(sv ws switch agent1)"         # Switch your shell to that workspace
+sv ws switch                        # Select workspace interactively, then print path
 sv ws here --name local             # Register current directory as workspace
 sv ws rm agent1                     # Remove workspace
 sv ws clean --dest main             # Remove merged workspaces

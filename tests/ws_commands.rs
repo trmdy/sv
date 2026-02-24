@@ -194,7 +194,7 @@ fn ws_switch_resolves_workspace_path() -> Result<(), Box<dyn std::error::Error>>
         .success();
 
     let output = sv_cmd(&repo)
-        .args(["ws", "switch", "ws1", "--path"])
+        .args(["ws", "switch", "ws1"])
         .output()?;
     assert!(output.status.success());
     let actual_path = std::path::PathBuf::from(String::from_utf8(output.stdout)?.trim());
@@ -221,7 +221,7 @@ fn ws_switch_prompts_when_name_missing() -> Result<(), Box<dyn std::error::Error
         .success();
 
     let output = sv_cmd(&repo)
-        .args(["ws", "switch", "--path"])
+        .args(["ws", "switch"])
         .write_stdin("2\n")
         .output()?;
 
@@ -236,6 +236,27 @@ fn ws_switch_prompts_when_name_missing() -> Result<(), Box<dyn std::error::Error
     let registry = storage.read_workspaces()?;
     let ws2 = registry.find("ws2").expect("workspace ws2");
     assert!(ws2.last_active.is_some());
+
+    Ok(())
+}
+
+#[test]
+fn switch_resolves_workspace_path_without_path_flag() -> Result<(), Box<dyn std::error::Error>> {
+    let repo = setup_repo()?;
+    let ws1_path = repo.path().join(".sv/worktrees/ws1");
+
+    sv_cmd(&repo)
+        .args(["ws", "new", "ws1", "--base", "HEAD"])
+        .assert()
+        .success();
+
+    let output = sv_cmd(&repo).args(["switch", "ws1"]).output()?;
+    assert!(output.status.success());
+    let actual_path = std::path::PathBuf::from(String::from_utf8(output.stdout)?.trim());
+    assert_eq!(
+        std::fs::canonicalize(actual_path)?,
+        std::fs::canonicalize(ws1_path)?
+    );
 
     Ok(())
 }

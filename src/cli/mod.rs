@@ -328,6 +328,7 @@ Usage
   sv switch [name] [--path]
 
 Notes
+  Default output is the workspace path (compatible with `cd "$(sv switch <name>)"`).
   If name is omitted, sv shows active workspaces and prompts for a selection.
 "#;
 const ONTO_ROBOT_HELP: &str = r#"sv onto --robot-help
@@ -667,14 +668,14 @@ Examples:
 
 Examples:
   sv switch agent1
+  cd "$(sv switch agent1)"
   sv switch
-  sv switch agent1 --path
 "#)]
     Switch {
         /// Workspace name (optional; choose interactively when omitted)
         name: Option<String>,
 
-        /// Print only the workspace path (for `cd $(sv switch <name> --path)`)
+        /// Print only the workspace path (default behavior; kept for compatibility)
         #[arg(long)]
         path: bool,
     },
@@ -878,15 +879,15 @@ Examples:
 
 Examples:
   sv ws switch agent1
+  cd "$(sv ws switch agent1)"
   sv ws switch
-  sv ws switch agent1 --path
 "#
     )]
     Switch {
         /// Workspace name (optional; choose interactively when omitted)
         name: Option<String>,
 
-        /// Print only the workspace path (for `cd $(sv ws switch <name> --path)`)
+        /// Print only the workspace path (default behavior; kept for compatibility)
         #[arg(long)]
         path: bool,
     },

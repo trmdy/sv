@@ -46,7 +46,7 @@ pub fn run(options: SwitchOptions) -> Result<()> {
     let workspace = resolve_workspace_name(&storage, options.name.as_deref(), options.json)?;
     let output = switch_workspace(&storage, &workspace)?;
 
-    if options.path_only {
+    if !options.json {
         println!("{}", output.path.display());
         return Ok(());
     }
@@ -61,7 +61,7 @@ pub fn run(options: SwitchOptions) -> Result<()> {
 
     emit_success(
         OutputOptions {
-            json: options.json,
+            json: true,
             quiet: options.quiet,
         },
         "switch",

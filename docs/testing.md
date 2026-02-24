@@ -95,8 +95,9 @@ sv ws list --json
 sv ws info main-ws
 
 # Resolve workspace path for switching
-sv ws switch main-ws --path
-sv ws switch --path
+sv ws switch main-ws
+cd "$(sv ws switch main-ws)"
+sv ws switch
 
 # Create a new workspace (worktree)
 sv ws new agent2 --base main
