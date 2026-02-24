@@ -1,7 +1,26 @@
 {
   "schema_version": "sv.tasks.v1",
-  "generated_at": "2026-02-24T12:02:36.764425Z",
+  "generated_at": "2026-02-24T12:30:49.293099Z",
   "tasks": [
+    {
+      "id": "sv-kxb",
+      "title": "Fix sv ws switch to activate selected workspace worktree",
+      "status": "closed",
+      "priority": "P0",
+      "created_at": "2026-02-24T12:27:09.406909Z",
+      "updated_at": "2026-02-24T12:30:49.283397Z",
+      "created_by": "sv-dev",
+      "updated_by": "sv-dev",
+      "body": "User feedback: 'sv ws switch' does not change shell/worktree to the selected workspace. Implement behavior so the command switches to the active workspace/worktree path rather than only showing workspace info.",
+      "workspace_id": "eb1cebae-11a6-43c8-85b4-113e29d53767",
+      "workspace": "sv-1",
+      "branch": "main",
+      "started_at": "2026-02-24T12:27:14.371328Z",
+      "started_by": "sv-dev",
+      "closed_at": "2026-02-24T12:30:49.283397Z",
+      "closed_by": "sv-dev",
+      "comments_count": 0
+    },
     {
       "id": "sv-01t",
       "title": "EPIC: Add functionality to sv workspaces",
